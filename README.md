@@ -1,16 +1,16 @@
 # Embabel Pack Specification
 
-A **pack** is a portable, declarative bundle of agent capabilities that can be installed into an Embabel-based assistant. Packs are git repositories — no JVM bytecode, no native binaries — containing YAML, Jinja templates, and (optionally) MCP server descriptors. The host platform reads the pack and wires its contents into the running agent.
+Packs are self-contained, declarative bundles of agent capabilities that can be installed into an Embabel-based host. Each pack is a git repository (no JVM bytecode, no native binaries) that provides actions, types, APIs, MCP servers, commands, webhooks, skills, prompts, and event sources. The host platform reads the pack and wires its contents into the running agent.
 
 This document is the spec.
 
-> Status: living draft. The shape of `events/` (event ingestion) is forward-looking; everything else is the format that current Embabel hosts already consume.
+> **Status: living draft.** Sections marked _forward-looking_ describe shape that is settled but may still be in implementation across hosts. Everything else describes the format current Embabel hosts already consume.
 
 ---
 
 ## Repository convention
 
-A pack is a git repository whose name begins with `pack-` (e.g. `pack-github`, `pack-stripe`, `pack-research`). The host installs a pack by cloning it into a workspace's `packs/` directory.
+A pack is a git repo whose name begins with `pack-` (e.g. `pack-github`, `pack-stripe`, `pack-research`). The host installs a pack by cloning it into a workspace's `packs/` directory.
 
 Pack sources are configured at the host level. A typical host configuration:
 
@@ -20,96 +20,124 @@ embabel:
   directory:
     pack-sources:
       - name: embabel
-        url: https://github.com/embabel
-        prefix: pack-
+        type: org
+      - name: johnsonr
+        type: user
 ```
 
-Each entry exposes the packs whose name starts with `prefix` from the given GitHub org (or arbitrary git remote).
+Each entry exposes the packs whose name matches `pack-*` from the given GitHub org or user.
 
-## Layout
-
-A pack's root contains a `pack.yml` metadata file and one or more of the following directories. Every directory is optional — a pack may contribute only types, only an MCP server, only webhooks, etc.
+## Directory Structure
 
 ```
-pack-stripe/
-├── pack.yml                    # required — metadata
-├── types/                      # DomainType declarations
-├── actions/                    # action specs (LLM-driven steps)
-├── goals/                      # goal specs (action targets)
-├── commands/                   # /slash chat commands
-├── apis/                       # OpenAPI/GraphQL specs to learn
-├── webhooks/                   # webhook receivers
-├── events/                     # event ingestion (push + poll)  [forward-looking]
-├── channels/                   # messaging channel templates
-├── cron/                       # scheduled jobs
-├── prompts/                    # Jinja templates
-├── skills/                     # skill descriptors (agentskills.io)
-└── mcp/                        # MCP server descriptors
+pack-name/
+├── pack.yml              # Required: pack metadata
+├── actions/              # Action specifications (YAML)
+│   └── my-action.yml
+├── goals/                # Goal specifications (YAML)
+│   └── my-goal.yml
+├── types/                # Dynamic type definitions (YAML)
+│   └── my-type.yml
+├── apis/                 # API entries (YAML)
+│   └── my-api.yml
+├── mcp/                  # MCP server configurations (YAML)
+│   └── my-server.yml
+├── commands/             # Slash command mappings (YAML)
+│   └── my-command.yml
+├── webhooks/             # Webhook registrations (YAML)
+│   └── my-webhook.yml
+├── events/               # Event ingestion (forward-looking) — push + poll
+│   └── my-source.yml
+├── apps/                 # Bundled HTML apps served at /apps/{name}
+│   └── my-dashboard.html
+├── artifacts.yml         # Custom artifact type registrations (optional)
+├── prompts/              # Prompt contributions
+│   └── examples.md
+└── skills/               # Skills (Agent Skills spec)
+    └── my-skill/
+        └── SKILL.md
 ```
 
-Files are picked up by directory, not by listing in `pack.yml`. Add a YAML file to `types/`, restart-or-refresh the host, and the type is registered.
+All directories are optional. A pack needs only `pack.yml` and at least one capability directory.
 
----
+## `pack.yml`
 
-## `pack.yml` — metadata
-
-Required at the pack root.
+Required metadata file at the pack root.
 
 ```yaml
-name: stripe
-description: "Stripe integration — types, webhooks, signal ingestion"
-version: "0.3.0"
-author: "Embabel"
-url: https://github.com/embabel/pack-stripe
+name: github
+description: "GitHub integration — analyze and fix issues"
+version: 0.1.0
+author: Embabel
+url: https://github.com/embabel/pack-github
 tags:
-  - payments
-  - webhooks
+  - integrations
+  - developer-tools
 ```
 
-| field | required | meaning |
-|---|---|---|
-| `name` | yes | Stable short name. Lowercase, hyphenated, no spaces. |
-| `description` | yes | One-line summary shown in pack browsers. |
-| `version` | yes | Semver. The host may use this to detect upgrades. |
-| `author` | no | Display name. |
-| `url` | no | Canonical pack home. |
-| `tags` | no | Free-form list, surfaced in pack browsers. |
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Pack name (kebab-case) |
+| `description` | No | What the pack does |
+| `version` | No | Semver version (default: `0.0.0`) |
+| `author` | No | Author or organization name |
+| `url` | No | Source repository or documentation URL |
+| `tags` | No | Categorization tags |
 
----
+## `actions/`
 
-## `types/` — DomainType declarations
+Action specifications — YAML files that define executable operations. Each file is a `PromptedActionSpec` (or other step type).
 
-A YAML file under `types/` declares one or more named types. Each type is a `DomainType` in the host's data dictionary, equally usable by actions, the consequence engine, and (forthcoming) event ingestion.
+```yaml
+# actions/triage-issue.yml
+stepType: action
+name: triage-issue
+description: "Triage a GitHub issue"
+inputTypeNames:
+  - GitHubIssue
+outputTypeName: TriagedIssue
+prompt: |
+  Triage issue #{{gitHubIssue.issue}} in {{gitHubIssue.owner}}/{{gitHubIssue.repo}}.
+tools:
+  - github
+```
+
+Actions are deployed to the host's planner on workspace load.
+
+## `goals/`
+
+Goal specifications — multi-step workflows composed of actions.
+
+```yaml
+# goals/fix-issue.yml
+stepType: goal
+name: fix-issue
+description: "Triage and fix a GitHub issue"
+inputTypeNames:
+  - GitHubIssue
+outputTypeName: BackgroundMessage
+```
+
+## `types/`
+
+Dynamic type definitions — custom input/output types for actions, signal types, and the data dictionary in general. A type with `parents:` declared inherits properties from its parent types (which may be JVM-known host types or other pack-declared types).
 
 ```yaml
 # types/github.yml
 - name: GitHubIssue
-  description: "A GitHub issue identified by owner, repo, and issue number"
-  properties:
-    owner: "Repository owner (user or organization)"
-    repo: "Repository name"
-    issue: "Issue number"
-
-- name: TriagedIssue
-  description: "A GitHub issue assessed for automated fixing"
+  description: "A GitHub issue to process"
   properties:
     owner: "Repository owner"
     repo: "Repository name"
     issue: "Issue number"
     title: "Issue title"
-    body: "Issue body/description"
-    labels: "Comma-separated labels"
-    assessment: "What needs to be done and how"
-    repoPath: "Local filesystem path to the repository clone"
+    body: "Issue body"
 ```
 
-Properties are declared as `name: description` pairs. The description is what the LLM sees when reasoning about the type, so write it for an agent reader, not just a developer.
-
-### Inheritance
-
-A type may declare `parents:`, naming other types it extends. Parents may be JVM-known types (e.g. `Signal`, declared by the host platform) or types declared elsewhere — in this same pack, in another pack, or built into the host.
+A type whose `parents:` includes `Signal` (the host-defined signal base type) is a **signal type** — automatically eligible for the consequence engine, triage rules, and persistence as a `SignalRecord`. See [`events/`](#events--event-ingestion-forward-looking) below.
 
 ```yaml
+# types/stripe.yml
 - name: StripeEvent
   parents: [Signal]
   description: "A Stripe webhook event"
@@ -120,160 +148,267 @@ A type may declare `parents:`, naming other types it extends. Parents may be JVM
     customerId: "Stripe customer id"
 ```
 
-A type with `parents: [Signal]` is a signal type — it inherits the signal contract (`id`, `occurredAt`, `sourceKind`, `sourceId`, `subject`, `contentVersion`) and is automatically eligible for the consequence engine, triage rules, and persistence as a `SignalRecord`.
+## `apis/`
 
----
-
-## `actions/` — action specs
-
-An action is a deterministic or LLM-driven step that consumes one or more typed inputs and produces a typed output.
+API entries — each `.yml` file in `apis/` is a list of API definitions loaded on workspace init. Each entry compiles into a typed `gateway.<name>.*` namespace inside `execute_javascript` / `execute_python`.
 
 ```yaml
-# actions/triage-github-issue.yml
-stepType: action
-name: triage-github-issue
-description: "Triage a GitHub issue — fetch details, assess feasibility, decide whether to attempt an automated fix"
-inputTypeNames:
-  - GitHubIssue
-outputTypeName: TriagedIssue
-nullable: true            # may legitimately produce no output
-canRerun: false           # if true, host may invoke repeatedly with the same input
-pre:                      # SpEL guards — action only runs when all evaluate truthy
-  - "spel:gitHubIssue.issue > 0"
-prompt: |
-  Triage GitHub issue #{{gitHubIssue.issue}} in {{gitHubIssue.owner}}/{{gitHubIssue.repo}}.
-
-  1. Use the github tool to read the issue:
-     gh api repos/{{gitHubIssue.owner}}/{{gitHubIssue.repo}}/issues/{{gitHubIssue.issue}}
-
-  2. Decide whether the issue is suitable for automated fixing.
-     If not, return null and explain why via the communicate tool.
-
-  3. Otherwise, return a TriagedIssue with the title, body, labels, and your assessment.
-tools:
-  - github
-  - progress
-  - communicate
+# apis/petstore.yml
+- url: https://petstore3.swagger.io/api/v3/openapi.json
+  name: petstore
+  type: openapi
+  auth: api-key
+  token-env: PETSTORE_API_KEY
 ```
 
-| field | required | meaning |
+### Entry fields
+
+| Field | Required | Notes |
 |---|---|---|
-| `stepType` | yes | Always `action`. |
-| `name` | yes | Action id. Unique within the host's action registry. |
-| `description` | yes | What this action does, written for an LLM planner. |
-| `inputTypeNames` | yes | One or more `DomainType` names this action consumes. |
-| `outputTypeName` | yes | The `DomainType` name this action produces. |
-| `nullable` | no | If true, the action may return no output (e.g. "this didn't apply"). Default `false`. |
-| `canRerun` | no | If true, host may run this action multiple times with the same input. Default `false`. |
-| `pre` | no | List of SpEL expressions (each prefixed `spel:`). Action only runs when all are truthy against the inputs. |
-| `prompt` | conditional | Jinja template. Required for LLM-driven actions; omit for fully deterministic actions wired through other means. |
-| `tools` | no | Names of tools the action may use. Includes built-in tools (`progress`, `communicate`) and any tool surfaced by the host or other packs (e.g. MCP-bundled tools). |
+| `url` | yes | Spec source. HTTP(S), `file://`, or a bare relative path resolved against the apis.yml file's parent directory (used for vendored specs — see below). |
+| `name` | recommended | Gateway namespace — `gateway.<name>.*`. Falls back to a slugified spec title if omitted. **Always set this** in published packs so the prompt examples work regardless of the spec's `info.title`. |
+| `type` | no | `openapi` (default) or `graphql`. |
+| `auth` | no | `none` (default), `bearer`, `api-key`, `oauth2`. See **Auth** below. |
+| `token-env` | with bearer / api-key | Env-var or credential-store key holding the token. |
+| `headers` | no | Custom HTTP headers; values support `${VAR}` interpolation from credential store / env. |
+| `oauth2` | with `auth: oauth2` | OAuth2 config — see **OAuth2** below. |
+| `tags` | no | Allowlist of OpenAPI tag names. Filters huge specs to a coarse subset. |
+| `operation-ids` | no | Exact `operationId` allowlist. Composes with `tags` (tags pre-filter, operation-ids picks exact ops). Match is case-insensitive and treats `-`/`/` as `_`, so `repos/get`, `repos-get`, `repos_get` all match. |
 
-Inputs are referenced in the prompt by their lowercased type name (`{{gitHubIssue.issue}}` for a `GitHubIssue` input).
+### Vendored specs
 
----
+`url` accepts a bare relative path. The loader resolves it against the file's own parent directory, so packs can ship a hand-curated spec next to their `apis.yml`:
 
-## `goals/` — goal specs
+```
+pack-hubspot/
+└── apis/
+    ├── apis.yml          # url: hubspot-crm.json
+    └── hubspot-crm.json  # the spec, vendored in-pack
+```
 
-A goal is a higher-level outcome the planner can target, typically backed by one or more actions.
+Use this when the upstream provider has stopped publishing OpenAPI specs (or never did), or when you want to pin a specific subset of operations and types without depending on a moving public URL. HTTP(S) and `file://` URLs work too — the relative-path mode is just the most ergonomic for vendored specs.
+
+### Auth
+
+Four auth modes plus the implicit headers-only path:
 
 ```yaml
-# goals/research-topic.yml
-stepType: goal
-name: research-topic
-description: "Research a topic in depth — gather information and return structured findings with source URLs"
-outputTypeName: ResearchResult
-export: true             # if true, surfaced as user-facing capability
+# 1. No auth
+- url: https://api.example.com/openapi.yaml
+  auth: none
+
+# 2. Bearer token (most REST APIs)
+- url: https://api.github.com/openapi.json
+  name: gh
+  auth: bearer
+  token-env: GITHUB_PERSONAL_ACCESS_TOKEN
+
+# 3. API key (sent as the header/query the spec declares)
+- url: https://petstore3.swagger.io/api/v3/openapi.json
+  auth: api-key
+  token-env: PETSTORE_API_KEY
+
+# 4. Custom headers only — for APIs that need multiple auth headers
+#    (e.g. RapidAPI). No `auth:` field needed.
+- url: https://weatherapi-com.p.rapidapi.com
+  type: openapi
+  headers:
+    X-RapidAPI-Key: "${X_RAPIDAPI_KEY}"
+    X-RapidAPI-Host: weatherapi-com.p.rapidapi.com
+
+# 5. OAuth2 — see next section
 ```
 
-| field | required | meaning |
+Token-env and `${VAR}` values are resolved in this order: workspace credential store first (set via `set NAME = ...` in chat or via the admin UI), then process env var. Missing creds → the entry is skipped at workspace load with a logged warning; the API never appears in the gateway.
+
+### OAuth2
+
+For providers that use the OAuth2 authorization-code flow (HubSpot, Slack, Salesforce, GitHub, Google, etc.). The pack ships only the **provider facts** (URLs, scopes, identity introspection). Per-installation client app credentials live in the host admin file `oauth-apps.yml` — **never in the pack repo and never in any user's workspace**.
+
+```yaml
+# pack-hubspot/apis/apis.yml
+- url: hubspot-crm.json
+  name: hubspot
+  type: openapi
+  auth: oauth2
+  oauth2:
+    auth-url: https://app.hubspot.com/oauth/authorize
+    token-url: https://api.hubapi.com/oauth/v1/token
+    scopes: >-
+      crm.objects.contacts.read crm.objects.contacts.write
+      crm.objects.companies.read crm.objects.deals.read
+    identity:
+      url: https://api.hubapi.com/oauth/v1/access-tokens/{token}
+      method: GET
+      auth: path-token
+      account-id-field: hub_id
+      display-name-field: hub_domain
+```
+
+**`oauth2:` block fields**
+
+| Field | Required | Notes |
 |---|---|---|
-| `stepType` | yes | Always `goal`. |
-| `name` | yes | Goal id. |
-| `description` | yes | What this goal achieves, written for the planner and the user. |
-| `outputTypeName` | yes | The `DomainType` the goal produces. |
-| `export` | no | If true, listed as a user-facing capability (chat menus, /commands). Default `false`. |
+| `auth-url` | yes | Provider's authorize endpoint. |
+| `token-url` | yes | Provider's token endpoint. |
+| `scopes` | usually | Space-separated scope list. |
+| `client-id` / `client-secret` | NO in published packs | Power-user fallback only — accepts `${VAR}` interpolation. **Production setups put these in the host admin's `oauth-apps.yml`** so the pack stays public and credential-free. |
+| `identity` | optional | Introspection block — see below. Without it the connect flow still completes, but the UI shows a generic label instead of the real account. |
 
----
+**`identity:` block — provider-agnostic introspection**
 
-## `commands/` — chat commands
+The `identity:` block tells the host how to call the provider's `/userinfo` or `/whoami` endpoint and pull an `accountId` + display label out of the JSON response. This is what lets the UI show "Connected as alice@acme.com" rather than just "Connected".
 
-Maps a `/slash` chat command to an action.
+| Field | Required | Notes |
+|---|---|---|
+| `url` | yes | Endpoint URL. May contain the literal `{token}` placeholder, substituted with the URL-encoded access token (used by HubSpot's path-token style). |
+| `method` | no | `GET` (default) or `POST`. |
+| `auth` | no | How to send the token: `bearer` (default — `Authorization: Bearer <token>`), `path-token` (interpolated into `{token}`, no header), `header:<NAME>` (custom header), `query:<NAME>` (URL query parameter). |
+| `account-id-field` | yes | Top-level JSON field name to read as the stable account identifier. |
+| `display-name-field` | no | Top-level JSON field name for the human-readable label. Falls back to `account-id-field` if absent or blank in the response. |
+
+Examples:
+
+```yaml
+# Google (bearer token, /userinfo)
+identity:
+  url: https://www.googleapis.com/oauth2/v3/userinfo
+  account-id-field: email
+  display-name-field: name
+
+# GitHub
+identity:
+  url: https://api.github.com/user
+  account-id-field: login
+  display-name-field: name
+
+# Slack
+identity:
+  url: https://slack.com/api/auth.test
+  method: POST
+  account-id-field: user_id
+  display-name-field: user
+```
+
+**Where the OAuth client credentials live** (host-admin-managed)
+
+`client-id` and `client-secret` for the provider's Public App belong in the host installation admin directory (path is host-specific, but the file shape is portable):
+
+```yaml
+# admin/oauth-apps.yml
+apps:
+  hubspot:
+    client-id: 12345-abcdef-...
+    client-secret: secret-blah
+  slack:
+    client-id: ...
+    client-secret: ...
+```
+
+The map keys (`hubspot`, `slack`, …) match the `name:` field of the matching `apis.yml` entry. Hot-reloaded — admins can edit the file without restarting the host.
+
+A workspace can override the installation default by writing the same shape to `<workspace>/config/oauth-apps.yml` — useful when one team needs its own provider app under its own brand.
+
+**Lookup order** for client_id / client_secret:
+1. `<workspace>/config/oauth-apps.yml` (per-workspace override)
+2. Host admin `oauth-apps.yml` (installation default)
+3. `${VAR}` from the pack's `oauth2.client-id` / `client-secret` (escape hatch for power users)
+
+If none resolve, the provider's status reports `not-configured` and Authorize returns an actionable error message instead of silently failing.
+
+**End-user UX**
+
+End users **never** paste tokens, IDs, or secrets. Settings → Connected Services → click **Authorize** → consent on the provider's page → done. ConnectedAccounts holds the real account label; `gateway.<name>.*` is live in chat.
+
+**Token refresh** is automatic — the host's `OAuth2Service` rotates expired access tokens using the stored refresh token and writes back any new refresh token the provider issues (HubSpot rotates them on every refresh).
+
+## `mcp/`
+
+MCP server configurations — each file lists Model Context Protocol servers to connect.
+
+```yaml
+# mcp/arxiv.yml
+- name: arxiv
+  description: "Search and read arXiv research papers"
+  command: docker
+  args: ["run", "-i", "--rm", "mcp/arxiv-mcp-server:latest"]
+```
+
+```yaml
+# mcp/web.yml
+- name: brave-search
+  description: "Web search via Brave"
+  command: docker
+  args: ["run", "-i", "--rm", "-e", "BRAVE_API_KEY=${BRAVE_API_KEY}", "mcp/brave-search:latest"]
+  env:
+    BRAVE_API_KEY: "${BRAVE_API_KEY}"
+```
+
+MCP servers are lazy-loaded — the Docker container starts on first tool use, not on workspace init. Multiple users with the same MCP config share a single container via the host's MCP client cache.
+
+## `commands/`
+
+Slash command mappings — map `/command` names to actions.
 
 ```yaml
 # commands/fix-issue.yml
 command: fix-issue
-actionName: triage-github-issue
-description: "Triage a GitHub issue and attempt to fix it if suitable"
+actionName: fix-issue
+description: "Fix a GitHub issue"
 ```
 
-| field | required | meaning |
-|---|---|---|
-| `command` | yes | Slash name without leading `/`. Becomes `/fix-issue`. |
-| `actionName` | yes | Name of an action defined in this pack or another loaded pack. |
-| `description` | yes | What the command does. Shown in the slash-command picker. |
+## `webhooks/`
 
----
-
-## `apis/` — learnable API specs
-
-Declares an external HTTP API the host should learn from a spec (OpenAPI, GraphQL, etc.). The host compiles each operation into a callable action whose input/output are `DomainType`s — so APIs become first-class peers of pack-declared actions.
-
-```yaml
-# apis/linear.yml
-name: linear
-type: openapi
-spec-url: https://developers.linear.app/api/openapi.yaml
-auth: bearer
-token-env: LINEAR_API_TOKEN
-```
-
-| field | required | meaning |
-|---|---|---|
-| `name` | yes | Namespace under which the host registers compiled methods (e.g. `linear.list_issues`). |
-| `type` | yes | One of `openapi`, `graphql`. |
-| `spec-url` | yes | URL the host fetches and compiles. |
-| `auth` | no | One of `none`, `bearer`, `basic`, `api-key`. |
-| `token-env` | conditional | Env-var name carrying the credential. Required when `auth != none`. |
-
----
-
-## `webhooks/` — webhook receivers
-
-Declares webhook endpoints the host should accept and route to actions. The host owns signature verification, tenancy resolution, and HTTP plumbing. Pack-declared webhooks describe **what to do with the payload**.
+Webhook registrations — declare webhooks the pack wants to receive. When the pack is installed and the host has a public URL, these are registered with the external service.
 
 ```yaml
 # webhooks/github-issues.yml
 - name: github-issues
   description: "Receive GitHub issue events"
-  source: github-issues
+  source: github
   events: [issues, issue_comment]
   action: webhook-github-issue
+  register:
+    tool: create_repository_webhook
+    args:
+      owner: "{{owner}}"
+      repo: "{{repo}}"
+      config:
+        url: "{{webhook_base_url}}/api/v1/webhooks/github-issues"
+        content_type: json
+        secret: "{{GITHUB_WEBHOOK_SECRET}}"
+      events: ["issues", "issue_comment"]
 ```
 
-| field | required | meaning |
-|---|---|---|
-| `name` | yes | Receiver id. Becomes part of the inbound URL path. |
-| `description` | yes | What this receiver is for. |
-| `source` | yes | Stable identifier for the webhook source (used for tenancy + UI). |
-| `events` | no | List of event types this receiver accepts (provider-specific). |
-| `action` | yes | Action invoked with the parsed payload. |
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Webhook identifier |
+| `description` | No | What events this webhook handles |
+| `source` | Yes | Source identifier (matches webhook endpoint path) |
+| `events` | No | Event types to subscribe to |
+| `action` | Yes | Action name to execute when webhook fires |
+| `register` | No | Auto-registration config (tool + args) |
+| `register.tool` | Yes (if register) | Tool to call for registration |
+| `register.args` | Yes (if register) | Arguments with `{{template}}` variables |
 
-The bare-webhook flow stays as today: a webhook arrives, the host wraps the payload in a `WebhookEvent`, and dispatches the named action. For richer integration — emitting typed signals into the consequence engine — use `events/` instead.
+Template variables in `register.args` are resolved from:
+- Workspace config (`config.yml`)
+- Credential store (secrets set by the user)
+- Well-known variables: `{{webhook_base_url}}`, `{{owner}}`, `{{repo}}`
 
----
+The bare-webhook flow — payload arrives, gets wrapped in a `WebhookEvent`, the named action fires — stays as documented above. For richer integration that emits **typed signals** into the host's consequence engine, use `events/` (next section).
 
 ## `events/` — event ingestion (forward-looking)
 
-Unifies push (webhook) and pull (polling) event sources behind a single contract: **emit typed `Signal`s into the host's consequence engine.** A signal type is just a `DomainType` whose parent is `Signal`.
+Unifies push (webhook) and pull (polling) sources behind a single contract: **emit typed `Signal`s into the host's consequence engine.** A signal type is a `DomainType` declared in `types/` whose `parents` includes `Signal`.
 
-This section is **forward-looking** — the spec is settled but specific hosts may still be implementing it. Existing webhook receivers (the `webhooks/` block above) continue to work in parallel.
+This section is **forward-looking** — the spec is settled but specific hosts may still be implementing it. Existing webhook receivers in `webhooks/` continue to work in parallel.
 
 ### Webhook event source
 
 ```yaml
 # events/stripe.yml
-- type: StripeEvent          # name of a type whose parents include Signal
+- type: StripeEvent          # name of a signal type declared in types/
   webhook:
     signature: hmac-sha256   # one of: hmac-sha256, hmac-sha1, jwt, none
     signature-secret: STRIPE_WEBHOOK_SECRET
@@ -294,9 +429,9 @@ This section is **forward-looking** — the spec is settled but specific hosts m
 
 The host receives the webhook, verifies the signature, resolves the tenant, projects the payload through the `mapping` into a `StripeEvent` instance, and emits it as a `Signal` into the consequence engine.
 
-| field | required | meaning |
+| Field | Required | Meaning |
 |---|---|---|
-| `type` | yes | Name of a `DomainType` declared in this pack (or another loaded pack) whose `parents` includes `Signal`. |
+| `type` | yes | Name of a type declared in this pack (or another loaded pack) whose `parents` includes `Signal`. |
 | `webhook.signature` | yes | Signature scheme the host's built-in verifiers handle. |
 | `webhook.signature-secret` | conditional | Env-var name holding the shared secret. Required for any non-`none` scheme. |
 | `webhook.tenancy` | yes | Strategy for routing the inbound webhook to a workspace. |
@@ -329,7 +464,7 @@ For services without webhook support — or where polling is preferable — decl
       url: "$.url"
 ```
 
-| field | required | meaning |
+| Field | Required | Meaning |
 |---|---|---|
 | `poll.every` | yes | Cadence (e.g. `5m`, `1h`). |
 | `poll.api` | yes | Name of an API declared in `apis/` (this or another pack). |
@@ -343,109 +478,118 @@ A pack may declare both `webhook:` and `poll:` for the same type — the host pr
 
 ### Why this matters
 
-Both sources produce `Signal`s of the pack-declared type. From here the consequence engine, triage rules, persistence (`SignalRecord`), notifications, and chat surfacing are all type-aware: `signal.type.isAssignableFrom(StripeEvent)` is a real predicate, not a string match.
+Both sources produce `Signal`s of the pack-declared type. From there, the consequence engine, triage rules, persistence (`SignalRecord`), notifications, and chat surfacing are all type-aware: `signal.type.isAssignableFrom(StripeEvent)` is a real predicate, not a string match.
 
 No JVM bytecode is shipped — packs that need behaviour beyond mapping should expose it via `actions/` (LLM-driven) or `mcp/` (sandboxed servers).
 
----
+## `apps/`
 
-## `channels/` — messaging channel templates
+HTML apps the pack ships. They're served at `/apps/{name}` alongside the user's vibe-coded apps and the workspace template's apps. Resolution order is:
 
-Declares messaging-channel configurations the pack ships as defaults. These are templates: the user sets the secret(s) and starts the channel via the host UI.
+1. `<workspace>/data/apps/{name}` — user-owned (vibe-coded), highest priority
+2. `<workspace>/config/apps/{name}` — workspace-template apps shipped with default-workspace
+3. `<workspace>/config/packs/<pack>/apps/{name}` — pack-bundled apps (this directory)
+
+A user can shadow a pack-bundled app by vibe-coding one with the same filename. Pack apps are read-only from the user's perspective; they're refreshed whenever the pack is updated.
+
+```
+apps/
+├── github-dashboard.html
+└── pr-review-board.html
+```
+
+Pack apps must use the same architecture as vibe-coded apps: tool-gateway calls via `fetch('/api/v1/tools/{name}')`, no direct external fetches. They have access to all the user's tools (MCP, learned APIs, etc.) because they run in the user's authenticated session.
+
+## `artifacts.yml`
+
+Optional. Register custom artifact types the pack introduces, in addition to the host's built-ins (`DOCUMENT`, `APP`, `CODE`, `DATASET`, `DIAGRAM`).
 
 ```yaml
-# channels/telegram.yml
-type: com.embabel.assistant.event.channel.telegram.TelegramChannelConfig
-name: telegram
-token-env: TELEGRAM_BOT_TOKEN
-auto-start: true
+- name: NOTEBOOK
+  directory: data/notebooks
+  defaultExtension: ipynb
+- name: TEMPLATE
+  directory: data/templates
+  defaultExtension: jinja
+  servable: true
 ```
 
-The `type` field is a fully qualified class name resolved by the host's polymorphic deserializer. Adding new channel kinds requires host changes today; future spec revisions may pull this into pack-declarable form.
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | UPPERCASE type identifier |
+| `directory` | Yes | Path under workspace root. **Conventionally `data/<subdir>`** so the artifacts survive factory reset. |
+| `defaultExtension` | No | File extension hint for new artifacts |
+| `servable` | No | If `true`, artifacts of this type are served via the same path resolution as `APP` |
+
+## `prompts/`
+
+Prompt contributions — optional content that gets included in the chat system prompt to help the LLM route tool calls correctly. Currently supports `examples.md`.
+
+### `prompts/examples.md`
+
+Tool routing examples specific to this pack's tools. These are appended to the system prompt's `## Examples` section so the LLM learns the correct tool routing for this pack's capabilities.
+
+```markdown
+User: "Show me the open issues in embabel/agent"
+→ Call github tool → list_issues (GitHub issues, not workspace tasks)
+
+User: "Create a GitHub issue for the memory leak bug"
+→ Call github tool → issue_write (NOT workspace task creation)
+```
+
+Guidelines for writing examples:
+- Use natural user messages (not tool names)
+- Show the correct tool and inner tool to call
+- Add disambiguation notes when tools could be confused with others
+- Keep to 2-5 examples per pack — quality over quantity
+
+Examples are collected from all installed packs at runtime and included in the host's chat system prompt.
+
+## `skills/`
+
+Skills follow the [Agent Skills specification](https://agentskills.io/specification). Each skill is a subdirectory containing a `SKILL.md` file.
+
+```
+skills/
+└── creative-thinking/
+    ├── SKILL.md
+    └── references/
+        └── techniques.md
+```
+
+Skills are loaded as references — the agent can activate them on demand for specialized tasks.
 
 ---
 
-## `cron/` — scheduled jobs
+## Installation
+
+Packs are installed as git repos cloned into the workspace's `config/packs/` directory:
+
+```
+workspace/
+└── config/
+    └── packs/
+        ├── github/        ← cloned from git
+        ├── research/      ← cloned from git
+        └── my-custom/     ← manually created
+```
+
+Default packs are listed in the workspace's `config/packs.yml`:
 
 ```yaml
-# cron/morning-briefing.yml
-name: morning-briefing
-cron: "0 0 8 * * *"
-actionName: cron-ping
-description: "Daily 8am chime"
+# config/packs.yml
+- name: research
+  repo: https://github.com/embabel/pack-research.git
 ```
 
-| field | required | meaning |
-|---|---|---|
-| `name` | yes | Job id. |
-| `cron` | yes | Six-field Spring cron expression. |
-| `actionName` | yes | Action invoked when the job fires. |
-| `description` | no | Shown in the job list. |
+These are cloned automatically on first workspace provisioning.
 
-The fired action receives a `CronTrigger` input carrying the job's `name` (matchable in action `pre:` SpEL guards).
+## Pack Discovery
 
----
-
-## `prompts/` — Jinja templates
-
-Pack-shipped Jinja templates can be referenced by actions or used to override host-default prompts. Templates resolve relative to the pack's `prompts/` directory; cross-pack references use the `pack-name:template-name` notation.
-
-```jinja
-{# prompts/triage.jinja #}
-You are reviewing a GitHub issue for an AI coding agent.
-
-Issue: #{{ issue.issue }} in {{ issue.owner }}/{{ issue.repo }}
-{{ issue.title }}
-
-{{ issue.body }}
-
-Decide whether the agent should attempt this. Return TriagedIssue or null.
-```
-
-Inline action prompts (the `prompt:` field on an action spec) are also Jinja and have access to the same template helpers.
-
----
-
-## `skills/` — skill descriptors
-
-A skill is a self-contained set of instructions following the [agentskills.io](https://agentskills.io) spec. Packs declare their skills in `skills/skills.yml`:
-
-```yaml
-# skills/skills.yml
-- type: github
-  url: https://github.com/Orchestra-Research/AI-Research-SKILLs/blob/main/21-research-ideation/creative-thinking-for-research
-- type: local
-  path: ./skills/triage-issues
-```
-
-| field | meaning |
-|---|---|
-| `type` | `github` (resolved from URL) or `local` (resolved from path inside the pack). |
-| `url` | Required for `type: github`. |
-| `path` | Required for `type: local`. Relative to the pack root. |
-
----
-
-## `mcp/` — MCP server descriptors
-
-Declares Model Context Protocol servers the pack contributes.
-
-```yaml
-# mcp/arxiv.yml
-- name: arxiv
-  description: "Search and read arXiv research papers"
-  command: docker
-  args: ["run", "-i", "--rm", "mcp/arxiv-mcp-server:latest"]
-```
-
-| field | required | meaning |
-|---|---|---|
-| `name` | yes | MCP server id. Tools surface as `name.<tool>`. |
-| `description` | yes | What the server provides. Surfaced to the LLM. |
-| `command` | yes | Executable to launch the server (typically `docker`). |
-| `args` | yes | Argument list passed to `command`. |
-
-Multiple servers per file are allowed (the file is a list).
+Packs are discoverable via the host's directory system:
+- GitHub organizations / users configured in `pack-sources`
+- Repos matching `pack-*` naming convention are listed
+- Users can search and install packs via chat or the host UI
 
 ---
 
@@ -458,16 +602,12 @@ Multiple servers per file are allowed (the file is a list).
 
 If a capability needs real code, ship it via `actions/` (LLM in the loop), `mcp/` (sandboxed server, arbitrary code), or as a host-level extension out of band.
 
----
-
 ## Conventions
 
 - **Naming**: lowercase-hyphenated for ids (pack name, action name, command name); UpperCamelCase for type names.
 - **YAML**: prefer multi-doc files only when the entries are tightly related; otherwise one file per item.
 - **Descriptions are LLM-readable**: write descriptions assuming an LLM planner is the primary reader.
 - **Stable ids**: changing a `name` is a breaking change for any installed workspace that wired against it.
-
----
 
 ## Versioning
 
