@@ -523,11 +523,26 @@ Optional. Register custom artifact types the pack introduces, in addition to the
 
 ## `prompts/`
 
-Prompt contributions — optional content that gets included in the chat system prompt to help the LLM route tool calls correctly. Currently supports `examples.md`.
+Prompt contributions — optional content **appended to every chat system prompt** for every user with the pack installed. Currently supports `examples.md`.
 
-### `prompts/examples.md`
+> **⚠️ Tax on every chat turn.** Bytes you add here are paid by every user, every turn, even when they're not invoking your pack. Hosts enforce a soft size ceiling (Embabel's reference host: 1024 bytes/pack, configurable via `assistant.pack-loader.prompt-max-bytes`); over-budget packs still load but the host surfaces a warning in the workspace problems list.
+>
+> **Treat `prompts/` as a pointer, not a manual.** Tell the LLM the capability *exists* and where to find the routing detail. Put the actual workflow examples in a [Skill](#skills--skill-descriptors), which the LLM activates on demand only when relevant — paid only when used.
 
-Tool routing examples specific to this pack's tools. These are appended to the system prompt's `## Examples` section so the LLM learns the correct tool routing for this pack's capabilities.
+### Recommended shape
+
+A one-or-two-sentence pointer is the canonical pattern:
+
+```markdown
+HubSpot CRM is available — contacts, companies, deals, tickets, owners,
+pipelines, associations. Activate the **`hubspot-crm`** skill via the
+skill tool before making any HubSpot call; the skill carries the
+workflow patterns, namespace conventions, and required-field details.
+```
+
+The substantive routing content (tool names, code-mode call shapes, edge cases, idiomatic patterns) goes into `skills/<pack>-skill/SKILL.md`. The skill loader makes it activatable; the LLM pulls it in only when it decides the user's intent matches.
+
+### Anti-pattern
 
 ```markdown
 User: "Show me the open issues in embabel/agent"
@@ -535,15 +550,11 @@ User: "Show me the open issues in embabel/agent"
 
 User: "Create a GitHub issue for the memory leak bug"
 → Call github tool → issue_write (NOT workspace task creation)
+
+[… ten more examples, code-mode call sketches, edge cases …]
 ```
 
-Guidelines for writing examples:
-- Use natural user messages (not tool names)
-- Show the correct tool and inner tool to call
-- Add disambiguation notes when tools could be confused with others
-- Keep to 2-5 examples per pack — quality over quantity
-
-Examples are collected from all installed packs at runtime and included in the host's chat system prompt.
+This was the original convention and is being deprecated. Bulk routing examples in `prompts/` cost every user on every turn; the same examples in a Skill cost only users actively asking about that capability. Migrate existing packs by trimming `prompts/examples.md` to a pointer and moving the body into the pack's Skill.
 
 ## `skills/`
 
