@@ -53,9 +53,15 @@ pack-name/
 ├── artifacts.yml         # Custom artifact type registrations (optional)
 ├── prompts/              # Prompt contributions
 │   └── examples.md
-└── skills/               # Skills (Agent Skills spec)
-    └── my-skill/
-        └── SKILL.md
+├── skills/               # Skills (Agent Skills spec)
+│   └── my-skill/
+│       └── SKILL.md
+├── personalities/        # Voice / behaviour bundles (Jinja templates)
+│   └── my-persona/
+│       ├── identity.yml
+│       └── personality.jinja
+└── focuses/              # Named scopings of the chat surface
+    └── my-focus.yml
 ```
 
 All directories are optional. A pack needs only `pack.yml` and at least one capability directory.
@@ -147,6 +153,53 @@ A type whose `parents:` includes `Signal` (the host-defined signal base type) is
     currency: "ISO 4217 currency code"
     customerId: "Stripe customer id"
 ```
+
+### Persistence (graph-backed)
+
+Every entry created via `create_entry` for a type defined here lands as a node in the workspace graph (the same graph the host's Cypher / schema-projector / proposition-recall tools talk to). Two consequences worth knowing when writing a pack:
+
+- **The entry's `name` is the host's headline for it.** The host picks a single field per type to use as the node `name` for rendering — first `title`, then `name`, then `summary` if any exists. Add at least one of those if you want list / Cypher output to be human-readable.
+- **The host adds an implicit edge to the workspace user on every create.** Default is `(entry)-[:OWNED_BY]->(user)` — fine for most types. When the predicate reads more naturally in the other direction, declare a `userAnchor:` on the type:
+
+```yaml
+# types/movies.yml
+- name: MovieRating
+  description: "The user's score for a Movie."
+  userAnchor:
+    predicate: RATED          # uppercase; stored uppercase
+    direction: from-user      # `user -[RATED]-> rating` (default is `from-entry`)
+  properties:
+    imdbId: "IMDb id of the rated Movie."
+    rating:
+      type: int
+      description: "1–10."
+```
+
+| Field | Default | Notes |
+|-------|---------|-------|
+| `predicate` | `OWNED_BY` | Cypher-style relationship name. Required when the key is declared. Stored uppercase. |
+| `direction` | `from-entry` | `from-entry` → `(entry)-[:PREDICATE]->(user)`. `from-user` → `(user)-[:PREDICATE]->(entry)`. Pick whichever reads naturally. |
+| (sentinel) | — | Set `userAnchor: false` to opt the type out of the implicit edge entirely (reference data, type registries, etc.). |
+
+#### Explicit relations between entries
+
+`create_entry` accepts an optional `relations:` array so a pack's skill can wire the new entry to another entry that already exists in the workspace. The host emits each requested edge on save; if any target can't be found in the same workspace, the whole create is refused (no orphan node, no orphan edge). Example shape, taken from the movie pack's `rate-movie` skill:
+
+```jsonc
+// inside execute_javascript / execute_python, via the repository tool:
+create_entry({
+  type: "MovieRating",
+  data: { imdbId: "tt0113277", title: "Heat", rating: 9 },
+  relations: [
+    { predicate: "OF", to: { type: "Movie", imdbId: "tt0113277" } }
+  ]
+})
+// Resulting graph: (User)-[:RATED]->(MovieRating)-[:OF]->(Movie)
+//   - The RATED edge comes from `MovieRating.userAnchor` (implicit).
+//   - The OF edge comes from `relations:` (explicit, from the skill).
+```
+
+Each relation is `{predicate, to: {type, ...keyProps}}` — `to.type` names the target's type, the remaining `to.*` fields are the key properties the host MATCHes against on the target's workspace-scoped nodes. Use this pattern any time a pack's typed records form a small connected graph (rating → movie, comment → ticket, note → contact, etc.) — the same graph is then walkable by Cypher and feeds the recall path automatically.
 
 ## `apis/`
 
@@ -569,6 +622,69 @@ skills/
 ```
 
 Skills are loaded as references — the agent can activate them on demand for specialized tasks.
+
+## `personalities/`
+
+Each subdirectory under `personalities/` is one persona the host can run the assistant as — its voice, behaviours, guardrails, and display name. The host renders the chat system prompt by including Jinja templates from the active persona's directory; switching personality is a directory swap, not a prompt rewrite.
+
+```
+personalities/
+└── roger/
+    ├── identity.yml
+    ├── personality.jinja
+    ├── behaviours.jinja
+    ├── guardrails.jinja
+    ├── response_format.jinja
+    └── verbosity.jinja
+```
+
+- **`identity.yml`** — the only YAML in the bundle. `name:` is the assistant's display name under this persona (shown on chat bubbles, used by the LLM when introducing itself). `source:` is optional and is set automatically to `pack` for pack-shipped personalities; only set it explicitly when overriding the default.
+
+```yaml
+# personalities/roger/identity.yml
+name: Roger
+source: pack
+```
+
+- **`*.jinja`** files — included into the chat system prompt at the matching slots. `personality.jinja` carries the voice / character, `behaviours.jinja` carries do/don't rules, `guardrails.jinja` carries safety constraints, `response_format.jinja` carries output-shape rules, `verbosity.jinja` carries length / pacing rules. All five are optional — omit any file you don't need and the host skips its include line.
+
+A pack's personality is referenced by slug (its directory name) from a `focuses/` file (`defaultPersona: roger`) or directly via the host's persona picker. Slug must be unique across the workspace; on collision with a workspace-authored personality, the workspace wins.
+
+## `focuses/`
+
+A **focus** is a named scoping of the chat surface — a subset of packs whose skills the chat LLM can see, plus an optional persona override. The point is routing reliability: a 30-skill workspace gives even a sharp pack skill room to lose to a competitor; strip the competitors out and the LLM has nothing to confuse the right skill with.
+
+```yaml
+# focuses/movies.yml
+name: movies
+displayName: Movies
+description: "Recommend, rate, and recall films"
+icon: "🎬"
+defaultPersona: roger
+packs: [movie]
+builtins: true
+```
+
+| Field | Required | Description |
+|-------|----------|-------------|
+| `name` | Yes | Stable slug — used by the `/focus <name>` slash command, the picker, and persistence. |
+| `displayName` | No | Human label for the picker. Falls back to `name`. |
+| `description` | No | One-line summary for the picker tooltip / chat badge. |
+| `icon` | No | Emoji or single character for the picker. |
+| `defaultPersona` | No | Persona slug to activate when a session enters this focus. Resolved against the same registry that `personalities/` populates — workspace-authored or pack-shipped. Null = keep the workspace's current persona. |
+| `packs` | No | Pack names whose skills stay visible in this focus. Empty = no pack skills, only built-ins. |
+| `tools` | No | By-name allowlist of additional tools/skills to pull into this focus regardless of pack membership. Additive with `packs`. |
+| `builtins` | No (default `true`) | Whether to keep host-provided chat tools (memory, repository, reply, progress, the code runners). Set false only for narrowly-scoped focuses ("read-only public-info kiosk"). |
+
+### `/focus` slash command
+
+The host's `/focus <name>` slash command binds the user's chat session to a focus. `/focus off` clears the binding; bare `/focus` lists available focuses. Binding takes effect from the next chat turn; the conversation transcript stays under whatever scope was in force when each message was sent.
+
+When a focus declares `defaultPersona`, the host swaps **both** the persona's Jinja includes (the voice the LLM speaks in) **and** the persona's `identity.yml#name` (the display name the LLM introduces itself as, and the label on the chat bubble) for the focused session. Toggle focus off and the workspace's default persona returns. The change is in-session — the workspace-level `activePersonality` is not rewritten.
+
+### Discovery and precedence
+
+Workspace-authored focuses live at `config/focuses/<name>.yml`; pack-shipped focuses live at `<pack-dir>/focuses/<name>.yml`. On slug collision, the workspace entry wins (user-authored overrides pack-shipped). Pack focuses carry an internal `source = pack` marker for UI disambiguation.
 
 ---
 
