@@ -156,17 +156,18 @@ tags:
 
 ## `actions/`
 
-Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects one of three shapes:
+Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape:
 
 | `stepType` | Purpose | Output |
 |------------|---------|--------|
 | `action` | LLM call producing a typed object (the framework's general-purpose `PromptedActionSpec`) | declared `outputTypeName` |
 | `policy` | Deterministic predicate over a single signal — no LLM call | `AttentionCandidate` |
-| `triage` | LLM judgment (MATCH / SKIP) over a single signal | `AttentionCandidate` |
 
-All three coexist in the same `actions/` directory; the host's loader dispatches on `stepType`.
+Both coexist in the same `actions/` directory; the host's loader dispatches on `stepType`.
 
 ### `stepType: action` — typed LLM call
+
+The framework's general-purpose `PromptedActionSpec`. The LLM produces a typed object the planner can chain into other actions. `nullable: true` declares that the LLM may return null (no output) — the planner sees the missing binding and replans.
 
 ```yaml
 # actions/triage-issue.yml
@@ -180,14 +181,18 @@ prompt: |
   Triage issue #{{gitHubIssue.issue}} in {{gitHubIssue.owner}}/{{gitHubIssue.repo}}.
 tools:
   - github
+cost: 0.5
+value: 1.0
 ```
+
+Fields: `name`, `description`, `llm` (LlmOptions, optional), `inputTypeNames`, `outputTypeName`, `pre` / `post` (extra preconditions / effects, optional), `cost` / `value` (UtilityAI economics, default 0), `canRerun` (default false), `prompt`, `toolGroups` / `tools` / `references` (optional), `nullable` (default false), `export` (auto-generate a chat-callable goal, default false).
 
 ### `stepType: policy` — deterministic signal predicate
 
 A cheap, no-LLM rule that fires when its predicate matches a single signal. Output is an `AttentionCandidate` the host renders into a notification.
 
 ```yaml
-# actions/policy-pr-review-overdue.yml
+# actions/policy_pr_review_overdue.yml
 stepType: policy
 name: pr_review_overdue
 description: A review was requested from you and it's been over 48h
@@ -202,67 +207,52 @@ surface:
   why: "{repo}: {title}"
   url: "{url}"
 
-# UtilityAI economics. Cheap predicate — give it low cost and standard
-# value so the planner picks it before any LLM triage on the same
+# UtilityAI economics — top-level, matching the framework's
+# PromptedActionSpec convention. Cheap predicate: low cost, standard
+# value, so the planner picks it before any LLM judgment on the same
 # signal type.
-utility:
-  cost: 0.01
-  value: 1.0
+cost: 0.01
+value: 1.0
 ```
 
 The `whenExpr` uses the host's predicate DSL: comparison operators (`==`, `!=`, `<`, `>=`, `in`), boolean combinators (`and`, `or`, `not`), the special `$self` symbol resolving against the user's identity, and the derived `age` token (`now - signal.occurredAt`). Field paths walk the signal's declared properties (`age`, `reviewer`, `repo`, etc. — whatever the `on:` type exposes).
 
 The `surface` block templates the resulting notification. `{field.path}` substitutions are resolved against the matched signal.
 
-### `stepType: triage` — LLM-judged signal
+### LLM-judged signals — vanilla `stepType: action` producing `AttentionVerdict`
 
-Same shape as `policy`, but the predicate is an LLM judgment. The model is asked to respond `MATCH: <reason>` or `SKIP` and the host parses one line back.
+There is **no separate `triage` stepType**. LLM-judged attention rules are vanilla `stepType: action` PromptedActionSpecs whose output is an `AttentionVerdict` (a typed `{reason, confidence, tier}` value) and which declare `nullable: true` so the LLM can return null = "skip". The host provides a generic wrap action that lifts `(AttentionVerdict, Signal)` to `AttentionCandidate`, closing the catchup chain.
 
 ```yaml
-# actions/triage-email-attention.yml
-stepType: triage
+# pack-email/actions/triage_email_attention.yml
+stepType: action
 name: triage_email_attention
-description: Surface email threads the LLM judges worth the user's attention
+description: Judge whether an email thread warrants the user's attention
 
-on: gmail.thread
+inputTypeNames:
+  - email.thread
+
+outputTypeName: AttentionVerdict
+nullable: true
 
 prompt: |
-  You are filtering email for {{user}}'s morning brief.
-  Decide whether the following thread warrants attention.
+  Judge whether the thread is worth {{user}}'s attention.
+  Return a verdict if so; return null to skip.
 
   Thread:
-  {{signal}}
+  {{emailThread}}
 
-  Respond with exactly one line:
-    MATCH: <one short sentence>
-  OR:
-    SKIP
-
-# Per-spec llm override is optional. Without it the host default applies.
-# llm:
-#   model: gpt-4.1-nano
-#   temperature: 0.0
-
-surface:
-  tier: TIMELY
-  headline: "{subject}"
-  why: "{reason}"
-  url: "{source.url}"
-
-# Triage typically costs more than a deterministic policy (real LLM
-# call). Set cost above any sibling `stepType: policy` on the same
-# signal type so the planner prefers cheap rules first and only
-# escalates here when none match.
-utility:
-  cost: 0.5
-  value: 1.0
+cost: 0.5
+value: 1.0
 ```
 
-Two template substitutions are made before the prompt reaches the LLM: `{{user}}` becomes the user's display name and `{{signal}}` becomes the signal's `describeForLlm()` representation.
+The wrap is a two-step GOAP chain per signal: the PromptedActionSpec emits an `AttentionVerdict`, then the host's wrap action emits the final `AttentionCandidate`. The wrap is keyed off `(AttentionVerdict, Signal)` inputs so it composes generically with *any* LLM-judgment pack — pack-email, pack-slack, pack-calendar, etc. — without needing per-signal-type wrap classes.
 
 ### How they compose
 
-For each fresh signal of type `T`, the host runs one `AgentProcess` whose goal is "an `AttentionCandidate` exists on the blackboard". Every spec with `on: T` is a candidate action; UtilityAI picks them in value-minus-cost order. As soon as one produces an `AttentionCandidate`, the goal is satisfied and the process terminates. If a cheap `policy` matches, the `triage` never runs — that's the design payoff. If the `policy` abstains, the `triage` gets the second look.
+For each fresh signal of type `T`, the host runs one `AgentProcess` whose goal is "an `AttentionCandidate` exists on the blackboard". Every loaded action whose preconditions match `T` is a candidate; UtilityAI picks in value-minus-cost order. A cheap `stepType: policy` ((cost 0.01, value 1.0) → utility 0.99) wins over an LLM `stepType: action` producing AttentionVerdict ((cost 0.5, value 1.0) → utility 0.5) — so the cheap policy runs first, writes the AttentionCandidate, the goal is satisfied, and the LLM call never happens.
+
+When the cheap policy doesn't match, its `hasRun_<name>=TRUE` blocks re-picking; the LLM action still has positive utility; the planner picks it; it produces an AttentionVerdict (or null = skip); if non-null, the wrap action fires; goal satisfied. If the LLM returns null and no other action can produce an AttentionCandidate, the planner terminates naturally with no candidate.
 
 Actions are deployed to the host's planner on workspace load.
 
