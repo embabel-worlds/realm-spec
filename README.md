@@ -97,7 +97,17 @@ tags:
 
 ## `actions/`
 
-Action specifications — YAML files that define executable operations. Each file is a `PromptedActionSpec` (or other step type).
+Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects one of three shapes:
+
+| `stepType` | Purpose | Output |
+|------------|---------|--------|
+| `action` | LLM call producing a typed object (the framework's general-purpose `PromptedActionSpec`) | declared `outputTypeName` |
+| `policy` | Deterministic predicate over a single signal — no LLM call | `AttentionCandidate` |
+| `triage` | LLM judgment (MATCH / SKIP) over a single signal | `AttentionCandidate` |
+
+All three coexist in the same `actions/` directory; the host's loader dispatches on `stepType`.
+
+### `stepType: action` — typed LLM call
 
 ```yaml
 # actions/triage-issue.yml
@@ -112,6 +122,88 @@ prompt: |
 tools:
   - github
 ```
+
+### `stepType: policy` — deterministic signal predicate
+
+A cheap, no-LLM rule that fires when its predicate matches a single signal. Output is an `AttentionCandidate` the host renders into a notification.
+
+```yaml
+# actions/policy-pr-review-overdue.yml
+stepType: policy
+name: pr_review_overdue
+description: A review was requested from you and it's been over 48h
+
+on: github.pr_review_request
+
+whenExpr: "reviewer == $self and age >= 48h"
+
+surface:
+  tier: TIMELY
+  headline: "Review #{number} overdue"
+  why: "{repo}: {title}"
+  url: "{url}"
+
+# UtilityAI economics. Cheap predicate — give it low cost and standard
+# value so the planner picks it before any LLM triage on the same
+# signal type.
+utility:
+  cost: 0.01
+  value: 1.0
+```
+
+The `whenExpr` uses the host's predicate DSL: comparison operators (`==`, `!=`, `<`, `>=`, `in`), boolean combinators (`and`, `or`, `not`), the special `$self` symbol resolving against the user's identity, and the derived `age` token (`now - signal.occurredAt`). Field paths walk the signal's declared properties (`age`, `reviewer`, `repo`, etc. — whatever the `on:` type exposes).
+
+The `surface` block templates the resulting notification. `{field.path}` substitutions are resolved against the matched signal.
+
+### `stepType: triage` — LLM-judged signal
+
+Same shape as `policy`, but the predicate is an LLM judgment. The model is asked to respond `MATCH: <reason>` or `SKIP` and the host parses one line back.
+
+```yaml
+# actions/triage-email-attention.yml
+stepType: triage
+name: triage_email_attention
+description: Surface email threads the LLM judges worth the user's attention
+
+on: gmail.thread
+
+prompt: |
+  You are filtering email for {{user}}'s morning brief.
+  Decide whether the following thread warrants attention.
+
+  Thread:
+  {{signal}}
+
+  Respond with exactly one line:
+    MATCH: <one short sentence>
+  OR:
+    SKIP
+
+# Per-spec llm override is optional. Without it the host default applies.
+# llm:
+#   model: gpt-4.1-nano
+#   temperature: 0.0
+
+surface:
+  tier: TIMELY
+  headline: "{subject}"
+  why: "{reason}"
+  url: "{source.url}"
+
+# Triage typically costs more than a deterministic policy (real LLM
+# call). Set cost above any sibling `stepType: policy` on the same
+# signal type so the planner prefers cheap rules first and only
+# escalates here when none match.
+utility:
+  cost: 0.5
+  value: 1.0
+```
+
+Two template substitutions are made before the prompt reaches the LLM: `{{user}}` becomes the user's display name and `{{signal}}` becomes the signal's `describeForLlm()` representation.
+
+### How they compose
+
+For each fresh signal of type `T`, the host runs one `AgentProcess` whose goal is "an `AttentionCandidate` exists on the blackboard". Every spec with `on: T` is a candidate action; UtilityAI picks them in value-minus-cost order. As soon as one produces an `AttentionCandidate`, the goal is satisfied and the process terminates. If a cheap `policy` matches, the `triage` never runs — that's the design payoff. If the `policy` abstains, the `triage` gets the second look.
 
 Actions are deployed to the host's planner on workspace load.
 
