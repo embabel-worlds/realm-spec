@@ -71,6 +71,65 @@ pack-name/
 
 All directories are optional. A pack needs only `pack.yml` and at least one capability directory.
 
+## Pack shapes
+
+A pack is a directory of capabilities. *How* those capabilities are
+expressed is up to the author — packs span a spectrum from
+pure-declarative to handlers-driven:
+
+### Declarative-only (e.g. `pack-github`, `pack-email`)
+
+YAML files describe everything; no code ships. The host parses the
+declarations and wires them into the runtime.
+
+- `pack-github`: `types/github.yml`, `events/*.yml`, `actions/*.yaml`,
+  `apis/apis.yml`, `skills/*/SKILL.md`. The framework's planner
+  consumes the action specs; the poll executor consumes the event
+  specs; the API allowlist consumes the apis manifest. No
+  TypeScript, no `src/`.
+- `pack-email`: a pure abstract-concept pack — `types/email.yml`
+  declares the universal `email.thread` DomainType, and
+  `actions/*.yaml` ships the attention-worthiness policies that
+  operate on it. Signal *producers* (in-tree Gmail today, future
+  pack-exchange / pack-imap) live elsewhere; this pack carries only
+  the abstraction and the rules.
+
+### Handlers-driven (e.g. `pack-google`)
+
+When the integration genuinely needs imperative code — guarded
+mutations with revision checks, multi-step orchestration of vendor
+APIs, custom domain logic — the pack ships TypeScript handlers
+alongside the standard YAML.
+
+- `pack-google`: `src/api/docs-editor.ts` implements an editing
+  surface for Google Docs (outline / read / find / proposeEdits /
+  applyEdits) with revisionId guards the framework can't express
+  declaratively. `src/lib/*.ts` carries the supporting logic
+  (outline construction, op validation, op translation).
+  `src/types/edit-op.ts` declares the TypeScript types the handlers
+  trade in. `tests/*.test.ts` are Vitest specs covering each
+  handler's contract. `package.json` / `tsconfig.json` /
+  `vitest.config.ts` complete the project. The pack also carries
+  `apis/` (vendored OpenAPI specs), `skills/` (workflow docs for
+  small models), and `prompts/` like any other pack — they aren't
+  mutually exclusive.
+
+The host loads the handlers through the framework's TypeScript
+runtime; the standard YAML capabilities load the same way they do
+for declarative packs. Authors choose freely per file.
+
+### Choosing a shape
+
+- Start declarative. If a YAML `stepType: action` or `stepType: policy`
+  can express what you need, that's the right tool — no build step,
+  no runtime code path, the host's planner reasons about it directly.
+- Reach for handlers when the operation has invariants the planner
+  can't enforce on its own (atomicity, revision guards, ordering
+  across multiple vendor calls) or when the vendor's API grammar is
+  rich enough that surfacing it as one tool collapses too much.
+- A pack can mix freely. `actions/` and `src/` coexist; nothing in
+  the spec says "if you ship handlers, ship only handlers."
+
 ## `pack.yml`
 
 Required metadata file at the pack root.
