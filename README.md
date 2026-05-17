@@ -82,14 +82,14 @@ pure-declarative to handlers-driven:
 YAML files describe everything; no code ships. The host parses the
 declarations and wires them into the runtime.
 
-- `pack-github`: `types/github.yml`, `events/*.yml`, `actions/*.yaml`,
+- `pack-github`: `types/github.yml`, `events/*.yml`, `actions/*.yml`,
   `apis/apis.yml`, `skills/*/SKILL.md`. The framework's planner
   consumes the action specs; the poll executor consumes the event
   specs; the API allowlist consumes the apis manifest. No
   TypeScript, no `src/`.
 - `pack-email`: a pure abstract-concept pack — `types/email.yml`
   declares the universal `email.thread` DomainType, and
-  `actions/*.yaml` ships the attention-worthiness policies that
+  `actions/*.yml` ships the attention-worthiness policies that
   operate on it. Signal *producers* (in-tree Gmail today, future
   pack-exchange / pack-imap) live elsewhere; this pack carries only
   the abstraction and the rules.
