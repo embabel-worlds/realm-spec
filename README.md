@@ -32,10 +32,8 @@ Each entry exposes the packs whose name matches `pack-*` from the given GitHub o
 ```
 pack-name/
 ├── pack.yml              # Required: pack metadata
-├── actions/              # Action specifications (YAML) — framework PromptedActionSpec
+├── actions/              # Action specifications (YAML) — framework + host-extension stepTypes
 │   └── my-action.yml
-├── policies/             # Deterministic signal-attention rules (YAML) — host-specific
-│   └── my-policy.yml
 ├── goals/                # Goal specifications (YAML)
 │   └── my-goal.yml
 ├── types/                # Dynamic type definitions (YAML)
@@ -158,9 +156,14 @@ tags:
 
 ## `actions/`
 
-Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. All files in `actions/` are framework `PromptedActionSpec`s (`stepType: action` — typed LLM calls).
+Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape; the framework's `NameOrClassTypeIdResolver` resolves names to classes, so any `ActionSpec` implementation on the classpath (including host extensions) drops in next to the framework's own `stepType: action`.
 
-Host-specific deterministic rules over signals (`stepType: policy`) live in a sibling `policies/` directory — see [`policies/`](#policies) below. Splitting them is deliberate: the framework's `actions/` loader uses Jackson polymorphic deserialization and fails on unknown `stepType` values, so mixing host extensions into `actions/` breaks the framework loader. Each directory has one owner.
+| `stepType` | Purpose | Output |
+|------------|---------|--------|
+| `action` | Framework `PromptedActionSpec` — typed LLM call | declared `outputTypeName` |
+| `policy` | Host extension — deterministic predicate over a signal, no LLM | `AttentionCandidate` |
+
+Hosts register their own `ActionSpec` subtypes (e.g. `policy`) at startup via `ObjectMapper.registerSubtypes(...)` against the spec mapper. Once registered, files of all stepTypes coexist in the same `actions/` directory; the framework's loader dispatches on the discriminator.
 
 ### `stepType: action` — typed LLM call
 
@@ -213,46 +216,35 @@ value: 1.0
 
 The wrap is a two-step GOAP chain per signal: the PromptedActionSpec emits an `AttentionVerdict`, then the host's wrap action emits the final `AttentionCandidate`. The wrap is keyed off `(AttentionVerdict, Signal)` inputs so it composes generically with *any* LLM-judgment pack — pack-email, pack-slack, pack-calendar, etc. — without needing per-signal-type wrap classes.
 
-Actions are deployed to the host's planner on workspace load.
+### `stepType: policy` — host-extension deterministic rule
 
-## `policies/`
-
-Deterministic attention rules — host-specific extension. Each file is a `stepType: policy` spec declaring a predicate over a single signal type. Output is an `AttentionCandidate` the host renders into a notification.
-
-Policies live in `policies/`, not `actions/`, because the framework's `actions/` loader uses Jackson polymorphic deserialization keyed on `stepType` and fails on values it doesn't recognise. Keeping each directory under one owner avoids the clash.
+Cheap, no-LLM rule over a single signal — fires when its predicate matches and writes an `AttentionCandidate`. Predicate is the host's DSL (comparison + boolean ops + the `$self` symbol + derived `age`); field paths walk the signal's declared properties. **No `surface:` block** — how the candidate gets rendered into a notification is a downstream concern, not the producer's call.
 
 ```yaml
-# policies/policy_pr_review_overdue.yml
+# actions/policy_pr_review_overdue.yml
 stepType: policy
 name: pr_review_overdue
 description: A review was requested from you and it's been over 48h
 
-on: github.pr_review_request
+inputTypeNames:
+  - github.pr_review_request
 
 whenExpr: "reviewer == $self and age >= 48h"
 
-surface:
-  tier: TIMELY
-  headline: "Review #{number} overdue"
-  why: "{repo}: {title}"
-  url: "{url}"
-
-# Top-level cost / value, matching the framework's PromptedActionSpec
-# convention. Cheap predicate: low cost, standard value — the planner
-# picks this before any LLM judgment on the same signal type.
+# Same top-level cost / value as PromptedActionSpec. Cheap predicate:
+# low cost, standard value — the planner picks this before any LLM
+# judgment on the same signal type.
 cost: 0.01
 value: 1.0
 ```
-
-The `whenExpr` uses the host's predicate DSL: comparison operators (`==`, `!=`, `<`, `>=`, `in`), boolean combinators (`and`, `or`, `not`), the special `$self` symbol resolving against the user's identity, and the derived `age` token (`now - signal.occurredAt`). Field paths walk the signal's declared properties (`age`, `reviewer`, `repo`, etc. — whatever the `on:` type exposes).
-
-The `surface` block templates the resulting notification. `{field.path}` substitutions are resolved against the matched signal.
 
 ### How policies and LLM-judgment actions compose
 
 For each fresh signal of type `T`, the host runs one `AgentProcess` whose goal is "an `AttentionCandidate` exists on the blackboard". Every loaded action whose preconditions match `T` is a candidate; UtilityAI picks in value-minus-cost order. A cheap `stepType: policy` ((cost 0.01, value 1.0) → utility 0.99) wins over an LLM `stepType: action` producing AttentionVerdict ((cost 0.5, value 1.0) → utility 0.5) — so the cheap policy runs first, writes the AttentionCandidate, the goal is satisfied, and the LLM call never happens.
 
-When the cheap policy doesn't match, its `hasRun_<name>=TRUE` blocks re-picking; the LLM action still has positive utility; the planner picks it; it produces an AttentionVerdict (or null = skip); if non-null, the wrap action fires; goal satisfied. If the LLM returns null and no other action can produce an AttentionCandidate, the planner terminates naturally with no candidate.
+When the cheap policy doesn't match, its `hasRun_<name>=TRUE` blocks re-picking; the LLM action still has positive utility; the planner picks it; it produces an AttentionVerdict (or null = skip); if non-null, the host's wrap action fires; goal satisfied. If the LLM returns null and no other action can produce an AttentionCandidate, the planner terminates naturally with no candidate.
+
+Actions are deployed to the host's planner on workspace load.
 
 ## `goals/`
 
