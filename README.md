@@ -235,7 +235,7 @@ The wrap is a two-step GOAP chain per signal: the PromptedActionSpec emits an `A
 
 ### Deterministic rules — host-extension via FQN
 
-The assistant ships an in-tree `PolicyActionSpec` for cheap, no-LLM rules over a single signal — fires when its predicate matches and writes an `AttentionCandidate`. Predicate is the host's DSL (comparison + boolean ops + the `$self` symbol + derived `age`); field paths walk the signal's declared properties. **No `surface:` block** — how the candidate gets rendered into a notification is a downstream concern, not the producer's call.
+The assistant ships an in-tree `PolicyActionSpec` for cheap, no-LLM rules over a single signal — fires when its predicate matches and writes an `AttentionCandidate`. **No `surface:` block** — how the candidate gets rendered into a notification is a downstream concern, not the producer's call.
 
 The YAML uses FQN dispatch (the predicate DSL is still iterating, so we don't reserve a short stepType slot upstream yet):
 
@@ -256,6 +256,50 @@ whenExpr: "reviewer == $self and age >= 48h"
 cost: 0.01
 value: 1.0
 ```
+
+#### `whenExpr` — the predicate DSL
+
+A boolean expression over the matched signal's fields. Parser source: `com.embabel.assistant.policy.PolicyExprParser`. Grammar (today; expect additions as concrete rules need them):
+
+**Operators**, lowest to highest precedence:
+
+| Operator | Meaning |
+|---|---|
+| `or` | logical OR |
+| `and` | logical AND |
+| `not` | logical NOT (prefix) |
+| `==`, `!=` | equality / inequality |
+| `<`, `<=`, `>`, `>=` | numeric or duration comparison |
+| `in` | membership in a collection (`field in collection`) |
+
+**Literals:**
+
+| Form | Type |
+|---|---|
+| `"..."` | string (`\` escapes the next character) |
+| `42`, `3.14` | number |
+| `true`, `false` | boolean |
+| `30s`, `5m`, `48h`, `7d`, `2w` | duration (seconds / minutes / hours / days / weeks) |
+
+**Identifiers** — dotted paths walk the signal's fields. `signal.subject`, `source.url`, `reviewer`, `last_sender`. Whatever properties the `inputTypeNames` DomainType declares is reachable. Unresolvable paths fail the comparison (logged at debug, not a parse error) so a misspelled field surfaces as "rule never fires" rather than a load-time crash.
+
+**Special tokens:**
+
+- `$self` — the user's identity bundle (username + configured aliases — emails, github handle, etc., from `assistant.policy.self.<username>` in `application.yml`). Use in `==`, `!=`, or as the LHS of `in`. `reviewer == $self`, `$self in participants`.
+- `age` — derived `now - signal.occurredAt` as a `Duration`. Compare against a duration literal: `age >= 24h`, `age < 5m`.
+
+**Grouping:** `()` for explicit precedence. `not (a or b)`.
+
+**Worked examples:**
+
+```
+reviewer == $self and age >= 48h
+$self in participants and last_sender != $self and age >= 24h
+mentioned == $self and not acknowledged
+source.kind == "email" and message_count > 1
+```
+
+Errors at parse time include source span and the unexpected token — pack authors see the column the parser tripped on.
 
 ### How policies and LLM-judgment actions compose
 
