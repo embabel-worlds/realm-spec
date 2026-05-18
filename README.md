@@ -120,9 +120,10 @@ for declarative packs. Authors choose freely per file.
 
 ### Choosing a shape
 
-- Start declarative. If a YAML `stepType: action` or `stepType: policy`
-  can express what you need, that's the right tool — no build step,
-  no runtime code path, the host's planner reasons about it directly.
+- Start declarative. If a YAML `stepType: action` (or any
+  host-extension `ActionSpec` referenced by FQN) can express what
+  you need, that's the right tool — no build step, no runtime code
+  path, the host's planner reasons about it directly.
 - Reach for handlers when the operation has invariants the planner
   can't enforce on its own (atomicity, revision guards, ordering
   across multiple vendor calls) or when the vendor's API grammar is
@@ -156,14 +157,30 @@ tags:
 
 ## `actions/`
 
-Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape; the framework's `NameOrClassTypeIdResolver` resolves names to classes, so any `ActionSpec` implementation on the classpath (including host extensions) drops in next to the framework's own `stepType: action`.
+Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape; the framework's `NameOrClassTypeIdResolver` resolves either a registered short name (e.g. `action`, `goal`) **or a fully-qualified class name** (`com.example.MyCustomActionSpec`) to an `ActionSpec` class on the classpath. Host extensions can use either path.
 
-| `stepType` | Purpose | Output |
-|------------|---------|--------|
-| `action` | Framework `PromptedActionSpec` — typed LLM call | declared `outputTypeName` |
-| `policy` | Host extension — deterministic predicate over a signal, no LLM | `AttentionCandidate` |
+| `stepType` value | Shape |
+|---|---|
+| `action` | Framework `PromptedActionSpec` — typed LLM call producing `outputTypeName` |
+| `<FQN>` | Any other `ActionSpec` subtype on the classpath. Use this when shipping a host-extension shape whose YAML contract isn't yet stable enough to claim a short name. |
 
-Hosts register their own `ActionSpec` subtypes (e.g. `policy`) at startup via `ObjectMapper.registerSubtypes(...)` against the spec mapper. Once registered, files of all stepTypes coexist in the same `actions/` directory; the framework's loader dispatches on the discriminator.
+**Short name vs FQN dispatch.** A short name like `action` is a public contract; once pack authors write it, you can't change the spec's shape without breaking their YAML. Reserve short names only for shapes that have stabilised. FQN dispatch lets a host iterate freely on field names, parsing, and dispatch semantics without committing to a YAML slot upstream.
+
+Example host extension (the assistant's predicate-driven `PolicyActionSpec`):
+
+```yaml
+# pack-email/actions/policy_email_unreplied.yml
+stepType: com.embabel.assistant.policy.spec.PolicyActionSpec
+name: email_unreplied
+description: A thread you're a participant in has activity from someone else, ≥ 24h ago
+inputTypeNames:
+  - email.thread
+whenExpr: "$self in participants and last_sender != $self and age >= 24h"
+cost: 0.01
+value: 1.0
+```
+
+The framework's resolver calls `Class.forName(stepType)` and deserializes the rest of the YAML into that class. No `registerSubtypes(...)` call required, no `@JsonTypeName` annotation on the class.
 
 ### `stepType: action` — typed LLM call
 
@@ -216,13 +233,15 @@ value: 1.0
 
 The wrap is a two-step GOAP chain per signal: the PromptedActionSpec emits an `AttentionVerdict`, then the host's wrap action emits the final `AttentionCandidate`. The wrap is keyed off `(AttentionVerdict, Signal)` inputs so it composes generically with *any* LLM-judgment pack — pack-email, pack-slack, pack-calendar, etc. — without needing per-signal-type wrap classes.
 
-### `stepType: policy` — host-extension deterministic rule
+### Deterministic rules — host-extension via FQN
 
-Cheap, no-LLM rule over a single signal — fires when its predicate matches and writes an `AttentionCandidate`. Predicate is the host's DSL (comparison + boolean ops + the `$self` symbol + derived `age`); field paths walk the signal's declared properties. **No `surface:` block** — how the candidate gets rendered into a notification is a downstream concern, not the producer's call.
+The assistant ships an in-tree `PolicyActionSpec` for cheap, no-LLM rules over a single signal — fires when its predicate matches and writes an `AttentionCandidate`. Predicate is the host's DSL (comparison + boolean ops + the `$self` symbol + derived `age`); field paths walk the signal's declared properties. **No `surface:` block** — how the candidate gets rendered into a notification is a downstream concern, not the producer's call.
+
+The YAML uses FQN dispatch (the predicate DSL is still iterating, so we don't reserve a short stepType slot upstream yet):
 
 ```yaml
 # actions/policy_pr_review_overdue.yml
-stepType: policy
+stepType: com.embabel.assistant.policy.spec.PolicyActionSpec
 name: pr_review_overdue
 description: A review was requested from you and it's been over 48h
 
@@ -240,7 +259,7 @@ value: 1.0
 
 ### How policies and LLM-judgment actions compose
 
-For each fresh signal of type `T`, the host runs one `AgentProcess` whose goal is "an `AttentionCandidate` exists on the blackboard". Every loaded action whose preconditions match `T` is a candidate; UtilityAI picks in value-minus-cost order. A cheap `stepType: policy` ((cost 0.01, value 1.0) → utility 0.99) wins over an LLM `stepType: action` producing AttentionVerdict ((cost 0.5, value 1.0) → utility 0.5) — so the cheap policy runs first, writes the AttentionCandidate, the goal is satisfied, and the LLM call never happens.
+For each fresh signal of type `T`, the host runs one `AgentProcess` whose goal is "an `AttentionCandidate` exists on the blackboard". Every loaded action whose preconditions match `T` is a candidate; UtilityAI picks in value-minus-cost order. A cheap deterministic rule ((cost 0.01, value 1.0) → utility 0.99) wins over an LLM `stepType: action` producing AttentionVerdict ((cost 0.5, value 1.0) → utility 0.5) — so the cheap rule runs first, writes the AttentionCandidate, the goal is satisfied, and the LLM call never happens.
 
 When the cheap policy doesn't match, its `hasRun_<name>=TRUE` blocks re-picking; the LLM action still has positive utility; the planner picks it; it produces an AttentionVerdict (or null = skip); if non-null, the host's wrap action fires; goal satisfied. If the LLM returns null and no other action can produce an AttentionCandidate, the planner terminates naturally with no candidate.
 
