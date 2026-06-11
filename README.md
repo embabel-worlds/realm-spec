@@ -53,6 +53,8 @@ pack-name/
 │   └── my-webhook.yml
 ├── events/               # Event ingestion (forward-looking) — push + poll
 │   └── my-source.yml
+├── decorations/          # Scheduled KG node-decoration manifests
+│   └── my-decoration.yml
 ├── apps/                 # Bundled HTML apps served at /apps/{name}
 │   └── my-dashboard.html
 ├── artifacts.yml         # Custom artifact type registrations (optional)
@@ -400,6 +402,42 @@ create_entry({
 
 Each relation is `{predicate, to: {type, ...keyProps}}` — `to.type` names the target's type, the remaining `to.*` fields are the key properties the host MATCHes against on the target's workspace-scoped nodes. Use this pattern any time a pack's typed records form a small connected graph (rating → movie, comment → ticket, note → contact, etc.) — the same graph is then walkable by Cypher and feeds the recall path automatically.
 
+### Populating types from an external system (deterministic, no code)
+
+The patterns above cover types the *user* creates. A pack can also declare a type that the host **populates automatically from a connected external system — deterministically, with no LLM and no Kotlin/Java in the pack.** A structured record (a CRM contact, an issue, a calendar attendee) is already typed at the source, so extracting it with an LLM is wasteful and error-prone; instead the pack declares a *projection* in property `metadata:` and the host's projector does the rest.
+
+This builds on a small canonical-entity model the host ships: a `Contact` is a `Person` resolved by email. Declare a **mirror type** that `parents: [Contact]` and annotate each property:
+
+```yaml
+# types/hubspot.yml — populated from HubSpot CRM, no Kotlin in the pack
+- name: HubSpotContact
+  parents: [Contact]
+  visibility: internal          # machinery, not a user-browsable repository type
+  userAnchor: { predicate: OWNED_BY, direction: from-user }
+  properties:
+    email:                      # the deterministic merge key
+      metadata: { identity: "true" }
+    jobtitle:                   # projects onto the canonical Person
+      metadata: { canonical: "jobTitle" }
+    company:                    # resolve + link a related entity
+      metadata: { relationship: "WORKS_FOR", target: "Organization", matchBy: "name" }
+    phone:
+      cardinality: LIST
+      metadata: { canonical: "phones", multivalued: "true" }
+    # undeclared fields (lifecyclestage, …) stay on the mirror, source-private
+```
+
+| Metadata key | Effect |
+|--------------|--------|
+| `identity: "true"` | This field's value is the email **merge key**: records with the same email resolve to one canonical `:Person` (no LLM entity resolution). Also unioned onto the Person's `emails`. |
+| `canonical: <field>` | Project this source field onto the canonical Person's `<field>`. Single-valued → a winner is chosen by host precedence then most-recent; mark `multivalued: "true"` (or `cardinality: LIST`) to **union** instead. |
+| `relationship: <EDGE>` + `target: <Label>` + `matchBy: <prop>` | Create-or-match a `<Label>` keyed on `matchBy`, and link `(:Person)-[:EDGE]->(:Label)`. |
+| *(none)* | Source-private — the value lands only on the per-record mirror node. |
+
+**Storage model.** Each source record becomes a per-record mirror node (`:<TypeName>:RemoteHandle`) holding the raw fields + provenance, linked to one canonical `:Person` that holds the *resolved* values (queryable: `MATCH (p:Person) WHERE p.jobTitle = 'CEO'`). The mirror's label is the namespace, so two sources never clash on a field; "what does HubSpot specifically say" is one hop to the mirror. A record with no email becomes a mirror-only orphan (reaped in the background).
+
+**When it runs.** Declaring the type loads nothing. Once the user connects the account (OAuth), the host pulls on a schedule (cadence configurable per source), checkpointed by a persisted watermark so a large import drains over successive ticks and a mid-run failure safely retries the window (projection is idempotent). One-click backfill and real-time webhooks ride the same path. The pack supplies only the type (above) and the fetch (its `apis/` OpenAPI op or a handler); the projector and scheduling are host-side.
+
 ## `apis/`
 
 API entries — each `.yml` file in `apis/` is a list of API definitions loaded on workspace init. Each entry compiles into a typed `gateway.<name>.*` namespace inside `execute_javascript` / `execute_python`.
@@ -639,6 +677,39 @@ export async function getOutline(
 ```
 
 The host's manifest extractor walks the TypeScript AST, converts the args parameter type and the unwrapped return type to JSON Schema, and writes them to `dist/manifest.json`. The first JSDoc paragraph becomes the LLM-visible description — **invest in JSDoc**: it's how the LLM picks the right method when multiple gateway surfaces overlap.
+
+#### Authoring before `sync` — `GenericGatewayContext`
+
+`embabel-pack sync` (which generates `.embabel/gateway.d.ts` with the host's fully-typed `GatewayContext`) is still in flight. Until it lands, a pack whose handlers only need to *call* gateway ops — not the static types of their results — can type `ctx` as **`GenericGatewayContext`** from `@embabel/runtime-types` (a loose `Record<string, Record<string, (args) => Promise<unknown>>>`). The manifest extractor reads each handler's `args` and return types, **not** `ctx`, so the typed LLM surface is identical either way.
+
+`pack-movie` is a minimal worked example — two convenience methods over the OMDb / Streaming-Availability raw APIs:
+
+```ts
+// src/api/movie.ts
+import type { GenericGatewayContext } from "@embabel/runtime-types";
+
+/** Where this movie is streaming in a country (ISO-3166 alpha-2, lowercase). */
+export async function streaming(
+  ctx: GenericGatewayContext,
+  args: { id: string; country: string },
+): Promise<unknown> {
+  return ctx.streamingAvailability.getShow({ id: args.id, country: args.country });
+}
+```
+
+```ts
+// tests/movie.test.ts — hermetic, no live API
+const ctx = mockGateway<GenericGatewayContext>({
+  streamingAvailability: { getShow: vi.fn().mockResolvedValue({ streamingOptions: { au: [] } }) },
+});
+expect(await streaming(ctx, { id: "tt0113451", country: "au" })).toBeDefined();
+```
+
+Caveat: the `Record` index access trips `noUncheckedIndexedAccess`, so leave that
+flag off in `tsconfig.json` when using `GenericGatewayContext` (the generated
+`GatewayContext` has concrete properties and doesn't need it). Once `sync` lands,
+swap `GenericGatewayContext` → `GatewayContext` for full result typing — nothing
+else changes.
 
 ### Manifest format
 
@@ -896,6 +967,128 @@ A pack may declare both `webhook:` and `poll:` for the same type — the host pr
 Both sources produce `Signal`s of the pack-declared type. From there, the consequence engine, triage rules, persistence (`SignalRecord`), notifications, and chat surfacing are all type-aware: `signal.type.isAssignableFrom(StripeEvent)` is a real predicate, not a string match.
 
 No JVM bytecode is shipped — packs that need behaviour beyond mapping should expose it via `actions/` (LLM-driven) or `mcp/` (sandboxed servers).
+
+## `decorations/` — scheduled KG node enrichment
+
+A pack drives enrichment of nodes already in the knowledge graph by declaring **decoration manifests**. Each manifest binds a pack-declared `action` to a set of Neo4j labels and a cadence; the host's decoration scheduler walks candidate rows, invokes the action per node, and persists the result.
+
+This is the right shape for "keep these rows fresh", "add my pack's structured data to entities the user already has", and "re-summarise on a TTL" — without the pack needing to write any host code, manage scheduling, or implement dedup.
+
+### Manifest
+
+```yaml
+# pack-hubspot/decorations/contact-enrich.yml
+name: hubspot-contact-enrich       # required; stable kebab-case id (used as stamp key)
+targetLabels: [HubSpotContact]     # required; ≥ 1 Neo4j label this decoration targets
+action: enrichHubSpotContact       # required; an action declared in this pack's actions/
+tickInterval: PT6H                 # ISO-8601 duration; how often the scheduler checks (default PT6H)
+batchSize: 25                      # candidate rows per tick (default 25)
+concurrency: 4                     # parallel decorate calls within a tick (default 4)
+refreshAfter: P7D                  # ISO-8601 duration; null/omitted = one-shot
+```
+
+A file may carry a single manifest or a YAML list of them (`- name: ...` per entry).
+
+### The action contract
+
+The referenced action receives one node's identity + a workspace user binding and returns a structured `DecorationResult` describing what to write. The host owns persistence; the action stays pure.
+
+**Input bindings** (the action's `inputs:` block in `actions/<name>.yml` must accept these):
+
+| Binding | Type | Meaning |
+|---|---|---|
+| `nodeId` | string | The candidate node's stable id |
+| `nodeName` | string | The node's display name |
+| `nodeLabels` | list&lt;string&gt; | Every Neo4j label on the node |
+| `nodeProperties` | object | Map of every property currently on the node |
+| `userId` | string | The owning workspace user |
+
+**Output type**: `DecorationResult` (a host-provided domain type). Action declarations set `outputType: com.embabel.assistant.kg.decoration.DecorationResult`.
+
+```ts
+interface DecorationResult {
+  // Property keys to MERGE onto the node. Setting `description`
+  // here updates the node's display description. Pre-existing
+  // properties are preserved unless an entry here overrides them.
+  propsToSet?: Record<string, unknown>
+
+  // Relationships to MERGE from the node to other entities.
+  // Idempotent — re-running doesn't duplicate edges.
+  edgesToMerge?: Array<{
+    type: string             // relationship type, e.g. "HAS_HUBSPOT_DEAL"
+    targetNodeId: string     // the other end's stable id
+    targetLabel?: string     // optional; helps some graph stores
+    properties?: Record<string, unknown>
+  }>
+}
+```
+
+Empty result is fine — the scheduler stamps the row regardless, so the decorator doesn't re-run before its `refreshAfter` (or never, if one-shot). Return empty when the action surveyed the row and decided there was nothing to add (e.g. "no signature in this email", "no Wikipedia article for this person").
+
+### Lifecycle
+
+1. **Discovery.** At host startup, the decoration loader walks every installed pack for `decorations/*.yml` (or `*.yaml`).
+2. **Wiring.** Each manifest becomes a scheduled decorator on the host's `TaskScheduler`, ticking at `tickInterval`. The decorator's stamp property is `<name>DecoratedAt`.
+3. **Per tick.** A label-filtered Cypher predicate selects up to `batchSize` rows whose stamp is missing OR (when `refreshAfter` is set) older than the refresh window. Rows are dispatched to `decorate(...)` calls in parallel up to `concurrency`.
+4. **Per node.** The host invokes the referenced action with the input bindings. On success, the host persists `propsToSet` and `edgesToMerge`, then stamps the row. On exception, the row stays un-stamped — next tick retries.
+
+### Examples
+
+**Single-shot enrichment from external API:**
+
+```yaml
+# pack-wikipedia/decorations/topic-wiki.yml
+name: wikipedia-topic
+targetLabels: [Topic]
+action: fetchWikipediaTopic
+tickInterval: PT12H
+batchSize: 50
+concurrency: 4
+# no refreshAfter — Wikipedia summaries change so slowly that one-shot is right
+```
+
+**Periodic resummarisation:**
+
+```yaml
+# pack-hubspot/decorations/deal-summary.yml
+name: hubspot-deal-summary
+targetLabels: [HubSpotDeal]
+action: summariseHubSpotDeal
+tickInterval: PT2H
+batchSize: 25
+concurrency: 4
+refreshAfter: P14D
+```
+
+**Second-order entity discovery (Bills from Billers):**
+
+```yaml
+# pack-finance/decorations/bills-from-biller.yml
+name: bills-from-biller
+targetLabels: [Biller]
+action: scanBillsForBiller
+tickInterval: PT6H
+batchSize: 25
+concurrency: 4
+refreshAfter: P1D
+```
+
+The action body queries email threads from the biller's domain, extracts `:Bill` rows, and returns them as `edgesToMerge` entries with `type: "ISSUED_BILL"`.
+
+### Choosing parameters
+
+| Knob | Picking it |
+|---|---|
+| `tickInterval` | How quickly new rows of `targetLabels` should get decorated. For freshly-arriving entities, ~1h. For one-shot enrichments, can be 24h+ — the predicate empties after first pass. |
+| `batchSize` | Throttle per-tick LLM / HTTP cost. 25 is generous; drop to 10 for expensive actions. |
+| `concurrency` | Parallel calls within a tick. 1 for pure-Cypher actions (parallelism = contention). 4-8 for LLM / HTTP-bound actions. Honor your provider's rate limits. |
+| `refreshAfter` | Set when re-decoration earns its rent (re-summarise after activity, re-fetch slowly-changing facts). Omit for genuinely one-shot enrichments. |
+
+### Anti-patterns
+
+- **Self-persisting actions.** Don't have the action call gateway methods to write graph properties directly. Return them via `DecorationResult` — the host's persistence + stamping is one atomic-ish step that keeps "what this decorator changed" auditable.
+- **Cross-pack dependencies.** A manifest references one action from its own pack. If you need behaviour from another pack, call it through the gateway from inside the action body, don't pull it via manifest composition.
+- **Sweep when an event works.** If the entity gets an enrichable signal on creation (a webhook fires, an EmailSignal lands), prefer the event path. Decorations are for what *can't* be done event-driven — refreshes, federations, cross-source joins, slow-moving fact maintenance.
 
 ## `apps/`
 
