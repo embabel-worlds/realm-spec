@@ -614,9 +614,12 @@ End users **never** paste tokens, IDs, or secrets. Settings → Connected Servic
 
 ## `src/` and `tests/` — hand-authored TypeScript handlers
 
-OpenAPI and MCP cover what an external system *already* exposes. Packs can also ship **hand-authored TypeScript** that registers as gateway methods alongside OpenAPI-derived ones. Each TS file under `src/api/` becomes a namespace on `gateway.*`; each exported `async function` in that file becomes a method.
+OpenAPI and MCP cover what an external system *already* exposes. Packs can also ship **hand-authored TypeScript** under `src/api/`, in two forms:
 
-The compiled handler runs in the same sandbox as LLM-generated code (no in-server JS engine). Each handler receives the live gateway as its first argument, so it can call back through `gateway.<raw-api>.*` for primitives — no HTTP-from-inside-HTTP overhead, no second auth dance.
+- **Namespace functions** — an exported `async function` becomes a `gateway.<namespace>.<name>(...)` method. Use these to shape, guard, or compose raw API primitives. Covered in [Handler signature](#handler-signature).
+- **Type methods** — an exported `class` that `extends Entity` defines a *type* whose async methods are callable on an in-scope object (`movie.streaming({ country })`). Use these to give a pack's entities behaviour. Covered in [Type methods](#type-methods--classes-that-extend-entity).
+
+Both compile to the same `dist/` and run in the same sandbox as LLM-generated code (no in-server JS engine), calling back through `gateway.<raw-api>.*` for primitives — no HTTP-from-inside-HTTP overhead, no second auth dance.
 
 ### When to add TS handlers
 
@@ -682,34 +685,107 @@ The host's manifest extractor walks the TypeScript AST, converts the args parame
 
 `embabel-pack sync` (which generates `.embabel/gateway.d.ts` with the host's fully-typed `GatewayContext`) is still in flight. Until it lands, a pack whose handlers only need to *call* gateway ops — not the static types of their results — can type `ctx` as **`GenericGatewayContext`** from `@embabel/runtime-types` (a loose `Record<string, Record<string, (args) => Promise<unknown>>>`). The manifest extractor reads each handler's `args` and return types, **not** `ctx`, so the typed LLM surface is identical either way.
 
-`pack-movie` is a minimal worked example — two convenience methods over the OMDb / Streaming-Availability raw APIs:
+A namespace function that only needs to *call* gateway ops can type `ctx` loosely:
 
 ```ts
-// src/api/movie.ts
+// src/api/weather.ts
 import type { GenericGatewayContext } from "@embabel/runtime-types";
 
-/** Where this movie is streaming in a country (ISO-3166 alpha-2, lowercase). */
-export async function streaming(
+/** Current conditions for a city. */
+export async function current(
   ctx: GenericGatewayContext,
-  args: { id: string; country: string },
+  args: { city: string },
 ): Promise<unknown> {
-  return ctx.streamingAvailability.getShow({ id: args.id, country: args.country });
+  return ctx.openWeather.getCurrent({ q: args.city });
 }
-```
-
-```ts
-// tests/movie.test.ts — hermetic, no live API
-const ctx = mockGateway<GenericGatewayContext>({
-  streamingAvailability: { getShow: vi.fn().mockResolvedValue({ streamingOptions: { au: [] } }) },
-});
-expect(await streaming(ctx, { id: "tt0113451", country: "au" })).toBeDefined();
 ```
 
 Caveat: the `Record` index access trips `noUncheckedIndexedAccess`, so leave that
 flag off in `tsconfig.json` when using `GenericGatewayContext` (the generated
 `GatewayContext` has concrete properties and doesn't need it). Once `sync` lands,
 swap `GenericGatewayContext` → `GatewayContext` for full result typing — nothing
-else changes.
+else changes. The same applies to a type method's `this.gateway`.
+
+### Type methods — classes that extend `Entity`
+
+A namespace function is a free function on a gateway surface. A **type method** is
+a method *on an in-scope object* — `movie.streaming({ country: "us" })`, not a
+bare `gateway.movie.streaming(...)`. You author one by exporting a class that
+extends `Entity` (from `@embabel/runtime-types`). Its fields are the type's
+shape; its async methods are the affordances.
+
+```ts
+// src/api/movie.ts
+import { Entity } from "@embabel/runtime-types";
+import type { StreamingShow } from "../types/movie";
+
+// The gateway ops this type calls, typed. Until `embabel-pack sync` generates the
+// host's `GatewayContext`, the pack types the slice it uses and reads it through
+// `this.api`, so bodies and return types are fully typed — no `unknown`.
+interface MovieGateway {
+  streamingAvailability: { getShow(args: { id: string; country: string }): Promise<StreamingShow> };
+}
+
+/** A film in the knowledge graph. Identity is `imdbId`. */
+export class Movie extends Entity {
+  imdbId!: string;
+  title?: string;
+
+  private get api(): MovieGateway {
+    return this.gateway as unknown as MovieGateway;
+  }
+
+  /** Where this movie is streaming in a country (ISO-3166 alpha-2, lowercase). */
+  async streaming(args: { country: string }): Promise<StreamingShow> {
+    return this.api.streamingAvailability.getShow({ id: this.imdbId, country: args.country });
+  }
+}
+```
+
+There is no `ctx`/`self` plumbing: `this` is the object the host hydrated from the
+entity's fields, and `this.gateway` is the injected context (typed loosely until
+`sync` lands — read it through a typed `this.api` accessor, as above, for real
+result types). Each method's single `args` parameter and return type drive the
+JSON Schema; the first JSDoc paragraph is the LLM-visible description, exactly as
+for namespace functions.
+
+Extending `Entity` is what makes the host recognise `Movie` as a type, and it
+brings **`neighbors()`** for free — graph navigation (`movie.neighbors({ hops })`)
+every type inherits with no per-type code. `Entity` is a normal class, so a pack
+can introduce its own intermediate base to share behaviour across its types; the
+manifest walks the whole base chain. Plain data the user writes that has no
+behaviour of its own (e.g. `MovieRating`) stays a plain `interface` — promote it
+to a class only when it grows methods.
+
+**Testing.** `entityForTest` builds a real instance with its fields set and a
+mock gateway injected — the same shape the host uses at runtime — so a method is
+tested in milliseconds with no live server:
+
+```ts
+// tests/movie.test.ts — hermetic, no live API
+import { entityForTest, mockGateway } from "@embabel/runtime-types";
+import type { GenericGatewayContext } from "@embabel/runtime-types";
+import { Movie } from "../src/api/movie";
+
+const getShow = vi.fn().mockResolvedValue({ streamingOptions: { au: [] } });
+const movie = entityForTest(
+  Movie,
+  { imdbId: "tt0113451" },
+  mockGateway<GenericGatewayContext>({ streamingAvailability: { getShow } }),
+);
+
+await movie.streaming({ country: "au" });
+expect(getShow).toHaveBeenCalledWith({ id: "tt0113451", country: "au" });
+```
+
+**Runtime.** For `class Movie extends Entity` to instantiate in the sandbox, the
+compiled handler must `require("@embabel/runtime-types")` for the base class.
+`embabel-build-manifest` vendors the runtime's CommonJS build into the pack's
+`dist/node_modules/@embabel/runtime-types/`, so the seeded handler bundle is
+self-contained — you don't manage this.
+
+`pack-movie` is the worked example: a `Movie` class with `streaming`, `details`,
+and `rate` plus inherited `neighbors`.
 
 ### Manifest format
 
