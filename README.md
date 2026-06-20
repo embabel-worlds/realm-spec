@@ -38,6 +38,8 @@ pack-name/
 │   └── my-goal.yml
 ├── types/                # Dynamic type definitions (YAML)
 │   └── my-type.yml
+├── producers/            # Virtual-join producers for on-demand types (YAML, optional)
+│   └── my-producers.yml
 ├── apis/                 # API entries (YAML)
 │   └── my-api.yml
 ├── src/                  # Hand-authored TypeScript handlers (optional)
@@ -437,6 +439,95 @@ This builds on a small canonical-entity model the host ships: a `Contact` is a `
 **Storage model.** Each source record becomes a per-record mirror node (`:<TypeName>:RemoteHandle`) holding the raw fields + provenance, linked to one canonical `:Person` that holds the *resolved* values (queryable: `MATCH (p:Person) WHERE p.jobTitle = 'CEO'`). The mirror's label is the namespace, so two sources never clash on a field; "what does HubSpot specifically say" is one hop to the mirror. A record with no email becomes a mirror-only orphan (reaped in the background).
 
 **When it runs.** Declaring the type loads nothing. Once the user connects the account (OAuth), the host pulls on a schedule (cadence configurable per source), checkpointed by a persisted watermark so a large import drains over successive ticks and a mid-run failure safely retries the window (projection is idempotent). One-click backfill and real-time webhooks ride the same path. The pack supplies only the type (above) and the fetch (its `apis/` OpenAPI op or a handler); the projector and scheduling are host-side.
+
+### Joining types on demand (virtual joins, not mirrored)
+
+Population (above) **eagerly mirrors** a whole external collection into the graph on a schedule. For large or volatile collections you usually only ever touch a tiny slice — there a **virtual join** is better: the type's instances are fetched **on demand** when a Cypher query traverses to them, materialized transiently for that query, then **rolled back** (no persistence, no sync, no GC). It's the traversal-triggered sibling of `population:`.
+
+A virtual type declares one or more `virtualJoins:`. Each says how the type is reached — from an anchor label along a relationship, keyed by an anchor field, fetched by a named **producer**:
+
+```yaml
+# types/hubspot.yml — fetched on demand, NOT mirrored
+- name: HubSpotContact
+  visibility: internal
+  properties:
+    id: { metadata: { identity: "true" } }   # MERGE key for dedup
+    email: "Primary email."
+    jobtitle: "Job title."
+  virtualJoins:
+    # Linking on an id match: anchor is a domain node, joined by a shared property.
+    - anchorLabel: Person
+      relationship: HAS_HUBSPOT_CONTACT
+      keyField: email            # anchor property whose values become the producer keys
+      recordKeyField: email      # field on each fetched record that maps it back to the anchor
+      producer: contactsByEmail  # see producers/ below
+      # brings: a fetched record may carry its own sub-graph (extracted from the record)
+      brings:
+        - childType: HubSpotComment
+          relationship: HAS_COMMENT
+          records: "$.comments[*]"   # JSONPath within the record to the child list
+          id: id
+```
+
+`virtualJoins` fields: `anchorLabel`, `relationship`, `keyField`, `recordKeyField` (defaults to `keyField` — a same-property id-match), `producer`, optional `brings` (declared sub-graph), `maxAnchors`/`maxFanoutTotal` (caps), and `persist` (see identity bridges). A list with more than one entry, or any join that can fan in, requires an `identity` property so convergent paths dedupe to one node.
+
+The query may only reach a virtual label by **traversing a declared join from a bound anchor** — a naked `MATCH (hc:HubSpotContact)` is rejected. Every materialized node is stamped `_virtual` / `_fetchedAt` and scoped to the user; the user's query runs through the normal scope rewriter unchanged.
+
+### `producers/`
+
+Producers are the source-specific fetchers a `virtualJoins.producer` references — declared once, reused. Each `.yml` in `producers/` is a list, discriminated by `kind`. **Batch contract:** a producer takes ALL anchor keys at once and returns the matching records — never one call per key (no N+1).
+
+```yaml
+# producers/hubspot.yml
+- name: contactsByEmail
+  kind: api                       # gateway op (pack handler or learned API)
+  operation: objectsSearch
+  records: "$.results[*].properties"
+  keyArg: "filterGroups.0.filters.0.values"   # where the key LIST is injected (list mode)
+  args: { objectType: contacts, filterGroups: [ { filters: [ { propertyName: email, operator: IN } ] } ] }
+  cache: { kind: ttl, seconds: 300 }
+
+# producers/github.yml — string mode: keys render into a query string
+- name: issuesByAuthor
+  kind: api
+  operation: search/issues-and-pull-requests
+  records: "$.items[*]"
+  args: { q: "is:issue {keys}" }
+  keyTemplate: "author:{key}"     # each key → author:<k>, joined by keyJoin, into the {keys} placeholder
+
+# producers/warehouse.yml — relational source
+- name: ordersByCustomer
+  kind: sql
+  datasource: warehouse           # a pack/workspace SQL datasource (sql/datasources.yml)
+  query: "SELECT id, customer_email, total FROM orders WHERE customer_email IN (:keys)"
+```
+
+Producer `kind`s:
+
+| kind | fetch | notes |
+|------|-------|-------|
+| `api` | a `gateway.<name>.*` op (pack handler or learned API) | list mode (`keyArg` → array) or string mode (`keyTemplate` + `{keys}`); `records` JSONPaths the response |
+| `sql` | a SELECT against a pack/workspace `datasource` | keys expand into `IN (…)`; rows are the records; SELECT-only, wallet/env creds |
+| `compute` | an in-process computation over the keys | scores / rollups / synthesis — no external I/O |
+| `vector` *(roadmap)* | top-k **semantic similarity** to the anchor | for joins with no key — similarity *is* the join (related docs/chunks); rides the host embedder |
+
+`cache:` is orthogonal to kind (`none` / `ttl` / `session` / `immutable`).
+
+### Connected-account identity bridges (`identityBridge:`)
+
+A lightweight bridge type can be populated **reliably for the connecting user** from a connected account's resolved identity, on OAuth authorize — no producer needed. When the user authorizes the provider, the resolved account id (the apis.yml `identity.account-id-field`, e.g. GitHub `login`) becomes the bridge's identity, linked to the user's own anchor (matched by email):
+
+```yaml
+# types/github.yml
+- name: GitHubIdentity
+  visibility: internal
+  properties:
+    login: { metadata: { identity: "true" } }
+  identityBridge: { provider: gh, relationship: HAS_GITHUB, linkFrom: Person }
+  # then GitHubIssue can virtualJoin on GitHubIdentity by login
+```
+
+This covers the *user's own* identity (all OAuth knows). Other people's identities still need a producer; a `persist: true` virtualJoin runs an enrichment over all anchors and **commits** the bridge (the persisted sibling of a transient join).
 
 ## `apis/`
 
