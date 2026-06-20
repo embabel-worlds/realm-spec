@@ -515,7 +515,14 @@ Producer `kind`s:
 
 **Chunking (`maxKeysPerCall`).** Producers chunk the unioned anchor keys into batches of `maxKeysPerCall` — so a traversal over many anchors stays within the endpoint's limit and never becomes N+1. Set it to the endpoint's documented cap: a search `IN`/`OR` (query-length bound, ~50, the `api` default), a dedicated **bulk-by-ids** endpoint (HubSpot `/batch/read` 100, Jira `bulkfetch`), or a `$batch`/composite multiplex (Microsoft Graph 20, Salesforce 25). `sql` defaults to 500.
 
-**Search vs bulk-by-ids.** When the join key is the *target's own id*, prefer the source's dedicated bulk-read endpoint (`operation:` = that op, `keyArg:` = its ids array, `maxKeysPerCall:` = its cap) — it's cheaper than a search and supports field/expand selection. Use search (`IN`/`OR`) only when the key is a *secondary* field (email, login, domain), where there is no by-id endpoint. Pair `brings` with the endpoint's `expand`/field params so the sub-graph arrives in the same call rather than a follow-up.
+**Search vs bulk-by-ids.** When the join key is the *target's own id*, prefer the source's dedicated bulk-read endpoint (`operation:` = that op, `keyArg:` = its ids array, `maxKeysPerCall:` = its cap) — it's cheaper than a search and supports field/expand selection. Use search (`IN`/`OR`) only when the key is a *secondary* field (email, login, domain), where there is no by-id endpoint. Pair `brings` with the endpoint's `expand`/`include`/sideload params so the sub-graph arrives in the same call rather than a follow-up.
+
+**Field selection & cursor paging (set them in `args`/`paging`).** Two efficiency levers that need no producer code — just declare them:
+
+- **Field masks / sparse fieldsets** — request only the fields the join needs via the op's field param (`fields`, `$fields`, `X-Goog-FieldMask`, `properties: [...]`). Smaller payloads, lower latency, less server CPU. Across Google, Zendesk, Jira, HubSpot this is the single cheapest win.
+- **Cursor paging** — prefer `style: cursor` over offset in `paging:`. Beyond performance, some sources (e.g. Slack) grant a *higher rate-limit tier* to cursor-paginated calls than un-paginated ones, so cursor paging is a quota win too.
+
+These hold across the ~13 SaaS APIs surveyed (Jira, Salesforce, Microsoft Graph, Shopify, HubSpot, Stripe, GitHub, Zendesk, Google, Slack, Notion, Airtable). The very tightest (Notion 3 req/s with no bulk endpoint; Airtable 5 req/s) make `cache:` and chunking mandatory, and are the case for the (deferred) `$batch`/composite multiplex producer kind.
 
 ### Connected-account identity bridges (`identityBridge:`)
 
