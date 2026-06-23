@@ -1,6 +1,6 @@
 # Embabel Pack Specification
 
-Packs are self-contained, declarative bundles of agent capabilities that can be installed into an Embabel-based host. Each pack is a git repository (no JVM bytecode, no native binaries) that provides actions, types, APIs, MCP servers, commands, webhooks, skills, prompts, and event sources. The host platform reads the pack and wires its contents into the running agent.
+Packs are self-contained, declarative bundles of agent capabilities that can be installed into an Embabel-based host. Each pack is a git repository (no JVM bytecode, no native binaries) that provides actions, types, APIs, MCP servers, commands, webhooks, event sources, event handlers, skills, prompts, and apps. The host platform reads the pack and wires its contents into the running agent.
 
 This document is the spec.
 
@@ -55,6 +55,8 @@ pack-name/
 │   └── my-webhook.yml
 ├── events/               # Event ingestion (forward-looking) — push + poll
 │   └── my-source.yml
+├── handlers/             # Event handlers — TS reactions to signals/cron the user activates
+│   └── my-handler.yml
 ├── decorations/          # Scheduled KG node-decoration manifests
 │   └── my-decoration.yml
 ├── apps/                 # Bundled HTML apps served at /apps/{name}
@@ -469,18 +471,20 @@ A virtual type declares one or more `virtualJoins:`. Each says how the type is r
           id: id
 ```
 
-`virtualJoins` fields: `anchorLabel`, `relationship`, `keyField`, `recordKeyField` (defaults to `keyField` — a same-property id-match), `producer`, optional `brings` (declared sub-graph), `maxAnchors`/`maxFanoutTotal` (caps), and `persist` (see identity bridges). A list with more than one entry, or any join that can fan in, requires an `identity` property so convergent paths dedupe to one node.
+`virtualJoins` fields: `anchorLabel`, `relationship`, `keyField`, `recordKeyField` (defaults to `keyField` — a same-property id-match), `producer`, optional `brings` (declared sub-graph), `maxAnchors`/`maxFanoutTotal` (caps). For a join to an **external-identity node** (a bridge like `GitHubIdentity` / `HubSpotOwner`), declare a `resolve:` rule chain + `writeThrough`/`refreshAfter` instead — see **Identity bridges** below (`persist: true` is the older eager-only form). A list with more than one entry, or any join that can fan in, requires an `identity` property so convergent paths dedupe to one node.
 
-The query may only reach a virtual label by **traversing a declared join from a bound anchor** — a naked `MATCH (hc:HubSpotContact)` is rejected. Every materialized node is stamped `_virtual` / `_fetchedAt` and scoped to the user; the user's query runs through the normal scope rewriter unchanged.
+The query may only reach a virtual label by **traversing a declared join from a bound anchor** — a naked `MATCH (hc:HubSpotContact)` is rejected. Every materialized node carries the extra `:Virtual` label, a `dateRetrieved` ISO-8601 timestamp, and the acting user's `userId` (so the normal scope rewriter matches it); the user's query runs through the rewriter unchanged, and the whole materialization is rolled back when the query completes.
+
+A query may also reach a virtual node by **pinning the anchor with a literal** — `MATCH (g:GitHubIdentity {login:'octocat'})-[:RAISED]->(i:GitHubIssue)` — even when no `GitHubIdentity{login:'octocat'}` exists in the graph. The literal (inline `{...}` **or** a `WHERE alias.login = '…'`) seeds a transient anchor, so a producer can be keyed on a *named* identity (any GitHub login, not just the connecting user's), fetched with the connecting user's credentials. Multiple joins onto the same virtual node compose: `(me)-[:RAISED]->(i)<-[:ASSIGNED]-(:GitHubIdentity {login:'octocat'})` materializes both sides and intersects them.
 
 ### `producers/`
 
-Producers are the source-specific fetchers a `virtualJoins.producer` references — declared once, reused. Each `.yml` in `producers/` is a list, discriminated by `kind`. **Batch contract:** a producer takes ALL anchor keys at once and returns the matching records — never one call per key (no N+1).
+Producers are the source-specific fetchers a `virtualJoins.producer` references — declared once, reused. Conceptually each is a **Repository** over an external store (the Spring Data analogue: one `Repository` abstraction, different stores underneath); the `kind` discriminator picks the store. Each `.yml` in `producers/` is a list. **Batch contract:** a producer takes ALL anchor keys at once and returns the matching records — never one call per key (no N+1).
 
 ```yaml
 # producers/hubspot.yml
 - name: contactsByEmail
-  kind: api                       # gateway op (pack handler or learned API)
+  kind: remote                    # a RemoteRepository — gateway op (pack handler or learned API)
   operation: objectsSearch
   records: "$.results[*].properties"
   keyArg: "filterGroups.0.filters.0.values"   # where the key LIST is injected (list mode)
@@ -489,11 +493,16 @@ Producers are the source-specific fetchers a `virtualJoins.producer` references 
 
 # producers/github.yml — string mode: keys render into a query string
 - name: issuesByAuthor
-  kind: api
+  kind: remote
   operation: search/issues-and-pull-requests
   records: "$.items[*]"
-  args: { q: "is:issue {keys}" }
+  args: { q: "is:issue {keys} {filters}" }     # {filters} ← predicate pushdown (below)
   keyTemplate: "author:{key}"     # each key → author:<k>, joined by keyJoin, into the {keys} placeholder
+  paging: { style: page, size: 100, maxPages: 10 }
+  pushdown:
+    - property: html_url
+      qualifier: "repo:{value}"
+      valuePattern: '(?:github\.com/|repos/)?([\w.-]+/[\w.-]+?)(?:/|$)'
 
 # producers/warehouse.yml — relational source
 - name: ordersByCustomer
@@ -506,16 +515,52 @@ Producer `kind`s:
 
 | kind | fetch | notes |
 |------|-------|-------|
-| `api` | a `gateway.<name>.*` op (pack handler or learned API) | list mode (`keyArg` → array) or string mode (`keyTemplate` + `{keys}`); `records` JSONPaths the response |
+| `remote` (alias `api`) | a `gateway.<name>.*` op (pack handler or learned API) — a **RemoteRepository** | list mode (`keyArg` → array) or string mode (`keyTemplate` + `{keys}`); `records` JSONPaths the response |
 | `sql` | a SELECT against a pack/workspace `datasource` | keys expand into `IN (…)`; rows are the records; SELECT-only, wallet/env creds |
-| `compute` | an in-process computation over the keys | scores / rollups / synthesis — no external I/O |
-| `vector` *(roadmap)* | top-k **semantic similarity** to the anchor | for joins with no key — similarity *is* the join (related docs/chunks); rides the host embedder |
+| `compute` | an in-process computation over the keys | scores / rollups / synthesis — no external I/O; *local*, so NOT a RemoteRepository |
+| `vector` | top-k **semantic similarity** to the anchor | for joins with no key — similarity *is* the join (related docs/chunks); rides the host embedder |
+
+> **Naming:** `kind: remote` is the current spelling for an externally-backed repository; `kind: api` is accepted as a back-compat alias and still works in existing packs.
 
 `cache:` is orthogonal to kind (`none` / `ttl` / `session` / `immutable`).
 
+#### Predicate pushdown (`pushdown:`) — scope the fetch at the source
+
+By default the graph filters *after* materialization: a virtual join fetches broadly, then the query's `WHERE` drops non-matches. For a prolific anchor that's wasteful and can hit the source's result cap before the matches you want. **Pushdown** translates a query predicate on the virtual *target* node into the source's native filter so the fetch is scoped before it returns — the Spring Data analogue is pushing a `Specification`/`Criteria` to the store, with whatever can't be pushed still filtered in the graph (so correctness never depends on pushdown, only cost and coverage).
+
+A `remote` repository declares `pushdown:` rules; the host renders matching predicates into the `{filters}` placeholder of `args`:
+
+```yaml
+pushdown:
+  - property: html_url            # the target-node property the predicate is on
+    op: contains                  # EQUALS (default) or CONTAINS
+    qualifier: "repo:{value}"     # native fragment; {value} ← the predicate's value
+    valuePattern: '…([\w.-]+/[\w.-]+?)(?:/|$)'   # optional regex; group 1 replaces {value}
+```
+
+So `WHERE i.html_url CONTAINS 'embabel/me'` turns `is:issue author:X {filters}` into `is:issue author:X repo:embabel/me` — one scoped search instead of fetching the author's thousands and intersecting in the graph. The mapping is declarative and source-specific; the engine knows nothing of `repo:`.
+
+#### Pagination (`paging:`) — capture more than one page
+
+A search/list op returns one page; `paging:` makes the producer walk pages and accumulate, bounded by `maxPages`, so a scoped fetch that still exceeds a page is fully captured (and a cross-join intersection doesn't silently miss matches past page 1).
+
+```yaml
+paging: { style: page, size: 100, maxPages: 10 }     # page-number paging (GitHub, most REST list ops)
+# or, for opaque cursors (HubSpot ?after=… + paging.next.after):
+paging: { style: cursor, size: 100, maxPages: 10, cursorParam: after, cursorPath: "$.paging.next.after" }
+```
+
+| Field | Default | Meaning |
+|---|---|---|
+| `style` | `page` | `page` (increment `param` from 1) or `cursor` (opaque). |
+| `param` / `sizeParam` | `page` / `per_page` | Page-number arg, and the page-size arg. |
+| `size` | 100 | Records per page (set to the endpoint's max). |
+| `maxPages` | 5 | Hard cap on pages fetched — bounds cost on an unscoped fetch. |
+| `cursorParam` / `cursorPath` | `after` / — | Cursor style only: request arg + JSONPath to the next cursor. |
+
 **Chunking (`maxKeysPerCall`).** Producers chunk the unioned anchor keys into batches of `maxKeysPerCall` — so a traversal over many anchors stays within the endpoint's limit and never becomes N+1. Set it to the endpoint's documented cap: a search `IN`/`OR` (query-length bound, ~50, the `api` default), a dedicated **bulk-by-ids** endpoint (HubSpot `/batch/read` 100, Jira `bulkfetch`), or a `$batch`/composite multiplex (Microsoft Graph 20, Salesforce 25). `sql` defaults to 500.
 
-**Search vs bulk-by-ids.** When the join key is the *target's own id*, prefer the source's dedicated bulk-read endpoint (`operation:` = that op, `keyArg:` = its ids array, `maxKeysPerCall:` = its cap) — it's cheaper than a search and supports field/expand selection. Use search (`IN`/`OR`) only when the key is a *secondary* field (email, login, domain), where there is no by-id endpoint. Pair `brings` with the endpoint's `expand`/`include`/sideload params so the sub-graph arrives in the same call rather than a follow-up.
+**Search vs bulk-by-ids.** When the join key is the *target's own id*, prefer the source's dedicated bulk-read endpoint (`operation:` = that op, `keyArg:` = its ids array, `maxKeysPerCall:` = its cap) — it's cheaper than a search and supports field/expand selection. Use search (`IN`/`OR`) only when the key is a *secondary* field (email, login, domain), where there is no by-id endpoint. Pair `brings` with the endpoint's `expand`/`include`/sideload params so the sub-graph arrives in the same call rather than a follow-up. **If a search result doesn't carry the key you searched by** (so `recordKeyField` has nothing to match), set `echoKeyAs:` — the producer then calls one key per call and stamps the queried key onto each record (see **Identity bridges**).
 
 **Field selection & cursor paging (set them in `args`/`paging`).** Two efficiency levers that need no producer code — just declare them:
 
@@ -538,7 +583,58 @@ A lightweight bridge type can be populated **reliably for the connecting user** 
   # then GitHubIssue can virtualJoin on GitHubIdentity by login
 ```
 
-This covers the *user's own* identity (all OAuth knows). Other people's identities still need a producer; a `persist: true` virtualJoin runs an enrichment over all anchors and **commits** the bridge (the persisted sibling of a transient join).
+This covers the *user's own* identity (all OAuth knows). **Other people's** identities — "Jasper's HubSpot contacts", "who that I email raised a GitHub issue" — are resolved by the bridge's `resolve:` chain, below.
+
+### Identity bridges (`resolve:` chains) — link Person/Organization to any external system
+
+A **bridge** is a virtualJoin to an external-identity node (`GitHubIdentity`, `HubSpotOwner`, …) from a canonical `Person`/`Organization`. Instead of `persist`+`keyField`, declare an **ordered `resolve:` rule chain**. At query time, for the anchors a query actually binds — **any person/org, not just the connecting user** — the host resolves the bridge **lazily**, **first matching rule wins**, and (with `writeThrough`) **persists** it so it's reused next time. Downstream joins (e.g. `RAISED` on a resolved `GitHubIdentity`) then anchor on the now-real bridge.
+
+```yaml
+# types/github.yml
+- name: GitHubIdentity
+  visibility: internal
+  properties:
+    login: { metadata: { identity: "true" } }   # bridge MERGE key
+  virtualJoins:
+    - anchorLabel: Person
+      relationship: HAS_GITHUB
+      keyField: primaryEmail        # anchor key the pre-pass probe reads
+      recordKeyField: email         # field on each resolved record that maps it back to the anchor
+      writeThrough: true            # persist the resolved bridge (default true); reused + respected
+      refreshAfter: 30d             # re-resolve a bridge older than this (optional; default 30d)
+      resolve:                      # ordered; FIRST rule that yields a bridge (or finds one) wins
+        - existingBridge                                    # respect a fresh bridge already linked
+        - learnedHandle: { property: githubLogin, as: login }  # an explicit handle on the anchor (no email)
+        - canonicalEmail: { producer: githubUsersByEmail }     # resolve via the Person's email set
+```
+
+**Rule kinds** (host-provided, referenced by name; the chain is per-pack so the link key can vary and need not be email):
+
+| rule | does |
+|---|---|
+| `existingBridge` | If a fresh bridge is already linked to the anchor (persisted, learned, or manually added), use it — stop. |
+| `learnedHandle: { property, as }` | Read an explicit identity stored on the anchor (e.g. `Person.githubLogin`) → bridge `{ <as>: handle }`. No email lookup. |
+| `canonicalEmail: { producer }` | Resolve via the anchor's **canonical email set** (host-owned: `primaryEmail`/`email`/`emails`) → call `producer`. |
+| `canonicalDomain: { producer }` | Same for an `Organization`'s `domain`/`domains`. |
+
+Canonical identity is **host-owned** — packs never hardcode `email` vs `primaryEmail`; the `canonical*` rules read the right properties for you.
+
+**Producer requirement for a `canonical*` rule:** the producer must return records carrying the bridge's `identity` property AND the matched `recordKeyField`. If the source can't echo the key you searched by (e.g. GitHub `search/users` returns `login` but not the queried email), set **`echoKeyAs`** on the producer — it calls the op one key per call and stamps `record[<echoKeyAs>] = <that key>`:
+
+```yaml
+# producers/github.yml — search returns login, NOT the queried email → echo it
+- name: githubUsersByEmail
+  kind: remote
+  operation: search/users
+  args: { q: "{keys}" }
+  keyTemplate: "{key} in:email"     # q = "<email> in:email" (one email per call)
+  echoKeyAs: email                  # stamp the queried email onto each {login,...} hit
+  records: "$.items[*]"
+```
+
+Most producers don't need `echoKeyAs` — e.g. HubSpot owners/contacts records already carry `email`. A `canonical*` rule whose producer op has **no gateway tool** simply yields nothing (the chain falls through); wire the op (in `apis/`) or supply a `learnedHandle` for those anchors.
+
+(`persist: true` without a `resolve:` chain is the older form: an eager enrichment over *all* anchors that commits the bridge. Prefer `resolve:` — it's lazy, works for any anchor, and self-heals.)
 
 ## `apis/`
 
@@ -889,6 +985,25 @@ self-contained — you don't manage this.
 `pack-movie` is the worked example: a `Movie` class with `streaming`, `details`,
 and `rate` plus inherited `neighbors`.
 
+#### Verbs on virtual types — pure compute and effectful write-back
+
+A type method works the same whether the instance is a persisted entity or one
+materialized on demand by a virtual join (a `GitHubIssue`, a `HubSpotContact`).
+So a virtual type's class gives its on-demand instances behaviour:
+
+- **pure** verbs compute over the instance's own fields, no I/O (`issue.ageDays()`,
+  `issue.needsTriage()`, `pr.isReadyForReview()`);
+- **effectful** verbs write back to the source through `this.gateway.<ns>.*`
+  (`issue.close()`, `issue.addLabels('stale')`, `pr.requestReviewers('alice')`),
+  and may reuse the host `gateway.sql` / `gateway.cypher` ops the generated
+  `GatewayContext` exposes.
+
+A read materialises transient nodes and rolls them back; an effectful verb commits
+to the real source (the rollback never touches that side-effect). A program reads,
+then acts: `const rows = await gateway.cypher.query({ cypher }); hydrateByType(rows,
+{ GitHubIssue }, gateway).filter(i => i.needsTriage()).forEach(i => i.addLabels('stale'))`.
+`pack-github` is the worked example (`GitHubIssue` / `GitHubPullRequest`).
+
 ### Manifest format
 
 Auto-generated by `embabel-build-manifest` (provided by `@embabel/runtime-types`), so pack authors never hand-author it. The host reads it at install time.
@@ -1145,6 +1260,75 @@ A pack may declare both `webhook:` and `poll:` for the same type — the host pr
 Both sources produce `Signal`s of the pack-declared type. From there, the consequence engine, triage rules, persistence (`SignalRecord`), notifications, and chat surfacing are all type-aware: `signal.type.isAssignableFrom(StripeEvent)` is a real predicate, not a string match.
 
 No JVM bytecode is shipped — packs that need behaviour beyond mapping should expose it via `actions/` (LLM-driven) or `mcp/` (sandboxed servers).
+
+## `handlers/` — event handlers (TypeScript reactions to signals & cron)
+
+Where `events/` *produces* signals, `handlers/` *reacts* to them. A pack can ship ready-made **event handlers** the user activates — TypeScript programs that run when a matching signal arrives (from `events/`, a webhook, or any source) or on a cron schedule.
+
+> Not to be confused with the `src/` **TypeScript handlers** that implement a pack type's gateway methods. Those are gateway *code*; these are *reactions*. (Same substrate — sandboxed TS — different job.)
+
+A handler is the event-side mirror of a lens: a lens *queries → declares focus*; a handler *is handed a signal → queries/judges → takes an effect*. It's authored as TypeScript run through the host's per-user code-mode runtime — the same vibe-codeable substrate, so a handler can be generated or hand-written.
+
+```yaml
+# handlers/pr-review.yml
+- id: pr-review                       # stable id (also the cron job name `handler-<id>`)
+  name: Flag review requests on my PRs
+  description: When a review is requested on one of my PRs, notify me
+  match:
+    signalType: github.pr_review_request   # a Signal type name (from events/ or types/); "*" = any
+  schedule: "0 0 8 * * *"            # optional 6-field cron — fires on a schedule too (omit for signal-only)
+  autonomous: false                  # ships OBSERVE-ONLY; user opts into external effects
+  spec:
+    kind: typescript
+    module: pr-review.handler.ts      # sibling file, inlined at load (or inline `source: |`)
+```
+
+A handler may declare `match` (signal-triggered), `schedule` (cron-triggered), or both.
+
+| Field | Required | Meaning |
+|---|---|---|
+| `id` | yes | Stable id; the workspace shadows a pack handler of the same id. |
+| `name` | yes | Display name. |
+| `description` | no | One line shown in the "available handlers" list. |
+| `match.signalType` | no | Signal type that fires it — a JVM signal (`EmailSignal`) or a pack signal (`github.pr_review_request`). `*`/omitted = any signal. |
+| `schedule` | no | 6-field cron expression. A scheduled handler is registered on the host's normal cron path (it *is* a cron job). |
+| `autonomous` | no | `false` (default) = observe-only: it reads, judges, and logs what it *would* do, mutating nothing external. `true` lets it apply write effects. |
+| `spec.kind` | yes | `typescript`. |
+| `spec.source` / `spec.module` | yes | Inline TS, or a sibling file inlined at load. |
+
+### What the handler sees
+
+The triggering event is bound in scope as one normalised shape, whatever the signal type:
+
+```ts
+signal.id, signal.typeName, signal.subject, signal.occurredAt
+signal.source.{ kind, id, label, url }
+signal.properties.<field>   // type-specific fields — for a pack signal these are the event's
+                            // mapping keys (repo, number, author, …); read them from here
+trigger                     // "signal" | "cron"
+now                         // ISO-8601 timestamp of this run
+dryRun                      // true when being tested — GUARD every external effect with if (!dryRun)
+```
+
+It reacts through the typed `gateway.*` surface — read with `gateway.kg.query`, judge with `gateway.ai.classify`, act with pack verbs or `gateway.notifications.createNotification`. Reads and `gateway.ai.*` are always safe; **guard writes with `if (!dryRun)`**.
+
+```ts
+// pr-review.handler.ts
+if (trigger !== "signal" || !signal) { console.log("not a signal event"); return; }
+const { repo, number, author } = signal.properties;
+const [owner, name] = String(repo).split("/");
+const commits = await gateway.gh.reposListCommits({ owner, repo: name, author, per_page: 1 });
+const isNew = commits.length === 0;
+console.log(isNew ? `new contributor ${author}` : `${author} has prior commits`);
+if (isNew) {
+  console.log(dryRun ? `WOULD notify about PR #${number}` : `notifying about PR #${number}`);
+  if (!dryRun) await gateway.notifications.createNotification({ event: "NewContributorPR", source: "pr-review", url: signal.source.url });
+}
+```
+
+### Activation
+
+A pack handler is **available, not firing**, until the user activates it (adopts it into their own handlers). The host surfaces every pack handler in its "which handlers are active" UX and over MCP; activating one respects the pack's `autonomous` default. A scheduled handler, once activated, is registered as an ordinary cron job — there's no separate handler scheduler. Workspace handlers (`config/handlers/`) and pack handlers merge, the workspace shadowing a pack on id collision.
 
 ## `decorations/` — scheduled KG node enrichment
 
