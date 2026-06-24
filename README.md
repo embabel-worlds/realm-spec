@@ -446,6 +446,17 @@ This builds on a small canonical-entity model the host ships: a `Contact` is a `
 
 Population (above) **eagerly mirrors** a whole external collection into the graph on a schedule. For large or volatile collections you usually only ever touch a tiny slice — there a **virtual join** is better: the type's instances are fetched **on demand** when a Cypher query traverses to them, materialized transiently for that query, then **rolled back** (no persistence, no sync, no GC). It's the traversal-triggered sibling of `population:`.
 
+**Virtual Cypher — the engine.** The host mechanism that powers on-demand joins is called **Virtual Cypher**. A pack never invokes it directly; you declare the pieces (`virtualJoins:` + `producers/`, and bridge `resolve:` chains) and it plans and runs the fetch. For a user query that traverses to a virtual label it:
+
+1. **probes** the bound *real* anchors the query selects — applying the query's own `WHERE` / pinned-literal predicates so only the anchors that will survive are chosen (a filtered `… WHERE p.name CONTAINS 'governor'` resolves just those people, not the whole address book), preferring an existing real node and only **seeding** a transient one when none exists;
+2. **plans** each fetch with a cost-based optimizer — pushing predicates to the source (below), fetching **per-key or batched** per the producer's declared capability (`batchSafe`), and budgeting calls against the source's shared rate bucket (`cost:`), emitting an `EXPLAIN` with rewrite **advice** when a query can't fit the budget;
+3. **fetches** the external records through the named **producer**;
+4. **materializes** them — and any `brings` sub-graph — as transient nodes carrying the extra `:Virtual` label, a `dateRetrieved` timestamp, and the acting user's `userId`;
+5. runs the user's (scope-rewritten) query over the combined **real + virtual** graph;
+6. **rolls back** — nothing persists.
+
+Identity **bridges** (`writeThrough`, below) are the one exception: they persist as a warm cache and re-resolve after `refreshAfter`. The contract you write — declarative joins + producers — is the same whether the source is one record or a million; the engine handles probing, planning, fan-out caps and rollback. (Host reference: `VIRTUAL_CYPHER.md`.)
+
 A virtual type declares one or more `virtualJoins:`. Each says how the type is reached — from an anchor label along a relationship, keyed by an anchor field, fetched by a named **producer**:
 
 ```yaml
@@ -560,6 +571,8 @@ paging: { style: cursor, size: 100, maxPages: 10, cursorParam: after, cursorPath
 
 **Chunking (`maxKeysPerCall`).** Producers chunk the unioned anchor keys into batches of `maxKeysPerCall` — so a traversal over many anchors stays within the endpoint's limit and never becomes N+1. Set it to the endpoint's documented cap: a search `IN`/`OR` (query-length bound, ~50, the `api` default), a dedicated **bulk-by-ids** endpoint (HubSpot `/batch/read` 100, Jira `bulkfetch`), or a `$batch`/composite multiplex (Microsoft Graph 20, Salesforce 25). `sql` defaults to 500.
 
+**Per-key vs batched (`batchSafe`).** A producer batches up to `maxKeysPerCall` keys per call by default. Set **`batchSafe: false`** when one call covering many keys is **not complete per key** — a globally-ranked, capped search is the classic case: GitHub issue search `author:a author:b` returns ONE `updated`-desc list capped at `paging.maxPages × size`, so a prolific author fills the cap and a low-volume colleague's results fall off the end (you'd list them for one question and find nothing for the next). With `batchSafe: false` Virtual Cypher fetches **one key per call**, giving each key its own budget. It is a declared **capability**, not a magic number — you do NOT also shrink `maxKeysPerCall`, so a pack can't reintroduce the starvation bug by forgetting to. (`echoKeyAs` already implies per-key.)
+
 **Search vs bulk-by-ids.** When the join key is the *target's own id*, prefer the source's dedicated bulk-read endpoint (`operation:` = that op, `keyArg:` = its ids array, `maxKeysPerCall:` = its cap) — it's cheaper than a search and supports field/expand selection. Use search (`IN`/`OR`) only when the key is a *secondary* field (email, login, domain), where there is no by-id endpoint. Pair `brings` with the endpoint's `expand`/`include`/sideload params so the sub-graph arrives in the same call rather than a follow-up. **If a search result doesn't carry the key you searched by** (so `recordKeyField` has nothing to match), set `echoKeyAs:` — the producer then calls one key per call and stamps the queried key onto each record (see **Identity bridges**).
 
 **Field selection & cursor paging (set them in `args`/`paging`).** Two efficiency levers that need no producer code — just declare them:
@@ -635,6 +648,32 @@ Canonical identity is **host-owned** — packs never hardcode `email` vs `primar
 Most producers don't need `echoKeyAs` — e.g. HubSpot owners/contacts records already carry `email`. A `canonical*` rule whose producer op has **no gateway tool** simply yields nothing (the chain falls through); wire the op (in `apis/`) or supply a `learnedHandle` for those anchors.
 
 (`persist: true` without a `resolve:` chain is the older form: an eager enrichment over *all* anchors that commits the bridge. Prefer `resolve:` — it's lazy, works for any anchor, and self-heals.)
+
+### CypherScript — Cypher woven into TypeScript/JavaScript
+
+Anywhere a pack ships code that runs in the host's `code_mode` sandbox — a **handler** (`handlers/`), a **decoration** action, a skill recipe — it writes **CypherScript**: an ordinary TypeScript/JavaScript program that interleaves graph queries with procedural logic, integration calls, and inline LLM, all over the one typed `gateway.*` surface. It is not a separate language — it's TS/JS with first-class graph access:
+
+- **Cypher for the graph** — `await gateway.kg.query({ cypher, params })`. The query runs through **Virtual Cypher** (above): scope-rewritten to the acting user, read-only, and materializing on-demand virtual joins exactly as a chat query would — so one `MATCH` spans persisted **and** virtual (integration) data.
+- **TypeScript/JavaScript** for what Cypher can't express — branching, aggregation, reshaping, loops.
+- **Integrations** — `gateway.<ns>.*` (the pack's own verbs + connected APIs), e.g. fetch the actual email body the graph only holds an edge for.
+- **Inline LLM** — `gateway.ai.classify` / `gateway.ai.*` for fuzzy predicates Cypher can't state.
+
+```ts
+// CypherScript: a graph query (through Virtual Cypher) + JS + integration + LLM in ONE program.
+const people = await gateway.kg.query({
+  cypher: `MATCH (me:AssistantUser)-[:EMAILED]->(p:Person)-[:HAS_GITHUB]->(g:GitHubIdentity)-[:RAISED]->(i:GitHubIssue)
+           WHERE toLower(p.name) CONTAINS $who
+           RETURN p.name AS name, collect(i.title) AS issues`,
+  params: JSON.stringify({ who: "governor" }),
+});
+const busy = people.filter(p => p.issues.length > 5);              // plain JS
+for (const p of busy) {
+  const verdict = await gateway.ai.classify({ text: p.issues.join("\n"), labels: ["bug", "feature"] }); // inline LLM
+  if (!dryRun) await gateway.notifications.createNotification({ event: "BusyContributor", source: "demo", url: "" });
+}
+```
+
+`cypher` is your own query and `params` is a JSON **string** (bind values as `$name`; never string-concatenate). Reads and `gateway.ai.*` are always safe; guard every write with `if (!dryRun)` in a handler. The same model underlies host-side **lenses** (a stored CypherScript that opens a focused view), though lenses are authored in the workspace rather than shipped in a pack.
 
 ## `apis/`
 
