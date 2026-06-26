@@ -455,7 +455,7 @@ Population (above) **eagerly mirrors** a whole external collection into the grap
 5. runs the user's (scope-rewritten) query over the combined **real + virtual** graph;
 6. **rolls back** — nothing persists.
 
-Identity **bridges** (`writeThrough`, below) are the one exception: they persist as a warm cache and re-resolve after `refreshAfter`. The contract you write — declarative joins + producers — is the same whether the source is one record or a million; the engine handles probing, planning, fan-out caps and rollback. (Host reference: `VIRTUAL_CYPHER.md`.)
+Identity **bridges** (`writeThrough`, below) are the one exception: they persist as a warm cache and re-resolve after `refreshAfter`. The contract you write — declarative joins + producers — is the same whether the source is one record or a million; the engine handles probing, planning, fan-out caps and rollback. **Execution model + worked examples (including vector/semantic edges): [`VIRTUAL_CYPHER.md`](./VIRTUAL_CYPHER.md).**
 
 A virtual type declares one or more `virtualJoins:`. Each says how the type is reached — from an anchor label along a relationship, keyed by an anchor field, fetched by a named **producer**:
 
