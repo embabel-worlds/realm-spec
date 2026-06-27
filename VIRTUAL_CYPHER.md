@@ -515,6 +515,58 @@ is on GitHub" doesn't re-storm the source.
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
 `cache:` policy (`none` / `ttl` / `session` / `immutable`).
 
+### 5.4 Entity canonicalization — the spines a join anchors on
+
+Every example above anchors on a canonical `Person` or `Organization`. Those are **spines**: the
+single node a real human or company resolves to, no matter how many sources mention them. A spine is
+keyed deterministically — **Person by email, Organization by registrable domain** — so two records
+from different sources (a HubSpot contact and a GitHub commit author, both `rod@embabel.com`)
+converge on **one** `Person`, and "my contacts' companies" lands on the same `Organization` the
+email graph already built.
+
+**Source records canonicalize onto a spine via projection metadata on the type** (not a separate
+pipeline). A property tagged `identity: true` is the merge key; a property tagged
+`relationship/target/matchBy` links the record to a spine:
+
+```yaml
+- name: HubSpotContact
+  properties:
+    email:    { metadata: { identity: "true" } }          # → Person, by email
+    company:  { metadata: { relationship: WORKS_FOR, target: Organization, matchBy: name } }
+```
+
+The `relationship`'s **merge key is the spine's key, not the field text** — `company`'s value is
+only the display name; the `Organization` is keyed by the contact's email **domain**. So two contacts
+on `@acme.com` share one `Organization` however they spelled "Acme", and a freemail/no-domain contact
+yields **no** `Organization` (a name alone never invents a spine — fuzzy name resolution is a
+separate, async, confidence-scored layer, never in the query path). The result is a durable
+`(p:Person)-[:WORKS_FOR]->(o:Organization)` edge onto the shared spine — read the contact's company
+through its canonical Person, no source-specific company walk.
+
+This runs **on demand, and persists ONLY the spine** — never the source record. When a query
+materializes virtual records of a canonical-bearing type, a pre-pass resolves each record onto its
+canonical Person/Organization, writes the durable derived edges (`HAS_CONTACT`, `WORKS_FOR`),
+enriches the canonical fields straight from the fetched record, and stamps the source on the
+canonical's `sources` provenance set — then the main query reads the deduped graph, so
+`(p:Person {primaryEmail})-[:WORKS_FOR]->(o:Organization {name:'Acme'})` works on first ask. The
+**source record itself stays virtual**: no `:HubSpotContact` mirror node is persisted, because its
+mutable CRM state (lead status, last activity, owner) would only go stale — those fields are
+re-fetched live each query. Identity and durable relationships are durable; source *state* is not.
+
+**Resolution is O(log n), through indexed key-nodes.** Each spine has a key-node — `EmailAddress`
+(`email-address:<addr>`) for Person, `Domain` (`dom:<domain>`) for Organization — with a uniqueness
+constraint on its `id`. Resolving a key is one indexed hop
+(`(:Domain {id})-[:USED_BY_ORG]->(o:Organization)`), never a scan, and the key-nodes are **shared**
+with the email/sender graph, so a canonicalized record and an emailed person dedupe to one spine. The
+spine's own `id` is uniqueness-constrained too, so the deterministic MERGE can never fork a duplicate.
+
+**The two built-in spines are not hardwired — they are config.** A spine is declared by a
+`CanonicalSpec` (label, key property, id prefix, normalization primitives, key-node + edge); Person
+and Organization are just the two built-ins. Add a `Place`, `Repository`, or `Product` spine in
+`application.yml` and source types join it by tagging a property `target: <newLabel>` — the engine
+builds the hub, applies the key-node uniqueness constraint at boot, and the join surface above works
+unchanged.
+
 ---
 
 ## 6. Vector edges — semantic joins in depth
