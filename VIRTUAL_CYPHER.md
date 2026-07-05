@@ -640,7 +640,137 @@ RETURN p.name, t.subject, r.score ORDER BY r.score DESC
 
 ---
 
-## 7. Caps, cost, and diagnostics
+## 7. Views — a saved query used as a label
+
+A **view** is a named, saved Cypher body whose rows *are* a type, referenced in a later query by its name as a
+plain **label**. It is the natural extension of a virtual join: a virtual label is a view over an external
+system; a *view* is a view over the graph (real + virtual) itself. Two kinds, by cost:
+
+- **Regular (inlined).** Expanded at query time — the view's `MATCH … RETURN <var>` body is spliced in and its
+  return variable renamed to the outer alias, so `MATCH (c:my_key_accounts)-[:R]->(x)` becomes
+  `MATCH <view body> MATCH (c)-[:R]->(x)`. Always fresh; no storage. (Flat inlining, **not** `CALL {}` — the
+  scope rewriter rejects subqueries.)
+- **Materialized (cached).** The result nodes are committed and a reference reads the cache instead of
+  re-running the body, until a TTL / refresh policy invalidates it. This is the durable sibling of the
+  ephemeral `keep(queryId)` option: the expensive fan-out (map) + agentic reduce runs on a **refresh
+  schedule**, in the background under a big budget; the interactive query just reads the precomputed result.
+
+### 7.1 No new grammar — usage is a label, definition is metadata
+
+There is **no `DEFINE VIEW` statement.** The engine parses queries with the official Neo4j parser
+(cypher-dsl); a non-standard statement would reintroduce pre-parse interception, and Neo4j never executes DDL
+anyway. The concept splits cleanly:
+
+- **Usage needs zero syntax** — a view is a plain label (`MATCH (c:my_key_accounts)-[:…]`); the parser accepts
+  any label, the registry resolves it. Exactly how `Document` / `HubSpotContact` are used today.
+- **Definition is a metadata / lifecycle action** (define / list / drop, + refresh / scope / TTL) — an API +
+  YAML surface, never a query. The `RETURN`-bearing body is standard Cypher, parsed by the real parser.
+
+```yaml
+# config/views/key-accounts.yml — durable/shared, like a virtual type today (a pack or workspace can ship it)
+- name: my_key_accounts
+  materialized: false            # regular view — expands at query time
+  outputLabel: HubSpotContact    # the type the view yields (its rows ARE this type)
+  cypher: |
+    MATCH (me:AssistantUser)-[:HAS_HUBSPOT_OWNER]->()-[:OWNS_CONTACT]->(c:HubSpotContact)
+    WHERE c.arr > 100000
+    RETURN c
+```
+
+The same body can be authored at runtime by the assistant on the user's behalf (`viewService.define(user, name,
+cypher, materialized)`, surfaced as a `define_view` tool) — "save this as my key accounts."
+
+### 7.2 Output typing — identity preservation is the rule
+
+A view you can **traverse from** always yields nodes of exactly ONE type. Whether it composes is governed by a
+single rule — does it preserve node identity?
+
+1. **Subset view** — `RETURN <whole node>`: the rows *are* instances of an existing type (real or virtual),
+   keeping its identity, properties, and edges. Fully composable; the view name is a **named subtype**
+   (`my_key_accounts ⊆ HubSpotContact`). Because virtual types materialize onto the **real** persisted node
+   (prefer-real-node MERGE), a subset view over `Document` yields nodes that *are* the persisted documents,
+   carrying `OWNED_BY` / `MENTIONS` — the real-vs-virtual distinction dissolves; only identity matters.
+2. **Projection view** — a reshaping `RETURN c.email AS email, count(d) AS docCount`: mints the view's own
+   derived type; composes only via edges the view declares (usually a leaf).
+3. **Tabular view** — a `RETURN` of scalars/aggregates: a named result set (report-only), not traversable.
+
+### 7.3 Composing views
+
+A subset view's name is a label, so it composes with structural + relevance edges, and with other views
+(staged materialization to fixpoint):
+
+```cypher
+-- a regular view + an agentic-rag edge + a structured filter, in one standard-parseable query
+MATCH (c:my_key_accounts)                                  -- expands + materializes its HubSpotContacts
+WHERE c.renewalDate < date('2026-10-01')
+MATCH (c)-[r:RELEVANT_TO {via:'agentic-rag', intent:'renewal risk'}]->(d:Document)
+RETURN c.email, d.title, r.snippet ORDER BY r.score DESC
+```
+
+A materialized view is queried the same way, but reads the **stored** subgraph — cheap, no producer calls
+fire:
+
+```yaml
+# config/views/breach-watch.yml
+- name: breach_mentions
+  materialized: true
+  outputLabel: Document
+  refresh: "0 6 * * *"           # daily 06:00 — reuse the cron scheduler
+  ttl: 30d                       # sweep rows this old if a refresh is missed
+  cypher: |
+    MATCH (o:Organization) WHERE o.isCustomer
+    MATCH (o)-[:RELEVANT_TO {via:'agentic-rag', intent:'security incident / breach'}]->(d:Document)
+    RETURN d
+```
+```cypher
+MATCH (d:breach_mentions) RETURN count(DISTINCT d) AS incidents      -- an aggregate over a precomputed view
+```
+
+### 7.4 The materialization cache is pluggable
+
+The materialized-view cache is a **strategy behind an interface**, not a fixed mechanism. The default strategy
+is graph-colocated and transactional: a `MaterializedView {view, userId, expiresAt}` marker node with
+`[:MEMBER]` edges to the cached result nodes, swept by TTL. But the store is an SPI:
+
+```kotlin
+interface ViewMaterializationStore {
+  fun freshUntil(view: String, userId: String): Long?             // marker expiry epoch-ms, or null if absent
+  fun materialize(view: String, userId: String, memberIds: List<NodeId>, expiresAt: Long)
+  fun members(view: String, userId: String): List<NodeId>         // the cached node ids to bind the label off
+  fun clear(view: String, userId: String)
+  fun sweepExpired()
+}
+```
+
+so an alternative strategy swaps in without touching the query path: an **in-memory LRU** for a single-process
+deployment, an **external KV / Redis** for a horizontally-scaled one, or an **`immutable`** strategy (no TTL,
+explicit invalidation only) for reference data. The refresh policy (`ttl`, cron `refresh:`) is orthogonal to
+the store.
+
+### 7.5 A general result / entity cache — and negative results
+
+The same store generalizes beyond views to a **producer result cache** — the answer to "should API fetches be
+cached?" A producer call is `(producer, key) → records`; caching keys on exactly that, governed by the §8
+diagnostics:
+
+- **Positive result** — a genuine, successful fetch (**including a real "no records"**) is cacheable with a
+  per-producer `ttl` (or `immutable` for stable reference data). A repeat query for the same key reads the
+  cache; no producer call fires.
+- **Negative (entity) result** — a *known miss* for an ENTITY (this login / email / domain resolves to
+  nothing) is cached too, so a fan-out doesn't re-probe a dead key every query. This exists today ad-hoc as
+  the bridge negative-cache (`_bridgeMissAtMs` per target); the SPI unifies it with a TTL and
+  **invalidate-on-reconnect**.
+- **Never cache a FAILURE.** A timeout / 5xx / expired-auth fetch is **not** a result — caching its emptiness
+  would hide the data once the integration heals. Only a `PRODUCER_ERROR`-free outcome is cacheable (§8).
+
+The identity **bridge** (who an external identity *is*, §9) is the one already-persistent positive cache; the
+producer result cache and the entity negative-cache are the same idea applied to *what* a key holds, and to
+keys that hold **nothing** — all behind one pluggable store, so a deployment picks graph-colocated, in-memory,
+or external as it scales.
+
+---
+
+## 8. Caps, cost, and diagnostics
 
 Because a Virtual Cypher query reaches into live external systems, it is bounded on every axis, and
 a bound that bites is **always surfaced**, never silent.
@@ -671,7 +801,7 @@ the data); only a genuine, successful "no records" is cacheable.
 
 ---
 
-## 8. Determinism and guarantees
+## 9. Determinism and guarantees
 
 - **Read-only.** A user query never writes the graph. Materialization happens in a transaction that
   is **rolled back**; the sole persisted side effect is a write-through identity **bridge** (a
@@ -687,11 +817,12 @@ the data); only a genuine, successful "no records" is cacheable.
 
 ---
 
-## 9. The contract, in one line
+## 10. The contract, in one line
 
 > **Bind a real anchor; declare how a label is fetched; the engine probes, fetches once per
 > producer, materializes transiently, runs your Cypher over real + virtual together, and rolls
 > back.** Persistence is the exception (warm-cached identity bridges), not the rule.
 
 For the declarative surface (`virtualJoins:`, `producers/`, `resolve:`, `pushdown:`, `paging:`,
-`brings:`, `cache:`) see [`README.md`](./README.md#joining-types-on-demand-virtual-joins-not-mirrored).
+`brings:`, `cache:`, `views:`) see [`README.md`](./README.md#joining-types-on-demand-virtual-joins-not-mirrored).
+Views (regular / materialized, output typing, and the pluggable cache) are §7.
