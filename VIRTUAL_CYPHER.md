@@ -768,6 +768,37 @@ producer result cache and the entity negative-cache are the same idea applied to
 keys that hold **nothing** — all behind one pluggable store, so a deployment picks graph-colocated, in-memory,
 or external as it scales.
 
+### 7.6 Persisted scopes, and consuming a scope as typed instances
+
+A materialized view refreshes (it re-runs its body on TTL expiry). A **persisted query** is the other
+lifecycle over the *same* MEMBER-set store: a saved result set addressed by an opaque handle
+(`query:<uuid>`), that does **not** re-run — it is a scope of immutable results that survives until explicit
+deletion. The two differ only in metadata, so the store from §7.4 generalizes with three fields rather than a
+new mechanism:
+
+- `expiresAt` becomes **nullable** — a TTL for a view, `null` (pinned) for a persisted query;
+- a `refreshable` flag — true for a view (has a body to re-derive), false for a persisted query (immutable
+  snapshot; any body is kept only as provenance);
+- `list()` / GC — so pinned entries are enumerable and reclaimable.
+
+Because a persisted scope is bound as a label (`MATCH (x:query_7f3a) …`) exactly like a materialized view,
+nothing on the read path changes: a scope is a scope, whether named-and-refreshing or handle-and-pinned.
+
+**Two properties are frozen at capture, decided per store:** *membership* (which nodes are in the scope) is
+always frozen — that is the MEMBER edge set. *Values* are not, by default: the edges point at live nodes
+whose properties keep changing. A store that needs a true point-in-time snapshot copies the projected columns
+at capture; a virtual/fetched member is already a committed copy (prefer-real-node MERGE, §7.2·1), so it is
+naturally frozen.
+
+Consuming a scope: because a **subset** scope RETURNs whole, identity-preserving nodes (§7.2·1), a client
+runtime can hydrate its members directly into typed instances — the type comes off the node's own label, so
+the reader needs no per-query type argument. This is the source side of the type-and-verb model: the saved
+scope supplies the objects; their methods (pure compute, or effectful write-back through the producer) live on
+the type. A **tabular** scope (§7.2·3) has no node to hydrate — it is a frozen values table, readable and
+renderable but never bound as a label or hydrated into instances. The store records which kind a handle is and
+refuses label-binding / hydration on a tabular one, so an unsupported consumption fails honestly rather than
+producing wrong Cypher.
+
 ---
 
 ## 8. Caps, cost, and diagnostics
@@ -825,4 +856,5 @@ the data); only a genuine, successful "no records" is cacheable.
 
 For the declarative surface (`virtualJoins:`, `producers/`, `resolve:`, `pushdown:`, `paging:`,
 `brings:`, `cache:`, `views:`) see [`README.md`](./README.md#joining-types-on-demand-virtual-joins-not-mirrored).
-Views (regular / materialized, output typing, and the pluggable cache) are §7.
+Views (regular / materialized, output typing, the pluggable cache, persisted scopes, and hydrating a
+scope into typed instances) are §7.
