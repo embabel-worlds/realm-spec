@@ -40,6 +40,10 @@ pack-name/
 │   └── my-type.yml
 ├── producers/            # Virtual-join producers for on-demand types (YAML, optional)
 │   └── my-producers.yml
+├── reference/            # Reference/catalog data seeded into the KG on load (YAML, optional)
+│   └── my-reference.yml
+├── views/                # Named Cypher views (YAML, optional) — appear in the console Views list
+│   └── my-views.yml
 ├── apis/                 # API entries (YAML)
 │   └── my-api.yml
 ├── src/                  # Hand-authored TypeScript handlers (optional)
@@ -530,10 +534,134 @@ Producer `kind`s:
 | `sql` | a SELECT against a pack/workspace `datasource` | keys expand into `IN (…)`; rows are the records; SELECT-only, wallet/env creds |
 | `compute` | an in-process computation over the keys | scores / rollups / synthesis — no external I/O; *local*, so NOT a RemoteRepository |
 | `vector` | top-k **semantic similarity** to the anchor | for joins with no key — similarity *is* the join (related docs/chunks); rides the host embedder |
+| `generative` | **GENERATES** the edge (resumably) rather than reading it — an LLM's world knowledge (`SIMILAR_TO`, `IN_INDUSTRY`) or a code function | pluggable generator (`llm` \| `function`); keeps generating; resolves each answer onto the type spine; provenance-stamped |
+| `aggregate` | **REDUCES** an anchor's connected neighborhood to ONE node (fan-IN) — e.g. a per-user summary node distilled from many rows | gathers via a scoped graph read; delegates the reduction to an existing LLM aggregation (`synthesize`/`summarize`/…); TTL-cache = periodic refresh |
 
 > **Naming:** `kind: remote` is the current spelling for an externally-backed repository; `kind: api` is accepted as a back-compat alias and still works in existing packs.
 
+#### `kind: generative` — a generated edge
+
+Where `remote`/`sql`/`vector` **retrieve** records from a store and `compute` derives them once, a
+**generative** producer **generates** them — and can be asked for MORE (the generator model). The
+generation is pluggable via `generator.kind`:
+
+- **`llm`** — the model's world knowledge. The **prompt is authored by the pack, inline**; the host's
+  generative backend is domain-agnostic and ships no prompt of its own. Parametric, so a `volatile` fact is
+  refused (it would be confidently stale).
+- **`function`** — a host/pack-supplied **resumable function** (a `GeneratorFunction` bean), the
+  Python-generator analogue: given the keys, the exclusion set, constraints, demand and round, it yields
+  candidates. No LLM, no volatility gate.
+
+The rest — resolving each answer onto the type spine, provenance, and demand-driven re-probing — is shared.
+
+```yaml
+- name: similarMovies
+  kind: generative
+  edgeType: SIMILAR_TO            # the edge this fills (host may whitelist which edges generate)
+  identityField: imdbId          # the target type's identity — records carry it after resolveVia
+  anchorKeyField: similarTo      # record field the anchor key is echoed into (links each answer to its anchor)
+  nameField: title               # the human name the generator emits (dedup/exclusion happen in THIS space)
+  volatility: static             # static | slow | volatile — a volatile fact is refused for an `llm` generator
+  confidenceFloor: 0.3           # drop answers below this confidence
+  defaultWant: 25                # a view has no LIMIT; keep generating until this many SURVIVE the filters
+  generator:                     # llm (prompt) OR function (operation)
+    kind: llm
+    prompt: |                    # PACK-AUTHORED. Rendered with: anchors[{n,title}], exclude[], want, round, constraints[]
+      For each numbered item, name similar ones a fan would enjoy…
+      {% for a in anchors %}{{ a.n }}. {{ a.title }}
+      {% endfor %}
+      {% if constraints %}Only suggest items where: {% for c in constraints %}{{ c }}; {% endfor %}{% endif %}
+  resolveVia:                    # optional: resolve each emitted name onto the type spine (a nested remote op)
+    kind: remote
+    operation: getMovie
+    args: { t: "{keys}" }
+    project: { imdbId: imdbID, title: Title, year: Year, genre: Genre }   # fill the type's FULL property surface
+```
+
+A function generator instead:
+
+```yaml
+  generator:
+    kind: function
+    operation: mySimilarFn       # a GeneratorFunction bean: yield(keys, exclude, constraints, want, round)
+```
+
+Semantics (both generators):
+- **Resumable / demand-driven.** The host re-probes (pushing a growing exclusion set into the generator)
+  until `want` records *survive the query's filters* — a query `LIMIT`, else `defaultWant`. So a
+  heavily-filtered view (most rows knocked out by a genre or availability filter) still fills up.
+- **Constraints pushdown.** Target-node predicates in the query (e.g. `WHERE m.genre CONTAINS 'Noir'`) reach
+  the generator as `constraints`, so it only proposes matching answers, and they count toward survival.
+- **Fill the whole type.** A producer materialising a typed node fills that type's FULL property surface
+  (via `resolveVia.project`), not just its identity.
+- **Provenance.** Each record is stamped `_source` (the generator kind — `llm`/`function`), `_confidence`,
+  `_asOf`.
+
 `cache:` is orthogonal to kind (`none` / `ttl` / `session` / `immutable`).
+
+#### `kind: aggregate` — a fan-IN summary NODE
+
+Every other producer is **fan-OUT**: one anchor → many target records. An `aggregate` producer is the
+**fan-IN** mirror: it gathers the anchor's connected neighborhood and **reduces it to ONE node**. Use it when
+the reduction should itself be a node you can traverse to and cache — a per-user summary, a per-org rollup, a
+per-topic digest — rather than a scalar computed inline.
+
+It does **not** reimplement the reduction: it **delegates to an existing LLM aggregation** (`synthesize` /
+`summarize` / `themes` / … — the same functions a query can call inline as `synthesize(text, goal)`). So there
+is one implementation of "LLM-reduce a group of text", whether you write it in Cypher or declare it on a
+producer. The neighborhood traversal, the per-item text, and the reduction goal are **all pack-authored** — the
+host ships no domain prompt and no model (the aggregation uses the ops-controlled aggregation LLM).
+
+```yaml
+# producers/movie.yml — one MovieTasteSummary node distilled from all of a user's ratings
+- name: movieTasteSummary
+  kind: aggregate
+  edgeType: HAS_MOVIE_TASTE_SUMMARY
+  identityField: userId          # ONE node per user (MERGE on this folds the anchor's identity spellings)
+  anchorKeyField: anchorKey      # the join's recordKeyField — links the one node back to the anchor
+  collect:                       # the fan-IN neighborhood: a scoped read (a:anchorLabel)-[:via]->(t:targetLabel)
+    anchorLabel: AssistantUser
+    via: RATED
+    targetLabel: MovieRating
+    text: "{{ title }} — rated {{ rating }}/10"   # Jinja per neighbor node → one text item for the reducer
+    where: "t.rating >= 1"       # optional extra predicate on the neighbor alias `t`
+  reduce:
+    using: synthesize            # a registered LLM aggregation
+    into: summary                # the record field the reduced value lands in (a declared property on the type)
+    args:                        # aggregation args — e.g. the GOAL for synthesize
+      - "In ~100 words, second person, sum up this person's taste in film."
+  cache: { kind: ttl, seconds: 604800 }   # weekly-refreshed node
+```
+
+The node is virtual like any other: reached only from a bound anchor (`(me:AssistantUser)-
+[:HAS_MOVIE_TASTE_SUMMARY]->(ts:MovieTasteSummary)`), materialized on demand, rolled back after the query. Give
+its type a Movie/Foo **prefix** so the label and edge can't collide with another pack's summary type.
+
+#### A join is declared under the type it PRODUCES (not its anchor)
+
+**Rule (easy to get wrong):** a `virtualJoins:` entry is declared under the **target type** — the type it
+materializes — with `anchorLabel` naming where it starts. `SIMILAR_TO` produces `Movie`, so it lives under
+`Movie` with `anchorLabel: MovieRating`; `AVAILABLE_ON` produces `StreamingService`, so it lives under
+`StreamingService` with `anchorLabel: Movie`. A join does **not** go under its anchor type. Put it under the
+wrong type and the planner registers it against the wrong target and it silently never fires.
+
+```yaml
+# types/movies.yml — the join is under Movie (what it produces), not under MovieRating (its anchor)
+- name: Movie
+  virtualJoins:
+    - anchorLabel: MovieRating
+      relationship: SIMILAR_TO
+      keyField: title
+      producer: similarMovies
+```
+
+**Chaining off a virtual node — current limitation.** In principle the anchor of one join can be the *virtual
+target* of another (a fan-IN summary node, then a fan-OUT off it: `(me)-[:HAS_MOVIE_TASTE_SUMMARY]->(ts)-
+[:SUGGESTS]->(m:Movie)`). Both halves materialize, but the engine builds the second stage in a throwaway
+pre-pass that rolls back before the final read, so the two hops do **not** stitch — the query returns nothing.
+Chaining works today only when the intermediate node is **persisted** (an identity `resolve:`/`writeThrough`
+bridge, which commits and survives into the read). A lazy join whose anchor is a *transient* virtual node is not
+yet supported; persist the intermediate node (e.g. a committed, periodically-refreshed summary) to chain off it.
 
 #### Predicate pushdown (`pushdown:`) — scope the fetch at the source
 
@@ -674,6 +802,29 @@ for (const p of busy) {
 ```
 
 `cypher` is your own query and `params` is a JSON **string** (bind values as `$name`; never string-concatenate). Reads and `gateway.ai.*` are always safe; guard every write with `if (!dryRun)` in a handler. The same model underlies host-side **lenses** (a stored CypherScript that opens a focused view), though lenses are authored in the workspace rather than shipped in a pack.
+
+## `reference/`
+
+Reference (catalog / config) data a pack **brings into the KG** — the set of entities a pack's types describe that should exist regardless of what the user has done. Where `producers/` fetch data on demand and `populate` mirrors an external system, `reference/` seeds a fixed, pack-authored dataset: a controlled vocabulary, a lookup catalog, a set of well-known entities. Each `.yml` file in `reference/` is a list of records seeded (idempotently) into the KG on workspace load.
+
+A record is the **same `{type, data, relations}` shape as the `create_entry` tool**, so it rides the same identity-MERGE and user-anchor handling — no separate write path:
+
+```yaml
+# reference/streaming-services.yml — the catalog of services a Movie can be watched on
+- type: StreamingService            # a declared type (types/*.yml)
+  data: { serviceId: netflix, serviceName: Netflix }
+- type: StreamingService
+  data: { serviceId: stan, serviceName: Stan }
+```
+
+Semantics:
+
+- **Idempotent.** A record whose `type` declares an `identity` property is upserted on that key, so re-seeding on every boot is a no-op (or an in-place update). Types with no identity would duplicate — give reference types an identity.
+- **User-anchored reference is per-user.** If the `type` is `userAnchor`, each seeded record gets its `(:AssistantUser)-[:PREDICATE]->(record)` edge automatically — the way to seed a per-user preference (e.g. which services the user subscribes to). Global catalog data uses `userAnchor: false`.
+- **Relations resolve like `create_entry`.** An optional `relations: [{ predicate, to: { type, ...keyProps } }]` links a record to another entry that must already exist (seed it first / in another pack's `reference/`), else the record is refused.
+- **Merges with virtual data.** A reference type can also be a virtual-join *target* (e.g. `StreamingService` seeded here AND materialized on demand by a producer): both write paths MERGE on the shared identity, so a producer-fetched node picks up the catalog's stable fields.
+
+This lets a pack own its reference data as *data*, not as a hardcoded list inside a query or a producer — the same "it's data, put it in the graph" discipline as types and producers.
 
 ## `apis/`
 
