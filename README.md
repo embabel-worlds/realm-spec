@@ -637,7 +637,7 @@ The node is virtual like any other: reached only from a bound anchor (`(me:Assis
 [:HAS_MOVIE_TASTE_SUMMARY]->(ts:MovieTasteSummary)`), materialized on demand, rolled back after the query. Give
 its type a Movie/Foo **prefix** so the label and edge can't collide with another pack's summary type.
 
-#### A join is declared under the type it PRODUCES (not its anchor)
+#### A join is declared under the type it PRODUCES — and chains (multi-stage)
 
 **Rule (easy to get wrong):** a `virtualJoins:` entry is declared under the **target type** — the type it
 materializes — with `anchorLabel` naming where it starts. `SIMILAR_TO` produces `Movie`, so it lives under
@@ -645,23 +645,36 @@ materializes — with `anchorLabel` naming where it starts. `SIMILAR_TO` produce
 `StreamingService` with `anchorLabel: Movie`. A join does **not** go under its anchor type. Put it under the
 wrong type and the planner registers it against the wrong target and it silently never fires.
 
+The anchor of one join can be the **virtual target** of another, and the engine stages them in one read tx:
+`StagedVirtualCypher` materializes stage 1, treats its target as real, re-probes, then materializes stage 2 off
+it (up to `MAX_STAGES` deep). So a fan-IN → fan-OUT pipeline is expressible — reduce a user's ratings to one
+`MovieTasteSummary` node, then generate films *from that summary*. Both joins go under the type each produces:
+
 ```yaml
-# types/movies.yml — the join is under Movie (what it produces), not under MovieRating (its anchor)
+# types/movies.yml — BOTH joins under Movie (what they produce), not under their anchors
 - name: Movie
   virtualJoins:
-    - anchorLabel: MovieRating
+    - anchorLabel: MovieRating          # films similar to ONE rated film (fan-OUT)
       relationship: SIMILAR_TO
       keyField: title
       producer: similarMovies
+    - anchorLabel: MovieTasteSummary    # films matching the WHOLE taste (fan-OUT off the fan-IN summary node)
+      relationship: SUGGESTS
+      keyField: summary                 # the MovieTasteSummary.summary prose is the generator input
+      recordKeyField: fromTaste
+      producer: tasteBasedPicks         # a `generative` producer; MovieTasteSummary is an `aggregate` node
 ```
 
-**Chaining off a virtual node — current limitation.** In principle the anchor of one join can be the *virtual
-target* of another (a fan-IN summary node, then a fan-OUT off it: `(me)-[:HAS_MOVIE_TASTE_SUMMARY]->(ts)-
-[:SUGGESTS]->(m:Movie)`). Both halves materialize, but the engine builds the second stage in a throwaway
-pre-pass that rolls back before the final read, so the two hops do **not** stitch — the query returns nothing.
-Chaining works today only when the intermediate node is **persisted** (an identity `resolve:`/`writeThrough`
-bridge, which commits and survives into the read). A lazy join whose anchor is a *transient* virtual node is not
-yet supported; persist the intermediate node (e.g. a committed, periodically-refreshed summary) to chain off it.
+```cypher
+-- two-stage chain: HAS_MOVIE_TASTE_SUMMARY (fan-IN) materializes ts, then SUGGESTS (fan-OUT) generates off it
+MATCH (me:AssistantUser)-[:HAS_MOVIE_TASTE_SUMMARY]->(ts:MovieTasteSummary)-[:SUGGESTS]->(m:Movie)
+WHERE NOT EXISTS { (me)-[:RATED]->(seen:MovieRating) WHERE seen.imdbId = m.imdbId }
+RETURN DISTINCT m
+```
+
+The intermediate node is transient (materialized then rolled back with the read) — it need **not** be persisted
+for the downstream join to see it, because both stages run in the same read tx. Give the summary type a TTL
+`cache:` (weekly) so the expensive fan-IN reduction is reused across queries within the window.
 
 #### Predicate pushdown (`pushdown:`) — scope the fetch at the source
 
