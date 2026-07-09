@@ -763,7 +763,7 @@ diagnostics:
 - **Never cache a FAILURE.** A timeout / 5xx / expired-auth fetch is **not** a result — caching its emptiness
   would hide the data once the integration heals. Only a `PRODUCER_ERROR`-free outcome is cacheable (§8).
 
-The identity **bridge** (who an external identity *is*, §9) is the one already-persistent positive cache; the
+The identity **bridge** (who an external identity *is*, §10) is the one already-persistent positive cache; the
 producer result cache and the entity negative-cache are the same idea applied to *what* a key holds, and to
 keys that hold **nothing** — all behind one pluggable store, so a deployment picks graph-colocated, in-memory,
 or external as it scales.
@@ -832,7 +832,60 @@ the data); only a genuine, successful "no records" is cacheable.
 
 ---
 
-## 9. Determinism and guarantees
+## 9. Steering the generator — type-level `examples:`
+
+The schema tells the text-to-Cypher generator what *exists*; it does not tell it what to *prefer*.
+When two legal paths answer the same question — a projected scalar vs. a resolvable edge, a
+content property vs. a label — the generator can pick the plausible-but-wrong one and return an
+empty or ungrounded result **without any error**. That preference knowledge must live somewhere
+explicit, or it exists only as an accident of schema shape and dies on the next schema change.
+
+The home for it is the **`examples:` key on the owning type** — a few-shot `q`/`cypher` pair
+rendered into the generator prompt:
+
+```yaml
+- name: RelevantEmailThread
+  virtualJoins: [ … ]
+  examples:
+    # STEERING — a "summarize my discussions with X" digest is built from thread CONTENT
+    # (`t.snippet`), NEVER from topic labels and NEVER from a string literal:
+    - q: "summarize my email discussions with Alex Doe"
+      cypher: |
+        MATCH (p:Person) WHERE toLower(p.name) CONTAINS 'alex' AND toLower(p.name) CONTAINS 'doe'
+        MATCH (p)-[:RELEVANT_TO]->(t:RelevantEmailThread)
+        RETURN summarize(t.snippet) AS digest
+```
+
+Mechanics:
+
+- **Attribution.** Each example is attributed to its type's schema *segment* (the pack's group, or
+  a host group like `email-topics`) and renders only when that segment does — under schema-relevance
+  filtering an example loads exactly when the question needs its domain. Steering grows with the
+  number of domains; per-question prompt cost stays flat.
+- **Connection gating.** Examples gate with the type's joins: a disconnected integration
+  contributes neither schema nor steering.
+- **Placement rule.** An example lives on the type that OWNS the path it teaches. A bridge across
+  packs (thread → topic) is taught by the type that owns the *target* of the lesson.
+
+Discipline (how these earn their place):
+
+1. **Steers follow pinned defects, never hunches.** First a mirror test that reproduces the wrong
+   shape and asserts the exact defect (wrong shape absent AND right data present — "no error,
+   non-empty" admits garbage). Then the example. Then the gate.
+2. **Small.** One `q`/`cypher` pair per defect class, placeholder names only (never real people,
+   orgs, or repos).
+3. **Gated.** An example change is a generation change: it ships only past the full hermetic
+   mirror and a live queries.txt check.
+
+Proven cases (2026-07): `summarize(t.snippet)` (content, not `topic.name` labels — fixed a live
+regression), `t.participantNames` (read the projected participant list, don't fan back over the
+similarity edge), `p.authorNames` (the projected scalar; an `AUTHORED_BY` edge-walk in the same
+query as the fetch is empty). Each was a 5-line example that fixed a defect three rounds of
+schema-level engineering could not touch.
+
+---
+
+## 10. Determinism and guarantees
 
 - **Read-only.** A user query never writes the graph. Materialization happens in a transaction that
   is **rolled back**; the sole persisted side effect is a write-through identity **bridge** (a
@@ -848,7 +901,7 @@ the data); only a genuine, successful "no records" is cacheable.
 
 ---
 
-## 10. The contract, in one line
+## 11. The contract, in one line
 
 > **Bind a real anchor; declare how a label is fetched; the engine probes, fetches once per
 > producer, materializes transiently, runs your Cypher over real + virtual together, and rolls
