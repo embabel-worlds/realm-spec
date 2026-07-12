@@ -1308,22 +1308,23 @@ embabel-pack sync ~/dev/pack-hubspot     # or pass an explicit path
 
 MCP server configurations — each file lists Model Context Protocol servers to connect.
 
-```yaml
-# mcp/arxiv.yml
-- name: arxiv
-  description: "Search and read arXiv research papers"
-  command: docker
-  args: ["run", "-i", "--rm", "mcp/arxiv-mcp-server:latest"]
-```
+**Prefer `apis/` (a vendored OpenAPI spec) over an MCP server whenever the
+integration is API-backed.** A vendored spec gives the LLM full typed
+request/response shapes instead of MCP's flat tool descriptions, needs no
+Docker, starts instantly, and is testable without a container. Every pack the
+product ships has migrated this way (Maps, arXiv, Wikipedia, Brave, YouTube).
+Reach for `mcp/` only when there is no API to vendor — e.g. a server that
+wraps a local binary or a stateful protocol — or when the user explicitly
+brings their own MCP server.
 
 ```yaml
-# mcp/web.yml
-- name: brave-search
-  description: "Web search via Brave"
+# mcp/example.yml
+- name: example-server
+  description: "What the server's tools do, written for the LLM"
   command: docker
-  args: ["run", "-i", "--rm", "-e", "BRAVE_API_KEY=${BRAVE_API_KEY}", "mcp/brave-search:latest"]
+  args: ["run", "-i", "--rm", "example/example-mcp:latest"]
   env:
-    BRAVE_API_KEY: "${BRAVE_API_KEY}"
+    EXAMPLE_API_KEY: "${EXAMPLE_API_KEY}"
 ```
 
 MCP servers are lazy-loaded — the Docker container starts on first tool use, not on workspace init. Multiple users with the same MCP config share a single container via the host's MCP client cache.

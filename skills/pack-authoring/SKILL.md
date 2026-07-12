@@ -32,7 +32,7 @@ the right section and flags the easy mistakes.
 | fetch a type **on demand** by traversal | `types/` `virtualJoins:` + `producers/` | "Joining types on demand" (Virtual Cypher) |
 | query the graph from pack code (TS+Cypher) | `gateway.kg.query` in a handler/skill | "CypherScript" |
 | hand-authored gateway methods / **verbs** | `src/api/*.ts` + `tests/` | "`src/` and `tests/`" |
-| an MCP server | `mcp/` | "`mcp/`" |
+| an MCP server (last resort — prefer `apis/` for anything API-backed) | `mcp/` | "`mcp/`" |
 | a slash command | `commands/` | "`commands/`" |
 | inbound events → typed `Signal`s | `events/` (webhook + poll) | "`events/`" |
 | a TS reaction to a signal/cron the user activates | `handlers/` | "`handlers/`" |
