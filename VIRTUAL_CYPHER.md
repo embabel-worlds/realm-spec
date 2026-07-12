@@ -271,7 +271,7 @@ email), each resolving to a GitHub login.
   tuning.
 - **`paging:`** — capture beyond page 1; `maxPages` bounds the cost.
 - If pagination hits `maxPages` with a still-full last page, the source **has more than was
-  fetched** → the result carries a `PARTIAL_RESULT` truncation note (§7) — never a silent
+  fetched** → the result carries a `PARTIAL_RESULT` truncation note (§9) — never a silent
   "that's everything."
 
 ---
@@ -462,7 +462,7 @@ These are **rejected at plan time** (fail-closed), with a message:
 | `UNION`, `CALL { }` subqueries in a scoped query | Not scoped clause-by-clause by the rewriter → rejected (restructure as separate queries). |
 | Anything the Cypher parser can't parse | **Fail closed** — an unparseable query is rejected, never run unscoped. |
 
-And these run but are **capped** (never silently — see §7): a probe binding more than `maxAnchors`
+And these run but are **capped** (never silently — see §9): a probe binding more than `maxAnchors`
 anchors, or a materialization exceeding `maxFanoutTotal` nodes, is rejected or truncated with a
 diagnostic.
 
@@ -511,9 +511,16 @@ is on GitHub" doesn't re-storm the source.
 | `sql` | a `SELECT … IN (:keys)` against a pack datasource | the anchor key, expanded into the `IN` clause |
 | `compute` | an in-process function over the keys (scores, rollups, synthesis) | the anchor key; no external I/O |
 | `vector` | top-k semantic similarity to the anchor's **text** | nothing — *similarity is the join* (§6) |
+| `generative` | an LLM **invents** plausible records ("suggest things like X"), each resolved onto the spine via `resolveVia`; demand-driven (re-probes with a growing exclusion until enough survive) | the anchor's name/text, batched into ONE prompt |
+| `aggregate` | gathers the anchor's connected neighborhood and LLM-**reduces** it to ONE record (a taste summary, a digest) | the anchor's identity; one record per anchor |
 
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
 `cache:` policy (`none` / `ttl` / `session` / `immutable`).
+
+The two **LLM-backed** kinds (`generative`'s `generator:`, `aggregate`'s `reduce:`) take optional
+per-edge tuning — `role:` (a portable, workspace-defined model role id such as `chat_cheap`; **never a
+concrete model name**, which stays an ops concern) and `temperature:`. A query can override both for one
+fetch with the `ai_model` / `ai_temperature` edge directives (§7.2.1).
 
 ### 5.4 Entity canonicalization — the spines a join anchors on
 
@@ -640,7 +647,193 @@ RETURN p.name, t.subject, r.score ORDER BY r.score DESC
 
 ---
 
-## 7. Views — a saved query used as a label
+## 7. LLM query primitives — filter, rerank, and steer with `ai_*`
+
+Vector edges (§6) answer "which rows are *about* X" with an **embedding** — cheap, but only as good as
+the similarity model, and blind to any judgment that isn't cosine distance. Sometimes the discriminator is
+one no property and no embedding captures: *"news actually about **my** funding round"*, *"papers whose
+method is **genuinely** transformer-based, not just name-dropping it"*, *"the issues most **relevant to this
+outage**"*. For those, the query can call a **per-row LLM judgment** inline, expressed as a reserved
+**`ai_*`** property or function.
+
+These run at **execution time**, over the rows a query has already fetched — the LLM counterpart, at the
+value level, of §9's generation-time `examples:` steering. Four primitives across the three query positions:
+
+- **`{ai: {hint, model, temperature, confidence, fresh, voice, wordcount}}`** — *steer and tune* the
+  fetch behind an edge, as a nested directive map (§7.2; flat `ai_*` spellings are aliases);
+- **`{pack: {…}}`** — the pack's OWN prompt parameters, passed verbatim (§7.2.2);
+- **`WHERE n.ai_relevant = '<criterion>'`** — *filter* rows by subjective relevance;
+- **`ORDER BY ai_score(n, '<criterion>') DESC`** — *rerank* rows by subjective fit;
+- **`RETURN ai_classify(n, '<dimension>')`** — *label* each row along a subjective dimension.
+
+### 7.1 The `ai` and `pack` namespaces are reserved
+
+Any property or function in the **`ai`** namespace — the bare `ai` key, the flat `ai_*` prefix, or the
+`ai.*` function form — is an **engine primitive, never data**, and the bare **`pack`** key is likewise
+reserved (§7.2.2). A pack MUST NOT declare a stored property or a producer field named `ai`, `ai_*`, or
+`pack`; the graph schema is open and pack-defined, so the reservation is what keeps the primitives
+collision-free and self-documenting to the generator. `ai_relevant` and `ai_score` are **"fake" columns**:
+they carry no stored value — the engine computes them for the rows a query touches and, having computed
+them, writes the result onto the transient row as real data so ordinary Cypher (`WHERE`, `ORDER BY`) can
+read it. They are defined **only over fetched / materialized rows** (a virtual join's targets, §2) — the
+judgment is what the source could not express — so anchor them on a virtual collection, not a raw
+persisted label.
+
+### 7.2 The `{ai: {…}}` directive map — steer and tune a fetch
+
+An LLM-backed edge takes its per-query directives as a **nested map** under the reserved `ai` key —
+legal Cypher, structurally collision-free with real edge data, and fail-safe (a map is not a storable
+property value, so it could never silently filter the read if it leaked):
+
+```cypher
+MATCH (p:Person {name:'…'})-[:RATED]->(seed:Movie)
+MATCH (seed)-[:SIMILAR_TO {ai: {hint:'obscure, and French', model:'chat_cheap',
+                                temperature: 0.2, confidence: 0.8}}]->(rec:Movie)
+RETURN rec.title
+```
+
+The flat spellings (`ai_hint`, `ai_model`, …) remain accepted **aliases** of the map form. The `ai`
+namespace is **closed**: an unknown key inside it is warned about as a probable typo, never silently
+ignored. Its keys:
+
+- **`hint`** — the free-text steer the schema has no property for (a mood, a vibe, a language, an
+  angle), reaching the generator's prompt as `{{ hint }}` or folding into an aggregate's reduce
+  instruction. A **soft steer, not a filter**: everything the schema *can* express (genre, year, a
+  rating floor) belongs in an ordinary `WHERE`.
+- **`model`** — a portable, **workspace-defined role id** (e.g. `chat_cheap`, `code_best`), resolved
+  through the workspace's role map exactly like the pack edge's own `role:` declaration. A query
+  **never pins a concrete model name**; an unknown role falls back to the edge's declared tuning (with
+  a warning), never a failure.
+- **`temperature`** — a sampling temperature layered on whatever base the role (or the edge's default)
+  resolves to.
+- **`confidence`** — raises a **generative** edge's confidence floor for this query ("only picks you're
+  sure of" vs "brainstorm wildly"); below-floor records are dropped before resolution, costing no lookup.
+- **`fresh: true`** — bypasses the **cross-query TTL cache read** ("regenerate my taste summary *now*" /
+  "re-check today's availability"); the fresh result still **writes through**. Applies to ANY TTL-cached
+  producer, LLM-backed or remote.
+- **`voice`** — the register/style of a PROSE-producing reduction ("second person, warm", "a noir
+  narrator"). Aggregate reduce only: names have no voice, and grounded extracts must not be restyled.
+- **`wordcount`** — a target length for a prose reduction (clamped to a sane range; a prompt-level
+  target, never a token cap — truncation mid-sentence is worse than a 10% overshoot).
+
+**Precedence:** query directive → the pack edge's own declaration (§5.3 generator, aggregate `reduce`)
+→ the deployment default. The directives apply to **generative** edges (the generator call) and
+**aggregate** edges (the fan-in reduction) alike, for **that query only** — cached results are keyed by
+the full steering, so a `chat_cheap`, breezy, 40-word run never serves from (or pins) the plain cache
+entry. The whole block is **steering, not data**: stripped from the executed query, never stamped onto
+a materialized edge. And since views are saved queries, a pack can bake any of it into a view
+(a `CheapRecommendations` view with `{ai: {model:'chat_cheap'}}`) with no extra mechanism.
+
+#### 7.2.2 The `{pack: {…}}` map — the pack's own prompt parameters
+
+Where `ai` is the closed embabel-standard namespace, **`pack`** is the **open** one: its keys pass
+through **verbatim** to the producer's prompt — a generative template variable, or a `key: value` line
+folded into an aggregate's reduce instruction. The pack defines its own steering vocabulary by simply
+referencing the variable in its prompt; an unreferenced key is inert:
+
+```cypher
+-- pack-movie's prompts opt into an `era` parameter ({% if era %} … {{ era }}):
+MATCH (ts)-[:SUGGESTS {pack: {era: 'the 1970s'}, ai: {model: 'chat_cheap'}}]->(m:Movie)
+RETURN m.title
+```
+
+Pack parameters are steering like everything above — stripped from the read, never stamped, part of the
+cache key — and can never clobber the engine's reserved template variables (`anchors`, `exclude`,
+`want`, `hint`, …).
+
+### 7.3 `ai_relevant` — the per-row relevance filter
+
+```cypher
+MATCH (me:AssistantUser)-[:TRACKS]->(n:NewsItem)
+WHERE n.ai_relevant = 'about my company''s Series A funding round'
+  AND n.published > date() - duration('P7D')
+RETURN n.title, n.url
+```
+
+**Means:** "of the news fetched for me this week, keep only the items *actually about my funding round*" —
+a discriminator no keyword and no embedding reliably draws (a piece can name "funding" yet not be about
+*mine*; can be about mine yet never say "Series A").
+
+**How it executes:**
+
+- **Fetch** the `NewsItem` rows as any virtual join would (§2) — the source can't apply the criterion, so it
+  returns the broad set.
+- **Judge — one batched LLM call per criterion.** The fetched rows' text is scored 0..1 for fit to the
+  criterion; rows below a threshold are **dropped**, keeping the **nodes** (unlike the `relevant(text,
+  criterion)` fan-*in* aggregation of §5.3-adjacent LLM reducers, which returns text — this keeps the rows so
+  the query can traverse and return them).
+- **Stamp & run.** The criterion is written onto each surviving row under `ai_relevant`, so the final
+  `WHERE n.ai_relevant = '…'` matches as ordinary data — no query rewrite. It **composes** with real
+  predicates via `AND` (the date filter above) and with other `ai_` primitives.
+
+Use it **only** for a subjective *about / relevant-to* that maps to **no** shown property; for a concrete
+field, an ordinary `WHERE` is cheaper and exact.
+
+### 7.4 `ai_score` — the per-row rerank
+
+```cypher
+MATCH (me:AssistantUser)-[:TRACKS]->(n:NewsItem)
+RETURN n.title, n.url
+ORDER BY ai_score(n, 'relevance to my Series A funding round') DESC
+LIMIT 5
+```
+
+**Means:** "rank the fetched news by how well each fits, and give me the top five" — the highest-value
+retrieval lever, a learned relevance sort where no orderable property exists.
+
+**How it executes:**
+
+- **Fetch** as above.
+- **Judge — the same batched 0..1 scoring** as `ai_relevant` (the two share one judgment; a query using
+  both scores once and both filters and ranks off it). Every row is **kept** and its score **stamped** under
+  `ai_score`.
+- **Rewrite & run.** Neo4j has no `ai_score` function, so the executor rewrites the call in the executed
+  query to `coalesce(n.ai_score, 0.0)` (0.0 for any row that wasn't scored), and `ORDER BY … DESC LIMIT k`
+  ranks and truncates against the stamp.
+
+The idiomatic **filter-then-rank**: `WHERE n.ai_relevant = '…' … ORDER BY ai_score(n, '…') DESC LIMIT k` —
+narrow to the relevant, then order the survivors by fit.
+
+### 7.5 `ai_classify` — the per-row projection
+
+```cypher
+MATCH (me:AssistantUser)-[:TRACKS]->(n:NewsItem)
+RETURN n.title,
+       ai_classify(n, 'urgency: high, medium, or low')     AS urgency,
+       ai_classify(n, 'topic in one word')                 AS topic
+```
+
+**Means:** "return the fetched news, and *label* each item along a dimension there is no column for" — a
+computed, LLM-decided category rather than a stored field.
+
+**How it executes:**
+
+- **Fetch** as above.
+- **Label — one batched call per dimension.** Each fetched row's text is labelled for the named dimension
+  (if the dimension lists categories, the label is one of them; otherwise a short free label). Every row is
+  **kept** and its label **stamped** under a **per-dimension slug property** (`ai_classify_urgency…`), so two
+  classifications in one `RETURN` never collide.
+- **Rewrite & run.** As with `ai_score`, the executor rewrites each `ai_classify(n, '…')` in the executed
+  query to `coalesce(n.ai_classify_<slug>, '')` (blank for any unlabelled row), and the projection returns it.
+
+Use it **only** for a subjective label no property holds; when a real field already carries the value, return
+that. (It is a *projection*, not a filter — to keep only one category, classify and then `WHERE label = '…'`,
+or use `ai_relevant` directly.)
+
+### 7.6 Cost, determinism, and failure
+
+These call an LLM, so they are the **non-deterministic** members of the surface (contrast §11): the same
+query can score two runs slightly differently, and the model — not the graph — decides. Bound the cost —
+each criterion is **one batched call** over the fetched rows (chunked for large sets), so they scale with
+*rows fetched*, not rows × 1; keep the fetched set small (an anchor, a real `WHERE`, a `LIMIT` on the fetch)
+before judging. They **fail open**: an LLM error scores the affected rows 1.0 (kept, neutral rank), so a
+hiccup never silently *hides* results — it degrades to "no judgment applied", visible and safe. Reach for
+them only when the discriminator is genuinely subjective; a property, an embedding (§6), or a real predicate
+is always cheaper and more repeatable.
+
+---
+
+## 8. Views — a saved query used as a label
 
 A **view** is a named, saved Cypher body whose rows *are* a type, referenced in a later query by its name as a
 plain **label**. It is the natural extension of a virtual join: a virtual label is a view over an external
@@ -655,7 +848,7 @@ system; a *view* is a view over the graph (real + virtual) itself. Two kinds, by
   ephemeral `keep(queryId)` option: the expensive fan-out (map) + agentic reduce runs on a **refresh
   schedule**, in the background under a big budget; the interactive query just reads the precomputed result.
 
-### 7.1 No new grammar — usage is a label, definition is metadata
+### 8.1 No new grammar — usage is a label, definition is metadata
 
 There is **no `DEFINE VIEW` statement.** The engine parses queries with the official Neo4j parser
 (cypher-dsl); a non-standard statement would reintroduce pre-parse interception, and Neo4j never executes DDL
@@ -680,7 +873,7 @@ anyway. The concept splits cleanly:
 The same body can be authored at runtime by the assistant on the user's behalf (`viewService.define(user, name,
 cypher, materialized)`, surfaced as a `define_view` tool) — "save this as my key accounts."
 
-### 7.2 Output typing — identity preservation is the rule
+### 8.2 Output typing — identity preservation is the rule
 
 A view you can **traverse from** always yields nodes of exactly ONE type. Whether it composes is governed by a
 single rule — does it preserve node identity?
@@ -694,7 +887,7 @@ single rule — does it preserve node identity?
    derived type; composes only via edges the view declares (usually a leaf).
 3. **Tabular view** — a `RETURN` of scalars/aggregates: a named result set (report-only), not traversable.
 
-### 7.3 Composing views
+### 8.3 Composing views
 
 A subset view's name is a label, so it composes with structural + relevance edges, and with other views
 (staged materialization to fixpoint):
@@ -726,7 +919,7 @@ fire:
 MATCH (d:breach_mentions) RETURN count(DISTINCT d) AS incidents      -- an aggregate over a precomputed view
 ```
 
-### 7.4 The materialization cache is pluggable
+### 8.4 The materialization cache is pluggable
 
 The materialized-view cache is a **strategy behind an interface**, not a fixed mechanism. The default strategy
 is graph-colocated and transactional: a `MaterializedView {view, userId, expiresAt}` marker node with
@@ -747,10 +940,10 @@ deployment, an **external KV / Redis** for a horizontally-scaled one, or an **`i
 explicit invalidation only) for reference data. The refresh policy (`ttl`, cron `refresh:`) is orthogonal to
 the store.
 
-### 7.5 A general result / entity cache — and negative results
+### 8.5 A general result / entity cache — and negative results
 
 The same store generalizes beyond views to a **producer result cache** — the answer to "should API fetches be
-cached?" A producer call is `(producer, key) → records`; caching keys on exactly that, governed by the §8
+cached?" A producer call is `(producer, key) → records`; caching keys on exactly that, governed by the §9
 diagnostics:
 
 - **Positive result** — a genuine, successful fetch (**including a real "no records"**) is cacheable with a
@@ -761,19 +954,19 @@ diagnostics:
   the bridge negative-cache (`_bridgeMissAtMs` per target); the SPI unifies it with a TTL and
   **invalidate-on-reconnect**.
 - **Never cache a FAILURE.** A timeout / 5xx / expired-auth fetch is **not** a result — caching its emptiness
-  would hide the data once the integration heals. Only a `PRODUCER_ERROR`-free outcome is cacheable (§8).
+  would hide the data once the integration heals. Only a `PRODUCER_ERROR`-free outcome is cacheable (§9).
 
-The identity **bridge** (who an external identity *is*, §10) is the one already-persistent positive cache; the
+The identity **bridge** (who an external identity *is*, §5.2) is the one already-persistent positive cache; the
 producer result cache and the entity negative-cache are the same idea applied to *what* a key holds, and to
 keys that hold **nothing** — all behind one pluggable store, so a deployment picks graph-colocated, in-memory,
 or external as it scales.
 
-### 7.6 Persisted scopes, and consuming a scope as typed instances
+### 8.6 Persisted scopes, and consuming a scope as typed instances
 
 A materialized view refreshes (it re-runs its body on TTL expiry). A **persisted query** is the other
 lifecycle over the *same* MEMBER-set store: a saved result set addressed by an opaque handle
 (`query:<uuid>`), that does **not** re-run — it is a scope of immutable results that survives until explicit
-deletion. The two differ only in metadata, so the store from §7.4 generalizes with three fields rather than a
+deletion. The two differ only in metadata, so the store from §8.4 generalizes with three fields rather than a
 new mechanism:
 
 - `expiresAt` becomes **nullable** — a TTL for a view, `null` (pinned) for a persisted query;
@@ -787,21 +980,21 @@ nothing on the read path changes: a scope is a scope, whether named-and-refreshi
 **Two properties are frozen at capture, decided per store:** *membership* (which nodes are in the scope) is
 always frozen — that is the MEMBER edge set. *Values* are not, by default: the edges point at live nodes
 whose properties keep changing. A store that needs a true point-in-time snapshot copies the projected columns
-at capture; a virtual/fetched member is already a committed copy (prefer-real-node MERGE, §7.2·1), so it is
+at capture; a virtual/fetched member is already a committed copy (prefer-real-node MERGE, §8.2·1), so it is
 naturally frozen.
 
-Consuming a scope: because a **subset** scope RETURNs whole, identity-preserving nodes (§7.2·1), a client
+Consuming a scope: because a **subset** scope RETURNs whole, identity-preserving nodes (§8.2·1), a client
 runtime can hydrate its members directly into typed instances — the type comes off the node's own label, so
 the reader needs no per-query type argument. This is the source side of the type-and-verb model: the saved
 scope supplies the objects; their methods (pure compute, or effectful write-back through the producer) live on
-the type. A **tabular** scope (§7.2·3) has no node to hydrate — it is a frozen values table, readable and
+the type. A **tabular** scope (§8.2·3) has no node to hydrate — it is a frozen values table, readable and
 renderable but never bound as a label or hydrated into instances. The store records which kind a handle is and
 refuses label-binding / hydration on a tabular one, so an unsupported consumption fails honestly rather than
 producing wrong Cypher.
 
 ---
 
-## 8. Caps, cost, and diagnostics
+## 9. Caps, cost, and diagnostics
 
 Because a Virtual Cypher query reaches into live external systems, it is bounded on every axis, and
 a bound that bites is **always surfaced**, never silent.
@@ -832,7 +1025,7 @@ the data); only a genuine, successful "no records" is cacheable.
 
 ---
 
-## 9. Steering the generator — type-level `examples:`
+## 10. Steering the generator — type-level `examples:`
 
 The schema tells the text-to-Cypher generator what *exists*; it does not tell it what to *prefer*.
 When two legal paths answer the same question — a projected scalar vs. a resolvable edge, a
@@ -885,7 +1078,7 @@ schema-level engineering could not touch.
 
 ---
 
-## 10. Determinism and guarantees
+## 11. Determinism and guarantees
 
 - **Read-only.** A user query never writes the graph. Materialization happens in a transaction that
   is **rolled back**; the sole persisted side effect is a write-through identity **bridge** (a
@@ -901,7 +1094,7 @@ schema-level engineering could not touch.
 
 ---
 
-## 11. The contract, in one line
+## 12. The contract, in one line
 
 > **Bind a real anchor; declare how a label is fetched; the engine probes, fetches once per
 > producer, materializes transiently, runs your Cypher over real + virtual together, and rolls
@@ -910,4 +1103,4 @@ schema-level engineering could not touch.
 For the declarative surface (`virtualJoins:`, `producers/`, `resolve:`, `pushdown:`, `paging:`,
 `brings:`, `cache:`, `views:`) see [`README.md`](./README.md#joining-types-on-demand-virtual-joins-not-mirrored).
 Views (regular / materialized, output typing, the pluggable cache, persisted scopes, and hydrating a
-scope into typed instances) are §7.
+scope into typed instances) are §8.

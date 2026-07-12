@@ -63,6 +63,11 @@ back is **Virtual Cypher** — see "Virtual Cypher — the engine" under "Joinin
 - A literal-pinned anchor (`{login:'x'}` or `WHERE a.login='x'`) uses the real node if it
   exists, else seeds a named entity even when no such node exists, fetched with the
   connecting user's credentials.
+- **LLM query primitives (`ai_*`)** work over any virtual collection your producer fetches —
+  you declare nothing. A query author can `WHERE n.ai_relevant = '<subjective criterion>'`
+  (filter), `ORDER BY ai_score(n, '<criterion>') DESC` (rerank), or steer a *generative*
+  producer with an `ai_hint` edge property. The `ai_` prefix is **reserved** — never name a
+  stored property or producer field `ai_*`. See "LLM query primitives" in the Virtual Cypher spec.
 
 ## CypherScript (querying the graph from pack code)
 
