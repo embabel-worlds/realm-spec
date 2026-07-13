@@ -91,7 +91,7 @@ always rolls back**:
 
 - pinned by an inline literal — `(p:Person {primaryEmail:'a@b.com'})`, or
 - pinned by a `WHERE` equality — `WHERE p.primaryEmail = 'a@b.com'`, or
-- narrowed by **any** property predicate — `WHERE toLower(p.name) CONTAINS 'james'`, or
+- narrowed by **any** property predicate — `WHERE toLower(p.name) CONTAINS 'grace'`, or
 - the current user — `(me:AssistantUser)` (the scope rewriter pins it to you), or
 - reachable over a *required* edge from another bound node.
 
@@ -143,26 +143,26 @@ and a `producers/` entry `contactsByEmail` (`kind: remote`).
 ### 3.2 A bridge plus a downstream hop (Person → GitHub identity → issues)
 
 ```cypher
-MATCH (p:Person {name:'James Governor'})-[:HAS_GITHUB]->(g:GitHubIdentity)-[:RAISED]->(i:GitHubIssue)
+MATCH (p:Person {name:'Grace Hopper'})-[:HAS_GITHUB]->(g:GitHubIdentity)-[:RAISED]->(i:GitHubIssue)
 RETURN i.title, i.html_url
 ```
 
-**Means:** "What GitHub issues has James raised?" — but the graph holds no GitHub data at all.
-Two virtual hops: first resolve *which GitHub account is James*, then fetch *that account's
+**Means:** "What GitHub issues has Grace raised?" — but the graph holds no GitHub data at all.
+Two virtual hops: first resolve *which GitHub account is Grace*, then fetch *that account's
 issues*.
 
 **How it executes:**
 
-- **Probe** — bind `p` (James), read his email.
-- **Resolve the bridge** (`HAS_GITHUB` is an identity bridge — §5.2). Run James's `resolve:`
-  chain: is there already a `GitHubIdentity` linked to him (`existingBridge`)? a learned
-  `githubLogin` on his node (`learnedHandle`)? otherwise look his email up via the
-  `githubUsersByEmail` producer (`canonicalEmail`). Say it resolves to login `monkchips`. The
-  bridge `(james)-[:HAS_GITHUB]->(:GitHubIdentity {login:'monkchips'})` is **persisted**
+- **Probe** — bind `p` (Grace), read her email.
+- **Resolve the bridge** (`HAS_GITHUB` is an identity bridge — §5.2). Run Grace's `resolve:`
+  chain: is there already a `GitHubIdentity` linked to her (`existingBridge`)? a learned
+  `githubLogin` on her node (`learnedHandle`)? otherwise look her email up via the
+  `githubUsersByEmail` producer (`canonicalEmail`). Say it resolves to login `devone`. The
+  bridge `(p)-[:HAS_GITHUB]->(:GitHubIdentity {login:'devone'})` is **persisted**
   (write-through) so the next query skips this step.
-- **Now `g` is a real, bound node.** Its key is `login = 'monkchips'`.
-- **Fetch** the downstream join — call the `issuesByAuthor` producer with `['monkchips']`. It
-  searches GitHub for `author:monkchips`, returns the issue records.
+- **Now `g` is a real, bound node.** Its key is `login = 'devone'`.
+- **Fetch** the downstream join — call the `issuesByAuthor` producer with `['devone']`. It
+  searches GitHub for `author:devone`, returns the issue records.
 - **Materialize** each as `(:GitHubIssue:Virtual)` linked `(g)-[:RAISED]->(i)`.
 - **Run / roll back** — `RETURN` reads the issues; the issues roll back (the *bridge* stays, as a
   warm cache).
@@ -170,7 +170,7 @@ issues*.
 **Declared:** `GitHubIdentity` with a `resolve:` bridge join from `Person`; `GitHubIssue` with a
 plain `virtualJoins` entry `{ anchorLabel: GitHubIdentity, relationship: RAISED, keyField: login, producer: issuesByAuthor }`.
 
-> **Why two declarations, not one.** The bridge (who-is-James) and the data (his issues) have
+> **Why two declarations, not one.** The bridge (who-is-Grace) and the data (her issues) have
 > different lifecycles — the identity is stable and worth persisting; the issues are volatile and
 > roll back. Splitting them lets the engine cache the expensive identity resolution and re-fetch
 > only the cheap, changing part.
@@ -212,24 +212,24 @@ anchor.
 ### 3.4 Predicate pushdown — scope the fetch at the source
 
 ```cypher
-MATCH (p:Person {name:'James Governor'})-[:HAS_GITHUB]->(g)-[:RAISED]->(i:GitHubIssue)
-WHERE i.html_url CONTAINS 'embabel/me'
+MATCH (p:Person {name:'Grace Hopper'})-[:HAS_GITHUB]->(g)-[:RAISED]->(i:GitHubIssue)
+WHERE i.html_url CONTAINS 'acme/app'
 RETURN i.title
 ```
 
-**Means:** "James's issues **in the `embabel/me` repo**."
+**Means:** "Grace's issues **in the `acme/app` repo**."
 
 **How it executes (with pushdown):**
 
-- Probe + resolve the bridge as before → `g.login = 'monkchips'`.
-- **Fetch — pushed down.** Instead of fetching *all* of monkchips's issues and discarding the ones
-  not in `embabel/me`, the engine renders the `WHERE i.html_url CONTAINS 'embabel/me'` predicate
-  into the source's native filter: the GitHub search becomes `is:issue author:monkchips repo:embabel/me`.
+- Probe + resolve the bridge as before → `g.login = 'devone'`.
+- **Fetch — pushed down.** Instead of fetching *all* of devone's issues and discarding the ones
+  not in `acme/app`, the engine renders the `WHERE i.html_url CONTAINS 'acme/app'` predicate
+  into the source's native filter: the GitHub search becomes `is:issue author:devone repo:acme/app`.
   One scoped search returns only the matching issues.
 - Materialize / run / roll back as usual. The same `WHERE` still runs in the graph too, so
   **correctness never depends on pushdown** — it only changes cost and coverage.
 
-**How it executes *without* a pushdown rule declared:** the engine fetches monkchips's issues
+**How it executes *without* a pushdown rule declared:** the engine fetches devone's issues
 broadly (paged, capped) and the graph-side `WHERE` drops non-matches. Correct, but wasteful, and
 it can hit the source's result cap before your matches (see §3.5).
 
@@ -251,9 +251,9 @@ email), each resolving to a GitHub login.
 **How it executes:**
 
 - Probe binds *all* the emailed people; the bridge resolves each to a login →
-  `['monkchips', 'jamesward', 'chanezon', …]`.
+  `['devone', 'devtwo', 'devthree', …]`.
 - **Fetch — the subtlety.** Could the engine pass all logins to GitHub's issue search in one call,
-  `author:monkchips author:jamesward …`? It **must not**, and this is why `batchSafe: false` exists
+  `author:devone author:devtwo …`? It **must not**, and this is why `batchSafe: false` exists
   on that producer: GitHub issue search returns **one globally-ranked, capped list** (most-recently
   updated first). A prolific author fills the cap; a low-volume colleague's issues fall off the end
   — so you'd see them for one question and find nothing for the next. With `batchSafe: false` the
@@ -312,7 +312,7 @@ WHERE toLower(p.name) CONTAINS 'governor'
 RETURN i.title
 ```
 
-**Means:** "Issues by people named *Governor*" — not the whole address book.
+**Means:** "Issues by people named *Hopper*" — not the whole address book.
 
 **How it executes:**
 
@@ -511,6 +511,9 @@ is on GitHub" doesn't re-storm the source.
 | `sql` | a `SELECT … IN (:keys)` against a pack datasource | the anchor key, expanded into the `IN` clause |
 | `compute` | an in-process function over the keys (scores, rollups, synthesis) | the anchor key; no external I/O |
 | `vector` | top-k semantic similarity to the anchor's **text** | nothing — *similarity is the join* (§6) |
+| `keyword` | top-k **lexical** (fulltext, exact-token) match to the anchor's text — the honest fit for "MENTIONS \<term\>" | nothing — same relevance contract as `vector`, only the mode differs (§6.6) |
+| `agentic-rag` | a **bounded LLM retrieval loop** over the same index: reformulates, runs both modes, reads further into inconclusive candidates, returns only documents it *judges* fit the edge's `intent` brief | nothing — relevance as a judgment (§6.6); EXPENSIVE, select explicitly |
+| `remote-search` | top-k **lexical** match via the REMOTE store's OWN search API (a gateway op with `{query}` substituted per anchor — e.g. Drive `fullText contains`); live, nothing ingested | nothing — same relevance contract as `keyword`, but the source searches itself; per-match `mode:'keyword'`/`rank` on the edge, score is a neutral 1.0 (matched, not similarity) |
 | `generative` | an LLM **invents** plausible records ("suggest things like X"), each resolved onto the spine via `resolveVia`; demand-driven (re-probes with a growing exclusion until enough survive) | the anchor's name/text, batched into ONE prompt |
 | `aggregate` | gathers the anchor's connected neighborhood and LLM-**reduces** it to ONE record (a taste summary, a digest) | the anchor's identity; one record per anchor |
 
@@ -644,6 +647,44 @@ RETURN p.name, t.subject, r.score ORDER BY r.score DESC
 > "Did I email Ada / how much" is the persisted `(:AssistantUser)-[:EMAILED]->(:Person)` edge;
 > `RELEVANT_TO` is "threads that read as being about Ada." The join's `description` says so, so the
 > query generator never confuses the two.
+
+### 6.6 Relevance modes — the `via` selector and the `intent` brief
+
+One anchor→target relationship can be served by **several joins**, each declaring the edge `via`
+value it answers to. The query selects the mode *at the edge*; an edge with no `via` selects the
+join declaring none (the default — conventionally the `vector` join):
+
+```cypher
+MATCH (c:Concept {value:'lotteries'})-[:RELEVANT_TO]->(d:Document)                     -- semantic (default)
+MATCH (c:Concept {value:'lotteries'})-[:RELEVANT_TO {via:'keyword'}]->(d:Document)     -- lexical, exact tokens
+MATCH (c:Concept {value:'Acme'})-[r:RELEVANT_TO {via:'agentic-rag',
+                                                 intent:'renewal risk'}]->(d:Document) -- judged retrieval
+```
+
+The three modes answer three different questions — *about* X (vector), *mentions* X (keyword), and
+*bears on this brief* (agentic-rag). Vector and keyword are deterministic single passes. The
+`agentic-rag` mode hands retrieval to a **bounded LLM loop** that may reformulate the query, run
+both deterministic modes, and read further into a candidate whose snippet is inconclusive — then
+returns only the documents it judges fit the brief.
+
+**The `intent` directive** is the loop's retrieval brief: a top-level edge property (like `via`,
+not in the `ai:` namespace), read by the engine and passed to the producer. The producer may
+declare a default `intent`; the query edge's value overrides it per query. Because a different
+brief is a different result set, `intent` participates in the fetch cache key, and it is stamped
+back onto the materialized edge (`r.intent`) alongside `r.score` (the judged 0..1 fit),
+`r.snippet` (verbatim evidence the loop actually saw), `r.mode`, and `r.rank`.
+
+Two guarantees keep the agentic mode honest:
+
+- **Grounded**: the loop's verdict may only reference documents that appeared in its own tool
+  results — a hallucinated id can never materialize a node.
+- **Fail-open**: any loop failure degrades to the deterministic `vector` search for that anchor —
+  an LLM hiccup costs precision, never an empty answer.
+
+Cost guidance: an agentic edge spends several LLM calls **per anchor**. Select it explicitly
+(never as a default), and pair it with a **materialized view** (§8.3) when the same brief is
+queried repeatedly — the loop then runs on the view's refresh schedule and queries read the cached
+subgraph.
 
 ---
 
