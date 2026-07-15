@@ -1744,6 +1744,36 @@ skills/
 
 Skills are loaded as references — the agent can activate them on demand for specialized tasks.
 
+### `choices` payloads — asking the user to pick
+
+When a skill flow needs the user to pick from a **small closed set** (a score, one of several
+matching records), it must not guess, pick silently, or bury the options in prose. Instead the
+script returns a `choices` payload as its result and the assistant presents the question and
+options, then STOPS — no recording or lookup action until the user picks. The shape:
+
+```json
+{"kind": "choices",
+ "question": "<one short question>",
+ "options": ["<option>", "..."],
+ "context": { "<ids the follow-up turn needs>": "..." },
+ "hint": "Present these options to the user and wait for their pick."}
+```
+
+- **`options`** — the closed set, as display strings. Keep it small (≤ 10).
+- **`context`** — carry the ids the next turn needs (an `imdbId`, a record key) so the follow-up
+  never re-resolves what this turn already looked up.
+- **`hint`** — one sentence for the presenting LLM; not shown to the user.
+
+The payload travels as a **tool result**, so every surface renders at its own fidelity: the host's
+own chat presents the options as a short list (or a native widget where the host has a `choices`
+renderer), while an MCP client is told — via the host's MCP `instructions` — to use its most
+structured input affordance (a form or selector where it can render one). Do **not** tunnel HTML
+for this; ship the semantic payload and let each surface render it.
+
+Exemplar: `pack-movie`'s `skills/movie/SKILL.md` — rating a film when no score was given
+(options `"1"`–`"10"`, `context.imdbId`), and disambiguating a title with several OMDb matches
+(one option per candidate, candidates in `context`).
+
 ## `personalities/`
 
 Each subdirectory under `personalities/` is one persona the host can run the assistant as — its voice, behaviours, guardrails, and display name. The host renders the chat system prompt by including Jinja templates from the active persona's directory; switching personality is a directory swap, not a prompt rewrite.
