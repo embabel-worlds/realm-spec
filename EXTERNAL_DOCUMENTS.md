@@ -1,10 +1,10 @@
 # External Documents — Specification
 
-> **Status:** normative. This is the contract for how an integration pack lands documents from an
+> **Status:** normative. This is the contract for how an integration realm lands documents from an
 > external store (Google Drive, Notion, Confluence, SharePoint, Dropbox, a wiki, …) in the
 > assistant's searchable knowledge base, and how those documents stay fresh. The assistant side is
 > **one source-neutral gateway surface**; everything source-specific — API connectivity, auth,
-> content export — lives in the pack. The JVM never learns a source API.
+> content export — lives in the realm. The JVM never learns a source API.
 
 ---
 
@@ -14,7 +14,7 @@ Document RAG over an external store has exactly three lanes. Pick per content ty
 
 | Lane | What | When |
 |---|---|---|
-| **Live ops** | The pack's ordinary gateway ops (`sheets.valuesGet`, …) at query time | Volatile, operational data — a live spreadsheet, a dashboard. Ingesting these manufactures staleness. |
+| **Live ops** | The realm's ordinary gateway ops (`sheets.valuesGet`, …) at query time | Volatile, operational data — a live spreadsheet, a dashboard. Ingesting these manufactures staleness. |
 | **KG entities** | Virtual Cypher producers / persisted entities (see `VIRTUAL_CYPHER.md`) | Structured *records* — contacts, issues, tickets, file *metadata*. |
 | **Ingested documents** | This spec | Long-form, reasonably stable *content* — docs, pages, articles, reports. Gets vector + keyword search, chunking, figures, agentic RAG. |
 
@@ -23,7 +23,7 @@ A store usually spans lanes: Drive file listings are KG (a `driveFiles` producer
 
 ## 2. The ingest surface (assistant-provided, source-neutral)
 
-Two gateway methods, available to every pack handler as `ctx.ingest.*`:
+Two gateway methods, available to every realm handler as `ctx.ingest.*`:
 
 ### `ingest.document(args)` — land or refresh a document
 
@@ -75,7 +75,7 @@ Rules:
   the uri is the replace key; an unstable uri duplicates instead of refreshing.
 - **Reserved schemes.** `file://`, `upload://`, `http://`, `https://` are refused — they belong to
   the assistant's built-in upload/URL ingestion paths, which do their own fetching and provenance.
-  A pack that syncs content from the local filesystem still uses its own scheme (`obsidian://…`).
+  A realm that syncs content from the local filesystem still uses its own scheme (`obsidian://…`).
 - One uri = one document. Split multi-document containers (a Notion database, a wiki space) into
   one ingest per page.
 
@@ -85,7 +85,7 @@ Rules:
 `last_edited_time`, Confluence `version.when`, a Git commit timestamp. Any monotonic token works —
 the protocol only ever compares tokens for equality/order, never interprets them.
 
-The refresh protocol, entirely pack-side (only the pack can ask the source):
+The refresh protocol, entirely realm-side (only the realm can ask the source):
 
 ```
 refresh(id):
@@ -97,7 +97,7 @@ refresh(id):
   else → 'fresh'
 ```
 
-Expose this as a `refresh<Thing>` handler next to `ingest<Thing>`. Wire it to the pack POLL rail
+Expose this as a `refresh<Thing>` handler next to `ingest<Thing>`. Wire it to the realm POLL rail
 (with the store's delta/changes API where one exists — Drive `changes.list`, Graph delta,
 Dropbox `list_folder/continue`) for unattended freshness; the read-time answer can then also say
 "as of `sourceModifiedAt`" honestly.
@@ -112,7 +112,7 @@ Dropbox `list_folder/continue`) for unattended freshness; the read-time answer c
 
 ## 6. The handler recipe
 
-One exported pack function per content type (see `pack-google/src/api/drive-ingest.ts` for the
+One exported realm function per content type (see `realm-google/src/api/drive-ingest.ts` for the
 reference implementation):
 
 ```ts
@@ -137,7 +137,7 @@ Requirements:
 - **Errors propagate.** Never catch an `ingest.document` failure into a success-shaped return —
   the caller (chat LLM, poll handler) must see failure as failure.
 - **Describe for routing.** The JSDoc description is what the chat model routes on: say what kinds
-  of content it ingests, that re-running refreshes, and how to find the id (e.g. via the pack's
+  of content it ingests, that re-running refreshes, and how to find the id (e.g. via the realm's
   list/search op).
 - The handler's gateway types won't include assistant built-ins — declare `ctx.ingest` as a small
   structural type (`IngestSurface` in the reference implementation).

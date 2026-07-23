@@ -1,7 +1,9 @@
 # Virtual Cypher — Specification
 
+**Spec version: 0.1.0**
+
 > **Status:** normative. This is the contract for what a Virtual Cypher query can do and how it
-> runs. The declarative surface a pack author writes (`virtualJoins:`, `producers/`, bridge
+> runs. The declarative surface a realm author writes (`virtualJoins:`, `producers/`, bridge
 > `resolve:` chains) is specified in [`README.md`](./README.md#joining-types-on-demand-virtual-joins-not-mirrored);
 > this document specifies the **execution semantics** — what queries are possible, and, for each,
 > what the engine does. It is example-driven on purpose: read the worked examples (§3) first.
@@ -267,7 +269,7 @@ email), each resolving to a GitHub login.
 - **`maxKeysPerCall`** — how many keys go in one call (the endpoint's `IN`/`OR` cap). Keeps a wide
   traversal from becoming N+1.
 - **`batchSafe: false`** — a *capability*, not a number: "one call is not complete per key." Forces
-  one key per call regardless of `maxKeysPerCall`, so a pack can't reintroduce starvation by
+  one key per call regardless of `maxKeysPerCall`, so a realm can't reintroduce starvation by
   tuning.
 - **`paging:`** — capture beyond page 1; `maxPages` bounds the cost.
 - If pagination hits `maxPages` with a still-full last page, the source **has more than was
@@ -507,8 +509,8 @@ is on GitHub" doesn't re-storm the source.
 
 | kind | fetch | keyed by |
 |---|---|---|
-| `remote` (alias `api`) | a gateway op — pack handler or learned REST API | the anchor's id/email/login (list, string-template, or path-param mode) |
-| `sql` | a `SELECT … IN (:keys)` against a pack datasource | the anchor key, expanded into the `IN` clause |
+| `remote` (alias `api`) | a gateway op — realm handler or learned REST API | the anchor's id/email/login (list, string-template, or path-param mode) |
+| `sql` | a `SELECT … IN (:keys)` against a realm datasource | the anchor key, expanded into the `IN` clause |
 | `compute` | an in-process function over the keys (scores, rollups, synthesis) | the anchor key; no external I/O |
 | `vector` | top-k semantic similarity to the anchor's **text** | nothing — *similarity is the join* (§6) |
 | `keyword` | top-k **lexical** (fulltext, exact-token) match to the anchor's text — the honest fit for "MENTIONS \<term\>" | nothing — same relevance contract as `vector`, only the mode differs (§6.6) |
@@ -516,14 +518,39 @@ is on GitHub" doesn't re-storm the source.
 | `remote-search` | top-k **lexical** match via the REMOTE store's OWN search API (a gateway op with `{query}` substituted per anchor — e.g. Drive `fullText contains`); live, nothing ingested | nothing — same relevance contract as `keyword`, but the source searches itself; per-match `mode:'keyword'`/`rank` on the edge, score is a neutral 1.0 (matched, not similarity) |
 | `generative` | an LLM **invents** plausible records ("suggest things like X"), each resolved onto the spine via `resolveVia`; demand-driven (re-probes with a growing exclusion until enough survive) | the anchor's name/text, batched into ONE prompt |
 | `aggregate` | gathers the anchor's connected neighborhood and LLM-**reduces** it to ONE record (a taste summary, a digest) | the anchor's identity; one record per anchor |
+| `extract` | gathers the anchor's neighborhood and **extracts a LIST of typed records** from it — lazy ENTITIES, committed with real containment on first traversal (§5.6) | the anchor key (per-anchor collect); many records per anchor |
 
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
-`cache:` policy (`none` / `ttl` / `session` / `immutable`).
+`cache:` policy (`none` / `ttl` / `session` / `immutable`, plus `graph` for aggregates and
+extraction — §5.5/§5.6, where the committed graph itself is the cache tier).
 
-The two **LLM-backed** kinds (`generative`'s `generator:`, `aggregate`'s `reduce:`) take optional
-per-edge tuning — `role:` (a portable, workspace-defined model role id such as `chat_cheap`; **never a
+The **LLM-backed** kinds (`generative`'s `generator:`, `aggregate`'s `reduce:`, `extract`'s `extract:`) take optional
+per-edge tuning — `role:` (a portable, world-defined model role id such as `chat_cheap`; **never a
 concrete model name**, which stays an ops concern) and `temperature:`. A query can override both for one
-fetch with the `ai_model` / `ai_temperature` edge directives (§7.2.1).
+fetch with the `ai.model` / `ai.temperature` edge directives (§7.2).
+
+#### 5.3.1 Cost discipline for LLM-backed producers — `defaultWant` and `tools:`
+
+Two producer knobs dominate the wall-clock of a generative fetch, and both default in the
+expensive direction if authored carelessly:
+
+- **Size `defaultWant` to the edge's real consumers, not to abundance.** The demand loop runs a
+  FULL LLM generation round per iteration, sequentially, re-probing with a growing exclusion set
+  until `want` survivors exist — and steering hints, confidence floors, and spine-resolution
+  misses all shrink each round's survivor yield. A `defaultWant: 25` behind queries that
+  `LIMIT 5` can burn ten-plus sequential LLM calls chasing survivors nobody will see (observed:
+  12 rounds / 43 seconds from 2 anchors under a steering hint). Set it just above the largest
+  LIMIT the edge's saved views and skill queries actually use; a filtered/steered run then
+  converges in a round or two.
+
+- **Scope `tools:` to the narrowest search surface that can answer.** A generator's `tools:` list
+  is a capability grant, and every granted tool is an invitation the model will eventually
+  accept: the broad `web` group attaches *every* web-ish tool in the world (brave AND
+  wikipedia AND generic search), and a producer hunting one known site will wander into the
+  irrelevant ones (observed: encyclopedia summary lookups with another site's page titles —
+  guaranteed misses — plus retry churn). Name the concrete tool that serves the producer's
+  source (`tools: [brave]`); reach for the broad group only when the producer genuinely cannot
+  know where its answer lives.
 
 ### 5.4 Entity canonicalization — the spines a join anchors on
 
@@ -576,6 +603,136 @@ and Organization are just the two built-ins. Add a `Place`, `Repository`, or `Pr
 `application.yml` and source types join it by tagging a property `target: <newLabel>` — the engine
 builds the hub, applies the key-node uniqueness constraint at boot, and the join surface above works
 unchanged.
+
+### 5.5 Graph-cached aggregates — `cache: {kind: graph}`
+
+For an `aggregate` producer, `cache: {kind: graph}` makes **the committed graph itself the cache
+tier**: the first traversal collects the anchor's neighborhood, LLM-reduces it, and persists the
+result as a **real, committed, scope-stamped node**; while the inputs are unchanged, a repeat
+traversal is a plain graph hit with **zero model calls**. The canonical use is the on-demand document
+summary:
+
+```yaml
+# producers/summaries.yml
+- name: docSummary
+  kind: aggregate
+  edgeType: HAS_SUMMARY
+  collect:
+    targetLabel: Chunk
+    via: PART_OF
+    incoming: true            # the neighbors point AT the anchor: (Chunk)-[:PART_OF]->(Document)
+    anchorLabel: Document
+    anchorKeyProperty: uri    # PER-ANCHOR mode: each key is one document, owner-guarded
+    text: "{{ text }}"
+  reduce: { using: summarize, into: summary, args: ["Summarize this document faithfully."] }
+  identityField: id
+  anchorKeyField: docUri
+  cache: { kind: graph }
+```
+
+`MATCH (d:Document …)-[:HAS_SUMMARY]->(s:Summary) RETURN s.summary` then generates once per document
+and serves from the graph thereafter.
+
+The rules, all engine-enforced:
+
+- **Per-anchor collection.** `collect.anchorKeyProperty` switches the aggregate from its default
+  per-USER mode (the anchor is the acting user's own node; one reduction for the whole batch) to
+  per-ANCHOR: each producer key names one anchor (matched on that property, guarded to the acting
+  user's own nodes), and each anchor's neighborhood reduces independently. `incoming: true` flips the
+  traversal for containment shapes like `(Chunk)-[:PART_OF]->(Document)`.
+- **Freshness is an INPUT HASH, not a clock.** The persisted node carries a hash of the collected
+  items plus the full reduce fingerprint (function, effective instruction, role, temperature, band).
+  Edit the document — or the realm's prompt, or the role — and exactly that node regenerates, in place.
+  The re-check costs one graph read; the model runs only when something actually changed.
+- **Wordcount BANDS.** A query's `{ai: {wordcount: N}}` quantizes to the nearest persisted band —
+  gist (~40 words), standard (~200), long (~600) — and each band is its own committed node. The
+  directive-free canonical **is** the standard band; a nearby request (250) is a hit on the same node.
+  The band's own target (never the raw request) folds into the instruction, so one band has one
+  stable fingerprint.
+- **Semantic steering stays transient.** A `hint`, `voice`, `realm.*` parameter, or a `model`/
+  `temperature` override makes the result a non-canonical artifact: it is reduced fresh for that
+  query, returned with its own transient identity, and **never persisted, never served from, and
+  never overwrites** the canonical node. `{ai: {fresh: true}}` bypasses the hash check but writes the
+  regenerated canonical through.
+- **An honest miss never earns a node.** A reduction that answers with the no-answer sentinel stays
+  transient and is retried on the next traversal — fabrication can never become durable.
+- **Node-only, owner-stamped writes.** The engine commits only the node (stamped `userId` +
+  `workspaceId`, so it is visible to its owner and only its owner — two users summarizing an
+  identical URI get two nodes); the anchor edge is re-linked transiently per query. The node's label
+  is stamped by the engine from the join's own target type — a realm never declares it, so it can
+  never drift.
+
+Cost intuition: the expensive thing (the reduction) runs once per (anchor, band) and again only on
+change; everything else — the freshness probe, the hit path, the re-link — is indexed graph reads.
+
+### 5.6 Typed extraction — `kind: extract` (lazy entities)
+
+Where an aggregate reduces an anchor's neighborhood to ONE record, `kind: extract` fans it OUT: one
+model call per anchor extracts a **list** of typed records — the
+`(d:Document)-[:HAS_CLAUSES]->(c:Clause)` shape. The defining property is what the records *are*:
+
+> **Extracted records are entities — part of the model, created lazily.** The first traversal
+> extracts and commits them; from then on they are ordinary graph, returned by a **regular Cypher
+> query with no engine involved**.
+
+With `cache: {kind: graph}` (the intended mode), the first traversal commits, per record:
+
+- a **real, scope-stamped node** carrying the target label **and `__Entity__`** — so extracted
+  records surface wherever entities do (entity views, canonical KG queries), not only through the
+  producing join;
+- a **display `name`** — the extraction prompt must emit one per record (the record's own heading,
+  or a composed fallback like `<category> §<section>`); a nameless entity is invisible to entity
+  surfaces, and the engine logs a warning when records arrive without one;
+- a **real containment edge** `(anchor)-[:edgeType]->(record)` — committed right after the query's
+  read transaction closes (the open materialization transaction can hold locks on the anchor, so
+  the edge write queues and lands the moment those locks release), owner-guarded on both ends so
+  identical keys under two owners never cross-link; a hit whose containment is missing (a crashed
+  earlier run) is healed on the spot;
+- any **declared record-to-record links** (`links:`) — e.g. a clause whose `references` cites a
+  sibling's `section` commits `(citing)-[:REFERS_TO]->(cited)`, document-local by construction.
+
+```yaml
+# producers/clauses.yml (realm-authored — the host ships no domain prompt)
+- name: clauseExtraction
+  kind: extract
+  edgeType: HAS_CLAUSES
+  collect:
+    targetLabel: Chunk
+    via: PART_OF|HAS_PARENT*   # structured docs nest chunks under sections — traverse the containment path
+    incoming: true
+    anchorLabel: Document
+    anchorKeyProperty: uri
+    text: "{{ text }}"
+  extract:
+    role: workhorse            # a portable ROLE — never a concrete model name
+    prompt: |
+      Extract every clause as {name, category, text, section, references, sourceIndex} …
+  links:
+    - relationship: REFERS_TO
+      fromField: references
+      toField: section
+  cache: { kind: graph }
+```
+
+The aggregate rules carry over with extraction-specific twists:
+
+- **Freshness is the shared input hash** (collected items + the extract fingerprint, including the
+  prompt and the `links` declaration). On change the anchor's **whole stale set is REPLACED** —
+  extraction counts can shrink, so stale rows are `DETACH DELETE`d, taking their containment and
+  link edges with them; the fresh set re-commits nodes and edges together. Changing the realm's
+  prompt migrates every anchor's set the same way, on next traversal.
+- **Vocabulary is enforced, not requested.** A `oneOf` validation rule on a target-type property
+  (e.g. the category taxonomy) is a hard gate: the engine DROPS any extracted record that violates
+  it before persisting — prompt discipline alone does not hold this line.
+- **Honest-empty is a transient miss**: nothing extractable ⇒ nothing persisted, nothing deleted,
+  retried next traversal.
+- **Steering stays transient** — a `{ai: {hint: …}}` or model override extracts fresh with
+  transient identities and never touches the committed canon.
+- **Demand applies across anchors** — a cold `LIMIT 1` over many documents extracts from the first
+  anchor(s) only, until produced records satisfy the budget.
+
+Because the containment edge is real, `RETURN c` returns the entity itself — prefer it over scalar
+projections when the caller wants the records rather than a report about them.
 
 ---
 
@@ -688,32 +845,32 @@ subgraph.
 
 ---
 
-## 7. LLM query primitives — filter, rerank, and steer with `ai_*`
+## 7. LLM query primitives — filter, rerank, and steer with the `ai` namespace
 
 Vector edges (§6) answer "which rows are *about* X" with an **embedding** — cheap, but only as good as
 the similarity model, and blind to any judgment that isn't cosine distance. Sometimes the discriminator is
 one no property and no embedding captures: *"news actually about **my** funding round"*, *"papers whose
 method is **genuinely** transformer-based, not just name-dropping it"*, *"the issues most **relevant to this
 outage**"*. For those, the query can call a **per-row LLM judgment** inline, expressed as a reserved
-**`ai_*`** property or function.
+**`ai.*`** function.
 
 These run at **execution time**, over the rows a query has already fetched — the LLM counterpart, at the
 value level, of §9's generation-time `examples:` steering. Four primitives across the three query positions:
 
 - **`{ai: {hint, model, temperature, confidence, fresh, voice, wordcount}}`** — *steer and tune* the
-  fetch behind an edge, as a nested directive map (§7.2; flat `ai_*` spellings are aliases);
-- **`{pack: {…}}`** — the pack's OWN prompt parameters, passed verbatim (§7.2.2);
-- **`WHERE n.ai_relevant = '<criterion>'`** — *filter* rows by subjective relevance;
-- **`ORDER BY ai_score(n, '<criterion>') DESC`** — *rerank* rows by subjective fit;
-- **`RETURN ai_classify(n, '<dimension>')`** — *label* each row along a subjective dimension.
+  fetch behind an edge, as a nested directive map (§7.2; the flat `ai_*` spellings are RETIRED);
+- **`{realm: {…}}`** — the realm's OWN prompt parameters, passed verbatim (§7.2.2);
+- **`WHERE ai.relevant(n, '<criterion>')`** — *filter* rows by subjective relevance;
+- **`ORDER BY ai.score(n, '<criterion>') DESC`** — *rerank* rows by subjective fit;
+- **`RETURN ai.classify(n, '<dimension>')`** — *label* each row along a subjective dimension.
 
-### 7.1 The `ai` and `pack` namespaces are reserved
+### 7.1 The `ai` and `realm` namespaces are reserved
 
 Any property or function in the **`ai`** namespace — the bare `ai` key, the flat `ai_*` prefix, or the
-`ai.*` function form — is an **engine primitive, never data**, and the bare **`pack`** key is likewise
-reserved (§7.2.2). A pack MUST NOT declare a stored property or a producer field named `ai`, `ai_*`, or
-`pack`; the graph schema is open and pack-defined, so the reservation is what keeps the primitives
-collision-free and self-documenting to the generator. `ai_relevant` and `ai_score` are **"fake" columns**:
+`ai.*` function form — is an **engine primitive, never data**, and the bare **`realm`** key is likewise
+reserved (§7.2.2). A realm MUST NOT declare a stored property or a producer field named `ai`, `ai_*`, or
+`realm`; the graph schema is open and realm-defined, so the reservation is what keeps the primitives
+collision-free and self-documenting to the generator. `ai.relevant` and `ai.score` are **"fake" functions**:
 they carry no stored value — the engine computes them for the rows a query touches and, having computed
 them, writes the result onto the transient row as real data so ordinary Cypher (`WHERE`, `ORDER BY`) can
 read it. They are defined **only over fetched / materialized rows** (a virtual join's targets, §2) — the
@@ -733,7 +890,8 @@ MATCH (seed)-[:SIMILAR_TO {ai: {hint:'obscure, and French', model:'chat_cheap',
 RETURN rec.title
 ```
 
-The flat spellings (`ai_hint`, `ai_model`, …) remain accepted **aliases** of the map form. The `ai`
+The flat spellings (`ai_hint`, `ai_model`, …) are **RETIRED**: a query using one is rejected before
+execution with the namespace replacement named in the error, so callers self-correct. The `ai`
 namespace is **closed**: an unknown key inside it is warned about as a probable typo, never silently
 ignored. Its keys:
 
@@ -741,8 +899,8 @@ ignored. Its keys:
   angle), reaching the generator's prompt as `{{ hint }}` or folding into an aggregate's reduce
   instruction. A **soft steer, not a filter**: everything the schema *can* express (genre, year, a
   rating floor) belongs in an ordinary `WHERE`.
-- **`model`** — a portable, **workspace-defined role id** (e.g. `chat_cheap`, `code_best`), resolved
-  through the workspace's role map exactly like the pack edge's own `role:` declaration. A query
+- **`model`** — a portable, **world-defined role id** (e.g. `chat_cheap`, `code_best`), resolved
+  through the world's role map exactly like the realm edge's own `role:` declaration. A query
   **never pins a concrete model name**; an unknown role falls back to the edge's declared tuning (with
   a warning), never a failure.
 - **`temperature`** — a sampling temperature layered on whatever base the role (or the edge's default)
@@ -755,38 +913,44 @@ ignored. Its keys:
 - **`voice`** — the register/style of a PROSE-producing reduction ("second person, warm", "a noir
   narrator"). Aggregate reduce only: names have no voice, and grounded extracts must not be restyled.
 - **`wordcount`** — a target length for a prose reduction (clamped to a sane range; a prompt-level
-  target, never a token cap — truncation mid-sentence is worse than a 10% overshoot).
+  target, never a token cap — truncation mid-sentence is worse than a 10% overshoot). On a
+  **graph-cached** aggregate (§5.5) it is not free text at all: it quantizes to the nearest persisted
+  BAND (gist ~40 / standard ~200 / long ~600), so sized requests stay cacheable — 250 hits the same
+  committed node the directive-free ask created.
 
-**Precedence:** query directive → the pack edge's own declaration (§5.3 generator, aggregate `reduce`)
+**Precedence:** query directive → the realm edge's own declaration (§5.3 generator, aggregate `reduce`)
 → the deployment default. The directives apply to **generative** edges (the generator call) and
 **aggregate** edges (the fan-in reduction) alike, for **that query only** — cached results are keyed by
 the full steering, so a `chat_cheap`, breezy, 40-word run never serves from (or pins) the plain cache
-entry. The whole block is **steering, not data**: stripped from the executed query, never stamped onto
-a materialized edge. And since views are saved queries, a pack can bake any of it into a view
+entry. On a **graph-cached** aggregate (§5.5) the same principle splits three ways: `wordcount` selects
+a persisted band (still cached), `fresh` regenerates-and-writes-through, and everything semantic
+(`hint`/`voice`/`realm.*`/`model`/`temperature`) makes the result transient — it never touches the
+committed canonical node. The whole block is **steering, not data**: stripped from the executed query, never stamped onto
+a materialized edge. And since views are saved queries, a realm can bake any of it into a view
 (a `CheapRecommendations` view with `{ai: {model:'chat_cheap'}}`) with no extra mechanism.
 
-#### 7.2.2 The `{pack: {…}}` map — the pack's own prompt parameters
+#### 7.2.2 The `{realm: {…}}` map — the realm's own prompt parameters
 
-Where `ai` is the closed embabel-standard namespace, **`pack`** is the **open** one: its keys pass
+Where `ai` is the closed embabel-standard namespace, **`realm`** is the **open** one: its keys pass
 through **verbatim** to the producer's prompt — a generative template variable, or a `key: value` line
-folded into an aggregate's reduce instruction. The pack defines its own steering vocabulary by simply
+folded into an aggregate's reduce instruction. The realm defines its own steering vocabulary by simply
 referencing the variable in its prompt; an unreferenced key is inert:
 
 ```cypher
--- pack-movie's prompts opt into an `era` parameter ({% if era %} … {{ era }}):
-MATCH (ts)-[:SUGGESTS {pack: {era: 'the 1970s'}, ai: {model: 'chat_cheap'}}]->(m:Movie)
+-- realm-movie's prompts opt into an `era` parameter ({% if era %} … {{ era }}):
+MATCH (ts)-[:SUGGESTS {realm: {era: 'the 1970s'}, ai: {model: 'chat_cheap'}}]->(m:Movie)
 RETURN m.title
 ```
 
-Pack parameters are steering like everything above — stripped from the read, never stamped, part of the
+Realm parameters are steering like everything above — stripped from the read, never stamped, part of the
 cache key — and can never clobber the engine's reserved template variables (`anchors`, `exclude`,
 `want`, `hint`, …).
 
-### 7.3 `ai_relevant` — the per-row relevance filter
+### 7.3 `ai.relevant` — the per-row relevance filter
 
 ```cypher
 MATCH (me:AssistantUser)-[:TRACKS]->(n:NewsItem)
-WHERE n.ai_relevant = 'about my company''s Series A funding round'
+WHERE ai.relevant(n, 'about my company''s Series A funding round')
   AND n.published > date() - duration('P7D')
 RETURN n.title, n.url
 ```
@@ -803,19 +967,20 @@ a discriminator no keyword and no embedding reliably draws (a piece can name "fu
   criterion; rows below a threshold are **dropped**, keeping the **nodes** (unlike the `relevant(text,
   criterion)` fan-*in* aggregation of §5.3-adjacent LLM reducers, which returns text — this keeps the rows so
   the query can traverse and return them).
-- **Stamp & run.** The criterion is written onto each surviving row under `ai_relevant`, so the final
-  `WHERE n.ai_relevant = '…'` matches as ordinary data — no query rewrite. It **composes** with real
-  predicates via `AND` (the date filter above) and with other `ai_` primitives.
+- **Stamp & run.** The criterion is written onto each surviving row under the internal `ai_relevant`
+  stamp, and the executor rewrites `ai.relevant(n, '…')` in the executed query to a match against that
+  stamp, so it filters as ordinary data. It **composes** with real
+  predicates via `AND` (the date filter above) and with the other `ai.*` primitives.
 
 Use it **only** for a subjective *about / relevant-to* that maps to **no** shown property; for a concrete
 field, an ordinary `WHERE` is cheaper and exact.
 
-### 7.4 `ai_score` — the per-row rerank
+### 7.4 `ai.score` — the per-row rerank
 
 ```cypher
 MATCH (me:AssistantUser)-[:TRACKS]->(n:NewsItem)
 RETURN n.title, n.url
-ORDER BY ai_score(n, 'relevance to my Series A funding round') DESC
+ORDER BY ai.score(n, 'relevance to my Series A funding round') DESC
 LIMIT 5
 ```
 
@@ -825,23 +990,23 @@ retrieval lever, a learned relevance sort where no orderable property exists.
 **How it executes:**
 
 - **Fetch** as above.
-- **Judge — the same batched 0..1 scoring** as `ai_relevant` (the two share one judgment; a query using
+- **Judge — the same batched 0..1 scoring** as `ai.relevant` (the two share one judgment; a query using
   both scores once and both filters and ranks off it). Every row is **kept** and its score **stamped** under
-  `ai_score`.
-- **Rewrite & run.** Neo4j has no `ai_score` function, so the executor rewrites the call in the executed
+  the internal `ai_score` property.
+- **Rewrite & run.** Neo4j has no `ai.score` function, so the executor rewrites the call in the executed
   query to `coalesce(n.ai_score, 0.0)` (0.0 for any row that wasn't scored), and `ORDER BY … DESC LIMIT k`
   ranks and truncates against the stamp.
 
-The idiomatic **filter-then-rank**: `WHERE n.ai_relevant = '…' … ORDER BY ai_score(n, '…') DESC LIMIT k` —
+The idiomatic **filter-then-rank**: `WHERE ai.relevant(n, '…') … ORDER BY ai.score(n, '…') DESC LIMIT k` —
 narrow to the relevant, then order the survivors by fit.
 
-### 7.5 `ai_classify` — the per-row projection
+### 7.5 `ai.classify` — the per-row projection
 
 ```cypher
 MATCH (me:AssistantUser)-[:TRACKS]->(n:NewsItem)
 RETURN n.title,
-       ai_classify(n, 'urgency: high, medium, or low')     AS urgency,
-       ai_classify(n, 'topic in one word')                 AS topic
+       ai.classify(n, 'urgency: high, medium, or low')     AS urgency,
+       ai.classify(n, 'topic in one word')                 AS topic
 ```
 
 **Means:** "return the fetched news, and *label* each item along a dimension there is no column for" — a
@@ -854,12 +1019,12 @@ computed, LLM-decided category rather than a stored field.
   (if the dimension lists categories, the label is one of them; otherwise a short free label). Every row is
   **kept** and its label **stamped** under a **per-dimension slug property** (`ai_classify_urgency…`), so two
   classifications in one `RETURN` never collide.
-- **Rewrite & run.** As with `ai_score`, the executor rewrites each `ai_classify(n, '…')` in the executed
+- **Rewrite & run.** As with `ai.score`, the executor rewrites each `ai.classify(n, '…')` in the executed
   query to `coalesce(n.ai_classify_<slug>, '')` (blank for any unlabelled row), and the projection returns it.
 
 Use it **only** for a subjective label no property holds; when a real field already carries the value, return
 that. (It is a *projection*, not a filter — to keep only one category, classify and then `WHERE label = '…'`,
-or use `ai_relevant` directly.)
+or use `ai.relevant` directly.)
 
 ### 7.6 Cost, determinism, and failure
 
@@ -901,7 +1066,7 @@ anyway. The concept splits cleanly:
   YAML surface, never a query. The `RETURN`-bearing body is standard Cypher, parsed by the real parser.
 
 ```yaml
-# config/views/key-accounts.yml — durable/shared, like a virtual type today (a pack or workspace can ship it)
+# config/views/key-accounts.yml — durable/shared, like a virtual type today (a realm or world can ship it)
 - name: my_key_accounts
   materialized: false            # regular view — expands at query time
   outputLabel: HubSpotContact    # the type the view yields (its rows ARE this type)
@@ -1092,14 +1257,14 @@ rendered into the generator prompt:
 
 Mechanics:
 
-- **Attribution.** Each example is attributed to its type's schema *segment* (the pack's group, or
+- **Attribution.** Each example is attributed to its type's schema *segment* (the realm's group, or
   a host group like `email-topics`) and renders only when that segment does — under schema-relevance
   filtering an example loads exactly when the question needs its domain. Steering grows with the
   number of domains; per-question prompt cost stays flat.
 - **Connection gating.** Examples gate with the type's joins: a disconnected integration
   contributes neither schema nor steering.
 - **Placement rule.** An example lives on the type that OWNS the path it teaches. A bridge across
-  packs (thread → topic) is taught by the type that owns the *target* of the lesson.
+  realms (thread → topic) is taught by the type that owns the *target* of the lesson.
 
 Discipline (how these earn their place):
 

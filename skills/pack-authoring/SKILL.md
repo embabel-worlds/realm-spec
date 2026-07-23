@@ -1,13 +1,13 @@
 ---
-name: pack-authoring
-description: Author or extend an Embabel pack — a git repo of declarative capabilities (actions, types, APIs, virtual-join producers/RemoteRepositories, MCP servers, commands, webhooks, event sources, event handlers, skills, personalities, apps) that a host installs into a workspace. Activate for any request to create/build/scaffold/extend a pack, add a capability to a pack (a new action, type, API, producer, virtual join, verb, webhook, event source, event handler/reaction, skill, command), wire a new integration as a pack, or understand the pack format. The full contract is the spec at the repo root (README.md) — this skill is the map; read the named section before writing a file.
+name: realm-authoring
+description: Author or extend an Embabel realm — a git repo of declarative capabilities (actions, types, APIs, virtual-join producers/RemoteRepositories, MCP servers, commands, webhooks, event sources, event handlers, skills, personalities, apps) that a host installs into a world. Activate for any request to create/build/scaffold/extend a realm, add a capability to a realm (a new action, type, API, producer, virtual join, verb, webhook, event source, event handler/reaction, skill, command), wire a new integration as a realm, or understand the realm format. The full contract is the spec at the repo root (README.md) — this skill is the map; read the named section before writing a file.
 ---
 
-# Authoring an Embabel pack
+# Authoring an Embabel realm
 
-A pack is a **git repo** named `pack-*` containing only declarative files (YAML) and
+A realm is a **git repo** named `realm-*` containing only declarative files (YAML) and
 optional hand-authored TypeScript handlers — **no JVM bytecode, no host config, no user
-credentials**. The host clones it into a workspace and wires its contents in. The
+credentials**. The host clones it into a world and wires its contents in. The
 authoritative contract is `README.md` (the spec) in this repo; this skill routes you to
 the right section and flags the easy mistakes.
 
@@ -24,13 +24,13 @@ the right section and flags the easy mistakes.
 
 | Want to… | Directory | Spec section |
 |---|---|---|
-| metadata | `pack.yml` | "`pack.yml`" |
+| metadata | `realm.yml` | "`realm.yml`" |
 | an LLM step the planner chains | `actions/` (`stepType: action`) | "`actions/`" |
 | a deterministic rule over a signal | `actions/` (FQN `PolicyActionSpec`) | "Deterministic rules" |
 | a domain / signal / mirror type | `types/` | "`types/`" |
 | call an external REST/GraphQL API | `apis/` (+ vendored spec) | "`apis/`" (auth, OAuth2) |
 | fetch a type **on demand** by traversal | `types/` `virtualJoins:` + `producers/` | "Joining types on demand" (Virtual Cypher) |
-| query the graph from pack code (TS+Cypher) | `gateway.kg.query` in a handler/skill | "CypherScript" |
+| query the graph from realm code (TS+Cypher) | `gateway.kg.query` in a handler/skill | "CypherScript" |
 | hand-authored gateway methods / **verbs** | `src/api/*.ts` + `tests/` | "`src/` and `tests/`" |
 | an MCP server (last resort — prefer `apis/` for anything API-backed) | `mcp/` | "`mcp/`" |
 | a slash command | `commands/` | "`commands/`" |
@@ -63,13 +63,13 @@ back is **Virtual Cypher** — see "Virtual Cypher — the engine" under "Joinin
 - A literal-pinned anchor (`{login:'x'}` or `WHERE a.login='x'`) uses the real node if it
   exists, else seeds a named entity even when no such node exists, fetched with the
   connecting user's credentials.
-- **LLM query primitives (`ai_*`)** work over any virtual collection your producer fetches —
-  you declare nothing. A query author can `WHERE n.ai_relevant = '<subjective criterion>'`
-  (filter), `ORDER BY ai_score(n, '<criterion>') DESC` (rerank), or steer a *generative*
-  producer with an `ai_hint` edge property. The `ai_` prefix is **reserved** — never name a
-  stored property or producer field `ai_*`. See "LLM query primitives" in the Virtual Cypher spec.
+- **LLM query primitives (the `ai` namespace)** work over any virtual collection your producer fetches —
+  you declare nothing. A query author can `WHERE ai.relevant(n, '<subjective criterion>')`
+  (filter), `ORDER BY ai.score(n, '<criterion>') DESC` (rerank), or steer a *generative*
+  producer with an `{ai: {hint: '…'}}` edge directive map. The `ai` namespace is **reserved** — never name a
+  stored property or producer field `ai` or `ai_*`. See "LLM query primitives" in the Virtual Cypher spec.
 
-## CypherScript (querying the graph from pack code)
+## CypherScript (querying the graph from realm code)
 
 A handler / decoration / skill runs **CypherScript** in `code_mode`: TS/JS that interleaves
 `await gateway.kg.query({cypher, params})` (graph reads through Virtual Cypher — scoped,
@@ -87,21 +87,21 @@ and "Verbs on virtual types".
 ## Build, test, ship
 
 ```bash
-npm install && npm run typecheck && npm test && npm run build   # only if the pack has src/
+npm install && npm run typecheck && npm test && npm run build   # only if the realm has src/
 ```
 
 - `@embabel/runtime-types` gives `Entity`, `mockGateway`, `entityForTest`, `hydrate*`, and
   `embabel-build-manifest` (writes `dist/manifest.json`). Tests run hermetically in Node.
 - The host runs `npm install && npm run build` at install; `dist/` (incl. a vendored
-  runtime-types) is the shippable bundle. `embabel-pack sync` regenerates `.embabel/gateway.d.ts`.
+  runtime-types) is the shippable bundle. `embabel-realm sync` regenerates `.embabel/gateway.d.ts`.
 
 ## Hard rules (don't get these wrong)
 
-- **No secrets in the pack.** Reference them by env-var/credential-store name; OAuth client
+- **No secrets in the realm.** Reference them by env-var/credential-store name; OAuth client
   creds live in the host admin, never the repo.
 - **Descriptions are for an LLM planner** — write them as routing signal, not prose.
-- **Stable ids.** Renaming a `name` (pack/action/type/command) breaks every installed
-  workspace wired to it — that's a major version bump.
+- **Stable ids.** Renaming a `name` (realm/action/type/command) breaks every installed
+  world wired to it — that's a major version bump.
 - **`prompts/` is a tax on every turn** — keep it a one-line pointer; put real workflow
   guidance in a `skills/` SKILL.md (paid only when activated).
 - **Naming**: lowercase-hyphenated ids, UpperCamelCase type names.
