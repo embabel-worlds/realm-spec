@@ -881,6 +881,24 @@ realm is updated. One opening's arguments, focus, presentation, Watch snapshots 
 state remain in the world. An app should invoke a named Lens or view through the host's typed
 invocation surface; it should not accept or submit arbitrary Cypher or JavaScript from a browser.
 
+A CypherScript Lens may depend on a reusable **node view** by referencing the view name as a label
+inside `gateway.kg.query`, including an inline parameter map. View expansion happens before Virtual
+Cypher planning, so the view owns the composable graph selection while the Lens owns procedural
+classification and presentation. For example, a `DiseaseTrialRuns` view that returns one
+`TrialSearchRun` node can be consumed as:
+
+```javascript
+const result = await gateway.kg.query({
+  cypher: `MATCH (run:DiseaseTrialRuns {registryQuery:'Long COVID'})
+           MATCH (run)-[:RETURNED]->(trial:ClinicalTrial)
+           RETURN trial`,
+  params: JSON.stringify({}),
+});
+```
+
+Only identity-preserving node views compose this way. A tabular/projection view is terminal: invoke
+it directly through the named-view surface rather than using its name as a label in a larger query.
+
 ## `reference/`
 
 Reference (catalog / config) data a realm **brings into the KG** — the set of entities a realm's types describe that should exist regardless of what the user has done. Where `producers/` fetch data on demand and `populate` mirrors an external system, `reference/` seeds a fixed, realm-authored dataset: a controlled vocabulary, a lookup catalog, a set of well-known entities. Each `.yml` file in `reference/` is a list of records seeded (idempotently) into the KG on world load.
