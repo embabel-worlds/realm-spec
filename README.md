@@ -44,6 +44,8 @@ realm-name/
 │   └── my-reference.yml
 ├── views/                # Named Cypher views (YAML, optional) — appear in the console Views list
 │   └── my-views.yml
+├── lenses/               # Named focused experiences (YAML, optional) — CypherScript/fixed/anchor/module
+│   └── my-lens.yml
 ├── apis/                 # API entries (YAML)
 │   └── my-api.yml
 ├── src/                  # Hand-authored TypeScript handlers (optional)
@@ -814,7 +816,88 @@ for (const p of busy) {
 }
 ```
 
-`cypher` is your own query and `params` is a JSON **string** (bind values as `$name`; never string-concatenate). Reads and `gateway.ai.*` are always safe; guard every write with `if (!dryRun)` in a handler. The same model underlies host-side **lenses** (a stored CypherScript that opens a focused view), though lenses are authored in the world rather than shipped in a realm.
+`cypher` is your own query and `params` is a JSON **string** (bind values as `$name`; never string-concatenate). Reads and `gateway.ai.*` are always safe; guard every write with `if (!dryRun)` in a handler. The same model underlies **lenses**: stored, named CypherScript or typed programs that open focused views. A realm can ship reusable lenses in `lenses/`; a world can override them by id.
+
+## `lenses/`
+
+Named focused experiences a realm installs alongside its types, producers and apps. Each `.yml`
+file serializes one Lens. The host discovers world-authored lenses first and then installed-realm
+lenses; a world lens with the same `id` shadows the realm definition. This is the same precedence
+model as realm-bundled apps and lets a world customize an installed experience without modifying
+the realm repository.
+
+```yaml
+# lenses/account-health.yml
+id: account-health
+name: Account Health
+description: Live account health assembled from the CRM and support systems.
+params:
+  - name: accountId
+    type: STRING
+    label: Account
+    required: true
+spec:
+  kind: cypherscript
+  script: |
+    const accountId = String(lensArgs.accountId || "");
+    const result = await gateway.kg.query({
+      cypher: `MATCH (a:Account {accountId:$accountId})-[:HAS_TICKET]->(t:SupportTicket)
+               RETURN a.name AS account, collect(t) AS tickets`,
+      params: JSON.stringify({ accountId }),
+    });
+    const rows = (result && result.rows) ? result.rows : (result || []);
+    await gateway.lens.present({ content: JSON.stringify({
+      kind: "account-health",
+      rows,
+    }) });
+presentation:
+  href: /apps/account-health.html
+```
+
+Fields:
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | Yes | Stable lens id. A world override uses the same id. |
+| `name` | Yes | Human-readable name. |
+| `description` | No | Routing and catalogue description. |
+| `params` | No | Declared inputs. Types are `STRING`, `INT`, `DATE`, `DURATION`, or `BOOLEAN`; each parameter may declare `label`, `default`, and `required`. |
+| `spec` | Yes | Execution definition selected by `kind` (below). |
+| `persona` | No | Optional personality slug carried by the opened view. |
+| `schedule` | No | Optional cron expression for refresh/change handling. |
+| `presentation` | No | Optional top-level surface and/or app `href`. |
+
+Supported `spec.kind` values:
+
+| kind | Shape | Use |
+|---|---|---|
+| `cypherscript` | `script` | JavaScript/CypherScript that can combine Virtual Cypher, gateway integrations and bounded `gateway.ai.*` calls. |
+| `module` | `className`, plus inline `source` or sibling `module`; optional `presentKind`/`dataType` | A typed program Lens whose `retrieve()` returns focus plus structured data. |
+| `fixed` | `key`, optional `params` | A host-registered fixed query. |
+| `anchor` | `ref` | A typed graph-node anchor. |
+
+A realm-shipped Lens is code, not mutable per-user state: its definition is refreshed when the
+realm is updated. One opening's arguments, focus, presentation, Watch snapshots and other user
+state remain in the world. An app should invoke a named Lens or view through the host's typed
+invocation surface; it should not accept or submit arbitrary Cypher or JavaScript from a browser.
+
+A CypherScript Lens may depend on a reusable **node view** by referencing the view name as a label
+inside `gateway.kg.query`, including an inline parameter map. View expansion happens before Virtual
+Cypher planning, so the view owns the composable graph selection while the Lens owns procedural
+classification and presentation. For example, a `DiseaseTrialRuns` view that returns one
+`TrialSearchRun` node can be consumed as:
+
+```javascript
+const result = await gateway.kg.query({
+  cypher: `MATCH (run:DiseaseTrialRuns {registryQuery:'Long COVID'})
+           MATCH (run)-[:RETURNED]->(trial:ClinicalTrial)
+           RETURN trial`,
+  params: JSON.stringify({}),
+});
+```
+
+Only identity-preserving node views compose this way. A tabular/projection view is terminal: invoke
+it directly through the named-view surface rather than using its name as a label in a larger query.
 
 ## `reference/`
 
