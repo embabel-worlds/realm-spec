@@ -728,11 +728,16 @@ paging: { style: cursor, size: 100, maxPages: 10, cursorParam: after, cursorPath
 >
 > The failure is silent by construction, so verify rather than assume: check that page 2's records differ from page 1's before trusting a paged producer. A count that is suspiciously close to `size × maxPages` is the tell.
 
-> **A failed fetch and an empty collection look identical to the query.** When a producer errors — a timeout, a 500, a cancelled request — it logs a warning and contributes **zero records**, and the traversal simply materializes nothing. The Cypher above it cannot distinguish "the source says there is nothing here" from "we never found out", so a lens returns `0` either way and a surface renders it as a confident negative.
+> **A failed fetch produces zero rows — the `warnings` are what tell you it failed. NEVER discard them.** When a producer errors (a timeout, a 401, a cancelled request) it contributes **no records**, and the rows are then indistinguishable from a legitimately empty result. The engine does surface the failure: `gateway.kg.query` returns an **unconditional `{rows, warnings}` envelope**, and a fetch failure lands there as a diagnostic. A consumer that reads `result.rows` and ignores `result.warnings` throws away the only signal separating "the source says there is nothing here" from "we never found out", and renders a broken fetch as a confident negative.
 >
-> For most joins that is a tolerable degradation. For any question where **absence is the reassuring answer** — is anything being built near this address, are there recalls on this product, does this person have open issues — it is the dangerous direction, and a zero must not be presented as a finding without evidence the fetch actually succeeded. A realm carrying such a question should treat a zero as unproven until the producer's outcome is visible to it, and say so on the surface rather than showing an empty list.
+> ```javascript
+> const { rows, warnings } = await gateway.kg.query({ cypher, params });
+> // A zero count with a FETCH_FAILURE warning is NOT a finding — report it as incomplete.
+> ```
 >
-> This bites hardest on a paged walk of a slow or throttling source: latency climbs page over page and the request is cancelled part-way, so the fetch that failed is the one that would have taken longest — the large result set, not the empty one.
+> For most joins, silently degrading to zero is tolerable. For any question where **absence is the reassuring answer** — is anything being built near this address, are there recalls on this product, does this person have open issues — it is the dangerous direction: a zero must never be presented as a finding when a warning says the fetch did not complete. Withhold the derived figure rather than computing a rate over a failed fetch.
+>
+> This bites hardest on a paged walk of a slow or throttling source: latency climbs page over page until the request is cancelled part-way, so the fetch that fails is the one that would have returned the *most* data — the large result set, not the empty one.
 
 **Chunking (`maxKeysPerCall`).** Producers chunk the unioned anchor keys into batches of `maxKeysPerCall` — so a traversal over many anchors stays within the endpoint's limit and never becomes N+1. Set it to the endpoint's documented cap: a search `IN`/`OR` (query-length bound, ~50, the `api` default), a dedicated **bulk-by-ids** endpoint (HubSpot `/batch/read` 100, Jira `bulkfetch`), or a `$batch`/composite multiplex (Microsoft Graph 20, Salesforce 25). `sql` defaults to 500.
 
