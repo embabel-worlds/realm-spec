@@ -930,6 +930,118 @@ const result = await gateway.kg.query({
 Only identity-preserving node views compose this way. A tabular/projection view is terminal: invoke
 it directly through the named-view surface rather than using its name as a label in a larger query.
 
+## `sources.yml` — declaring how a COLLECTION behaves
+
+`producers/` say how to *fetch* records. `sources.yml` says what the collection *is*: how big, what it
+can be filtered by, what order it arrives in, how often it changes, and whether it should be mirrored
+at all. The platform cannot infer any of that, and getting it wrong is not a performance problem —
+it is a correctness one.
+
+The failure that motivated this: a register of ~426,000 planning applications, filterable only by
+council, **returned oldest-first with no sort option**. Reading it with a page cap looked prudent and
+was silently catastrophic — the records outside the cap were always the most RECENT ones, so a
+surface reporting "no application on this lot" was omitting exactly the applications a user was
+asking about. Nothing in a producer spec could have expressed that hazard.
+
+```yaml
+# sources.yml
+sources:
+  - name: nsw-planning-register
+    producer: applicationsByCouncil        # the producer that reads it
+    label: PlanningApplication             # the node label it materializes
+
+    shape: bounded                         # bounded | unbounded | per-key
+    cardinality: 426000                    # order of magnitude is enough
+    partition: council                     # the ONLY axis the source can filter
+    queriedBy: [address, street, lot, date, cost]   # axes users ask on and the source CANNOT filter
+    ordering: oldest-first                 # unordered | newest-first | oldest-first | irrelevant
+    updates: daily
+
+    sync:
+      strategy: mirror                     # mirror | lazy | live
+      trigger: on-first-use                # on-first-use | scheduled | manual
+      refresh: full-rewalk                 # incremental | full-rewalk
+      watermark: DateLastUpdated           # the field that dates a record
+      watermarkFilterable: false           # can the SOURCE filter on it? here: no
+
+    completeness:
+      declaredTotal: TotalCount            # response field giving the true size of a partition
+      aggregatesRequireComplete: true      # withhold derived statistics on partial coverage
+
+    visibility: public                     # public | org | private
+```
+
+### The fields that carry real weight
+
+**`ordering`.** The difference between a partial read being a *sample* and being a *lie*. An
+unordered source truncated at a cap gives you an arbitrary subset; an `oldest-first` source truncated
+at a cap gives you a subset that systematically excludes the present. Only the realm knows which.
+
+**`queriedBy` vs `partition`.** When users query on axes the source cannot filter, every question
+needs the whole partition, and partial fetching cannot be made safe by narrowing. This mismatch is
+the single best predictor that a collection wants `strategy: mirror` rather than `live`.
+
+**`watermarkFilterable`.** A record may CARRY a last-updated timestamp without the source being able
+to FILTER on it. The first permits incremental refresh; the second forces a full re-walk with a local
+diff. Assume the wrong one and a day of changes vanishes silently. Declare it.
+
+**`declaredTotal`.** Where the source states a partition's true size, completeness stops being an
+assumption and becomes checkable arithmetic.
+
+### `Coverage` — completeness is a fact in the graph, not a hope
+
+A mirrored source records what it actually holds, per partition:
+
+```
+(:Coverage:Public {
+   source:        'nsw-planning-register',
+   partition:     'Inner West Council',
+   declaredTotal: 12905,          // what the source says exists
+   ingested:      12905,          // what we hold
+   completeAsAt:  '2026-07-29T04:10:00Z',
+   status:        'COMPLETE'      // COMPLETE | PARTIAL | STALE | FAILED
+})
+```
+
+Because the engine already knows which labels a query touches, it can attach the matching coverage to
+every result through the **existing `{rows, warnings}` envelope** — no new plumbing, and no realm has
+to remember to do it. A street-level question carries *"Inner West complete as at 29 Jul"*; a
+statewide aggregate carries *"3 of 128 councils ingested — this is not a statewide figure"*.
+
+Two rules follow, and they are not the same rule:
+
+1. **Never block a query on coverage. Always qualify the answer.** Refusing is brittle and teaches
+   users to distrust the surface; qualifying composes and stays honest.
+2. **Withhold a DERIVED STATISTIC when coverage is inadequate.** An approval rate computed over
+   whichever partitions happen to be ingested is not a weak figure, it is a wrong one. This is the
+   same discipline as withholding a percentage over a tiny denominator — the denominator here is
+   partitions, not rows.
+
+**Coverage is what makes lazy ingestion safe.** Without it, every aggregate over a partially-mirrored
+source is quietly incorrect, and the surface cannot tell. With it, `on-first-use` ingestion is honest
+and a full statewide mirror becomes an optimisation rather than a correctness requirement — so build
+the coverage record BEFORE building any ingestion.
+
+### `visibility: public` — shared nodes, and why the scope differs from `reference/`
+
+Mirrored public data is identical for every user, so mirroring it per world duplicates it, re-crawls
+it per user, and lets each copy drift. Nodes from a `visibility: public` source therefore carry the
+**`Public`** label and the scope rewriter never scopes them — the same treatment as a REFERENCE
+taxonomy, for a very different kind of data.
+
+The distinction matters operationally even though the scoping is identical. A `reference/` vocabulary
+is a handful of curated nodes, seeded, static, safe to wipe and rebuild, small enough to project into
+a prompt. A mirrored public dataset is hundreds of thousands of rows with a refresh cycle, a staleness
+window, and an ingestion job as its only legitimate writer. Treating them as one thing invites a
+factory reset that deletes the register, or a schema projection that inlines it.
+
+Two hard rules:
+
+- **Only an ingestion job for a declared `visibility: public` source may write `Public` nodes.** No
+  user-facing path may create one, or the label becomes a cross-tenant write primitive.
+- **`Public` is opt-in per label and never inferred.** The rewriter's default stays fail-closed at
+  PRIVATE; an unregistered label is private, as it is today.
+
 ## `reference/`
 
 Reference (catalog / config) data a realm **brings into the KG** — the set of entities a realm's types describe that should exist regardless of what the user has done. Where `producers/` fetch data on demand and `populate` mirrors an external system, `reference/` seeds a fixed, realm-authored dataset: a controlled vocabulary, a lookup catalog, a set of well-known entities. Each `.yml` file in `reference/` is a list of records seeded (idempotently) into the KG on world load.
