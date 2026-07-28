@@ -378,6 +378,41 @@ property (its `email`/`id`), the two fetched records **MERGE into one transient 
 incoming edges — not two duplicate contacts. Any join that can fan in this way **requires** an
 identity property so convergent paths dedupe.
 
+### 3.13 One anchor, many keys — joining on a list-valued property
+
+A property that holds several values is several keys, not one. If a trial lists three collaborators,
+each is looked up in its own right:
+
+```cypher
+MATCH (t:ClinicalTrial)-[:COLLABORATES_WITH]->(c:CorporateEntity)
+WHERE t.nctId = 'NCT01234567'
+RETURN c.name, c.ultimateOwner
+```
+
+The join declares `keyField: collaborators`, and that property is a list. Blank and duplicate entries
+are dropped, so a name shared by two trials is fetched once — and because `CorporateEntity` declares an
+identity, both trials end up pointing at the *same* node. That is what makes counting possible: the
+question "which company appears across the most trials" only has an answer if one company is one node.
+
+### 3.14 Narrowing at the source — membership pushdown
+
+```cypher
+MATCH (s:DiseaseScope {registryQuery: 'Long COVID'})-[:HAS_TRIAL_SEARCH]->(r:TrialSearchRun)
+MATCH (r)-[:RETURNED]->(t:ClinicalTrial)
+WHERE t.overallStatus = 'RECRUITING' AND 'OLDER_ADULT' IN t.ageGroups
+RETURN t.nctId, t.title
+```
+
+Both conditions can reach the registry, so the fetch returns the trials that match instead of every
+trial for the disease. Nothing about the *result* depends on that: if the source could not apply
+either filter, the same rows would come back after filtering the materialized graph, and only the
+number of records fetched would differ.
+
+Note the direction of the membership test. `'OLDER_ADULT' IN t.ageGroups` asks whether the record's
+list contains a value; `t.overallStatus IN ['RECRUITING', 'COMPLETED']` asks whether the record's
+value is in a list *you* wrote. They are different questions, and only the first describes a
+list-valued property.
+
 ---
 
 ## Where to go next

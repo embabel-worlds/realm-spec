@@ -159,6 +159,14 @@ distinctions:
 - **bridge** (§3.2) — anchor is an external-identity node (`GitHubIdentity`, `HubSpotOwner`).
   Declared with a `resolve:` chain instead of a plain `keyField`.
 
+A `keyField` naming a **list-valued** property yields one key per element, not one key for the whole
+list. A trial's `collaborators` or `interventions` names several organizations or drugs, and each is
+looked up in its own right; blank and duplicate elements are dropped, so two anchors naming the same
+value fetch it once. A scalar property is unaffected — it yields exactly one key, as always.
+
+The same holds for a composite `producerKeyFields`: a list-valued member expands to one composite per
+element, and a member with no value keeps its slot so the composite's arity is fixed.
+
 ### 5.2 Identity bridges — `resolve:` chains
 
 A bridge links a canonical `Person`/`Organization` to an external identity for **any** person/org,
@@ -1047,6 +1055,16 @@ a bound that bites is **always surfaced**, never silent.
 - **`maxFanoutTotal`** (default 5 000) — reject if materialization would create more nodes than
   this (primary + brought).
 
+**Predicate pushdown, and what it does *not* change:** a producer may declare rules mapping query
+predicates on its target to the source's own query language, so a `WHERE` scopes the fetch at the
+source instead of after it. Equality, ranges, `CONTAINS`, and **membership in a list-valued
+property** (`'OLDER_ADULT' IN t.ageGroups`) are all pushable when a rule exists for them.
+
+The guarantee is that **pushdown changes cost and never rows**. Anything a source cannot answer is
+still applied to the materialized graph, so the same query returns the same rows whether it was
+pushed or not; only the number of records fetched differs. A value that does not fit the rule's
+declared shape is left to the graph rather than embedded in a source query it would corrupt.
+
 **Cost (per producer):** a `cost:` block declares the source's shared **rate bucket** and limit.
 The planner budgets producer calls against it and, when a query can't fit, emits `EXPLAIN`-style
 **advice** (push a predicate, add a `LIMIT`, narrow the anchor) rather than silently over-calling.
@@ -1060,6 +1078,7 @@ is classified and surfaced as a warning on the result:
 | `PRODUCER_ERROR` (`FETCH_FAILURE`) | a timeout, a missing gateway tool, a non-auth error | the source could **not** be reached — *not* "no data". Fix the integration. |
 | `PRODUCER_ERROR` (`AUTH_EXPIRED`) | a 401 / "token expired" / `EXPIRED_AUTHENTICATION` | the OAuth token has **expired** — reconnect to refresh. The empty result is because the source rejected the call. |
 | `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page | the fetch **succeeded but is incomplete** — the source has more. Narrow the query or raise the cap. *Not* a failure. |
+| `UNKNOWN_VIA` | an edge pinned `{via:'…'}` that no declared join offers | the rows are **real but came from a different join** than the one named. The query still answers — a via that does not exist must not cost a good answer — and the warning lists the vias that do exist so it can be re-issued. Matters most where several joins converge on one label, since the substitution is otherwise invisible. |
 
 A failed fetch is **never cached** as an empty result (so a later call with a refreshed token finds
 the data); only a genuine, successful "no records" is cacheable.

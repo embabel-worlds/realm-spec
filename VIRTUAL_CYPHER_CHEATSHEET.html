@@ -173,6 +173,30 @@ keyTransform:
       <div class="rule must"><b>true</b><span>Cached per phrase, echoed so it can be shown, and falls back verbatim on failure.</span></div>
     </section>
 
+    <section data-tags="declare producers keys lists">
+      <h2>List-valued join keys</h2>
+      <p class="lede">A <code>keyField</code> holding several values is several keys — one lookup each.</p>
+      <pre><code>keyField: collaborators   # ["Acme", "Beta Institute"]
+recordKeyField: name      # → two fetches, two edges</code></pre>
+      <div class="rule must"><b>true</b><span>Blanks and duplicates are dropped, so the same value is fetched once however many anchors name it.</span></div>
+      <div class="rule must"><b>must</b><span>The target needs an <code>identity</code> property, or convergent paths won't dedupe and every count is inflated.</span></div>
+    </section>
+
+    <section data-tags="pushdown filters cost">
+      <h2>Pushdown — narrowing at the source</h2>
+      <p class="lede">Declared rules turn a <code>WHERE</code> into the source's own query language.</p>
+      <pre><code>pushdown:
+  - property: overallStatus
+    op: EQUALS
+    qualifier: "AREA[OverallStatus]{value}"
+    valuePattern: "^([A-Z_]+)$"
+  - property: ageGroups        # 'OLDER_ADULT' IN t.ageGroups
+    op: HAS_MEMBER
+    qualifier: "AREA[StdAge]{value}"</code></pre>
+      <div class="rule must"><b>true</b><span>Pushdown changes <b>cost, never rows</b> — anything unpushed is still filtered graph-side.</span></div>
+      <div class="rule care"><b>care</b><span><code>'X' IN n.list</code> tests the record's list; <code>n.prop IN [...]</code> tests against a list you wrote. Different questions.</span></div>
+    </section>
+
     <section data-tags="cache">
       <h2>Caching</h2>
       <table>
