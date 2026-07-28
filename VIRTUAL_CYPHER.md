@@ -670,7 +670,7 @@ cache key — and can never clobber the engine's reserved template variables (`a
 
 ```cypher
 MATCH (me:AssistantUser)-[:TRACKS]->(n:NewsItem)
-WHERE ai.relevant(n, 'about my company''s Series A funding round')
+WHERE ai.relevant(n, 'about my company\'s Series A funding round')
   AND n.published > date() - duration('P7D')
 RETURN n.title, n.url
 ```
@@ -780,7 +780,7 @@ RETURN summarize(n.description, 'what is newest and most important') AS digest
 | `themes(text [, focus] [, count])` | list | the recurring cross-item topics (labels only) |
 | `cluster(text [, k])` | list of maps | semantic groups, each with a COUNTED size and examples |
 | `score(text, rubric)` | number 0–1 | one terminal ordinal judgment of the whole group |
-| `holds(text, claim)` | boolean or null | a three-valued verdict on a claim |
+| `holds(text, question)` | boolean or null | a three-valued verdict on a claim |
 | `relevant(text, criterion)` | list | only the items matching a subjective criterion |
 | `argmax(key, text, criterion)` | winner payload | the best candidate under a comparative rubric |
 
@@ -788,6 +788,60 @@ RETURN summarize(n.description, 'what is newest and most important') AS digest
 query, so its cell can be RETURNED but can never feed the same query's `WHERE`, `ORDER BY`, `UNWIND`,
 a later `WITH`/`MATCH`, or another aggregation. `ORDER BY score(...)` orders by the lists Neo4j saw
 before finalize — silently wrong, never write it.
+
+#### What the arguments mean
+
+Every signature above splits its arguments the same way, and getting the split wrong is the most
+common authoring error:
+
+- **The leading `text` is a ROW EXPRESSION, accumulated** — `n.description`, `n.title + ' — ' + n.body`,
+  `coalesce(n.a, n.b)`: anything Cypher can evaluate per row. It is gathered across the group exactly
+  as `collect()` gathers, so ONE cell is produced per group, not one per row. A quoted literal in this
+  position is rejected: it would reduce the same constant N times.
+- **`argmax` accumulates TWO row expressions** — `argmax(key, text, criterion)` collects `key` (what
+  identifies the winner: a filename, a title, a name) and `text` (what is judged) together, so the
+  answer can say WHICH item won and not merely what the winning text said. Every other function in the
+  table accumulates exactly one.
+- **Every argument after the accumulated ones is a LITERAL string** — the instruction, goal, labels,
+  what, focus, rubric, criterion, question. A row expression there is not evaluated per row (there is
+  nothing to evaluate it against once the group is reduced), so write the words themselves.
+- **Optional arguments are POSITIONAL but type-disambiguated.** `themes(text [, focus] [, count])`
+  reads a NUMERIC argument as the topic count and a string as the focus, in whichever order they
+  arrive — `themes(n.title, 5)` and `themes(n.title, 'risks', 5)` both mean what they look like.
+  `cluster(text [, k])` takes a number only.
+- **`classify` labels are a single comma-separated string** — `classify(n.body, 'positive,neutral,negative')`,
+  not three arguments and not a list. The set is CLOSED: the answer is always one of the labels given.
+- **An honest miss is a value, not an error.** When the accumulated text does not contain what the
+  instruction asks about — a group of document TITLES asked for a profit figure — a grounded reduction
+  returns the exact sentence *"The provided items do not contain this information."* rather than
+  inventing one. Treat that sentence as "no answer", never as the answer.
+
+#### Steering ONE call — the trailing `{ai: {…}}` map
+
+An aggregation may carry the same `{ai: {…}}` map as a virtual edge (§7.2), as its LAST argument. It
+is steering, not data: stripped before the query runs, never part of the aggregated text.
+
+```cypher
+MATCH (t:ResearchTopic {name:'retrieval augmented generation'})-[:HAS_NEWS]->(n:NewsItem)
+RETURN summarize(n.description, 'what is newest', {ai: {model:'chat_cheap', voice:'brisk', wordcount: 40}}) AS digest
+```
+
+Which keys are honoured depends on what the function returns — a list, a label, a number or a boolean
+has no voice and no word count:
+
+| Key | Applies to | Effect |
+|---|---|---|
+| `model` | EVERY aggregation | the world ROLE the reduction runs on; an unknown role falls back to the default, with a warning, never a failure |
+| `temperature` | EVERY aggregation | sampling temperature layered on that role |
+| `hint` | the PROSE reductions (`summarize`, `synthesize`) | a soft steer added alongside the instruction — never a filter, and never able to override grounding |
+| `voice` | the PROSE reductions | register/style ("second person, warm") |
+| `wordcount` | the PROSE reductions | a target length — a prompt-level target, never a mid-sentence cut |
+
+`confidence`, `fresh` and `materialize` are EDGE keys (a generative floor, a producer's cache) and an
+aggregation has neither, so they are rejected here rather than accepted and ignored. A prose key on a
+non-prose function, an unknown key, and a `{realm: {…}}` map are all rejected the same way: warned
+about, never silently inert. Because a map is a value the map cannot be confused with an instruction —
+`summarize(n.body, {ai: {voice:'noir'}})` steers, it does not summarize toward the word "noir".
 
 #### `cluster` — groups with sizes you can trust
 
