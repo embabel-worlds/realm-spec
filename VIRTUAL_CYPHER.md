@@ -736,6 +736,54 @@ projections when the caller wants the records rather than a report about them.
 
 ---
 
+### 5.7 `keyTransform` — rewriting the key into the source's own query language
+
+A source's query language is a property of the **source**, not of any question asked of it. Put the
+knowledge in a lens and every lens re-implements it; declare it on the producer and every surface —
+lenses, chat, MCP — gets the same translation, with no code shipped by the realm.
+
+ClinicalTrials.gov reads `AND` / `OR` / `NOT` as operators only in UPPERCASE. So `parkinsons and
+anxiety` returns 2 trials where `Parkinson AND anxiety` returns 64, and `respiratory diseases other
+than covid` returns 0 where a `NOT` expression returns 51,961. The danger is the shape of the
+failure: a plausible number rather than an error, with a confident answer built on top of it.
+
+```yaml
+- name: trialsByDisease
+  kind: remote
+  operation: searchByDisease
+  keyArg: queries
+  echoKeyAs: matchedFor          # REQUIRED with a transform — see "identity" below
+  keyTransform:
+    kind: ai
+    instruction: |
+      Rewrite a disease phrase as a ClinicalTrials.gov Essie expression.
+      AND / OR / NOT are operators and MUST be uppercase; quote multi-word phrases.
+    examples:                    # few-shot pairs YOU author: the cheapest way to pin a dialect
+      - input: "parkinsons and anxiety"
+        output: '(Parkinson Disease OR Parkinsonism) AND (Anxiety OR "Anxiety Disorders")'
+    cacheSeconds: 604800
+```
+
+**Identity is never rewritten.** The transform applies to the outgoing argument only; the key's
+identity — what the join matches on, and what `echoKeyAs` stamps onto each record — stays the
+caller's phrase. Get this wrong and the failure is silent: if your records echo the *sent* string,
+they no longer match the anchor's `keyField`, the join edge never forms, and every row vanishes while
+the query still reports success. **A producer that declares `keyTransform` must also declare
+`echoKeyAs`** (or otherwise guarantee its records carry the original key).
+
+Three rules keep it honest, and none is optional:
+
+- **Cached per phrase**, so the same question searches the same way instead of being re-rolled.
+- **Echoed**, so the executed expression can be shown and challenged. Surface it — a rewrite a user
+  cannot see is one they cannot argue with.
+- **Falls back verbatim** on any failure, to the behaviour you had before, never to an empty result
+  that would read as "there is nothing".
+
+The cost to accept: a model now sits in the key path, so a fetch is no longer purely determined by
+the query text. The cache and the echo are what make that auditable.
+
+---
+
 ## 6. Vector edges — semantic joins in depth
 
 A `vector` producer is fundamentally different from the keyed kinds, and the difference is worth
@@ -1036,6 +1084,67 @@ before judging. They **fail open**: an LLM error scores the affected rows 1.0 (k
 hiccup never silently *hides* results — it degrades to "no judgment applied", visible and safe. Reach for
 them only when the discriminator is genuinely subjective; a property, an embedding (§6), or a real predicate
 is always cheaper and more repeatable.
+
+---
+
+### 7.7 Aggregations — reduce a whole GROUP to one cell
+
+The primitives above judge rows one at a time. An **aggregation** goes the other way: it reduces the
+group a traversal produced to a single cell, as the model sibling of `count()` / `collect()`. Neo4j's
+implicit GROUP-BY supplies the grouping for free — `RETURN topic.name, summarize(n.description)`
+yields one digest per topic.
+
+```cypher
+MATCH (t:ResearchTopic {name:'retrieval augmented generation'})-[:HAS_NEWS]->(n:NewsItem)
+RETURN summarize(n.description, 'what is newest and most important') AS digest
+```
+
+| Function | Returns | Reduces a group to… |
+|---|---|---|
+| `summarize(text [, instruction])` | prose | a neutral overview |
+| `synthesize(text, goal)` | prose | a goal-directed answer (argues toward `goal`) |
+| `classify(text, labels)` | one label | exactly one label from the closed set `'a,b,c'` |
+| `extract(text, what)` | list | the distinct things asked for (deduped) |
+| `themes(text [, focus] [, count])` | list | the recurring cross-item topics (labels only) |
+| `cluster(text [, k])` | list of maps | semantic groups, each with a COUNTED size and examples |
+| `score(text, rubric)` | number 0–1 | one terminal ordinal judgment of the whole group |
+| `holds(text, claim)` | boolean or null | a three-valued verdict on a claim |
+| `relevant(text, criterion)` | list | only the items matching a subjective criterion |
+| `argmax(key, text, criterion)` | winner payload | the best candidate under a comparative rubric |
+
+**Terminal means terminal.** An aggregation is finalized AFTER Neo4j has executed and ordered the
+query, so its cell can be RETURNED but can never feed the same query's `WHERE`, `ORDER BY`, `UNWIND`,
+a later `WITH`/`MATCH`, or another aggregation. `ORDER BY score(...)` orders by the lists Neo4j saw
+before finalize — silently wrong, never write it.
+
+#### `cluster` — groups with sizes you can trust
+
+`cluster` returns one entry per group — `{label, size, share, examples}` — where `examples` are the
+most typical members of that group.
+
+Its cost does not grow with the size of the group the way the others do: every other function in the
+table is priced per batch of rows, so a few hundred items can exceed a lens's time budget, while
+`cluster` stays flat. Reach for it on large groups.
+
+```cypher
+MATCH (scope:DiseaseScope {registryQuery:'insomnia'})-[:HAS_TRIAL_SEARCH]->(run:TrialSearchRun)
+MATCH (run)-[:RETURNED]->(trial:ClinicalTrial)
+RETURN cluster(trial.title, 6) AS clusters
+```
+
+Three properties follow, and they are the reason to prefer it when membership matters:
+
+- **The sizes are counted, not estimated.** `size` is arithmetic over the rows the traversal returned.
+  Every other function can describe a group but cannot say how big it is — a model asked for a count
+  guesses. This is the difference between a claim and a number.
+- **It is deterministic.** The same rows always yield the same clusters and the same sizes, run after
+  run — so a page built on it does not move underfoot when re-read.
+- **It degrades rather than fails.** If a group cannot be named, it still returns with its size and
+  examples: the grouping is true whether or not anything named it.
+
+Being a list of maps, `clusters[0].size` is addressable — which is what lets a surface make a cluster
+filter the rows it came from. Prefer `themes` when only the recurring topics matter and membership
+does not; prefer `cluster` for "what groups are in these, and how big is each".
 
 ---
 
