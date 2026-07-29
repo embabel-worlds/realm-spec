@@ -1083,6 +1083,30 @@ is classified and surfaced as a warning on the result:
 A failed fetch is **never cached** as an empty result (so a later call with a refreshed token finds
 the data); only a genuine, successful "no records" is cacheable.
 
+**When an answer takes longer than the asker will wait.** A cold traversal can legitimately run for
+minutes, which is longer than many callers will hold a connection open. A caller may therefore give
+a **patience budget** with its query. If the answer arrives inside that budget it is returned
+normally and the budget is invisible. If it does not, the result comes back as a **run reference**
+instead: an id, a state, and the addresses at which the run can be polled, stopped, or answered.
+
+The guarantees:
+
+- **Empty rows beside a run reference mean *not yet*, never *no data*.** A warning always
+  accompanies them saying so. This is the one misreading that matters, because "no rows" and "no
+  answer yet" look identical to a consumer that only reads rows.
+- **The work is not abandoned when the caller stops waiting.** The same run continues, and its
+  answer is collectable afterwards through the reference.
+- **A run belongs to whoever started it** and is invisible to everyone else.
+- **Waiting and watching return the same rows.** A patience budget changes only who waits, never
+  what the query answers.
+- **An over-budget-COST query still asks before it spends.** Where the cost gate would refuse a
+  query outright, a watching caller instead receives a run in a *waiting* state carrying the
+  question and its options; nothing is materialized until it is answered, and an unanswered
+  question expires on its own rather than holding resources.
+
+A caller that offers no budget is unaffected: the query runs to completion or to the execution
+ceiling, exactly as before.
+
 ---
 
 ## 10. Steering the generator — type-level `examples:`
