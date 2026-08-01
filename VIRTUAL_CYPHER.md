@@ -208,6 +208,7 @@ is on GitHub" doesn't re-storm the source.
 | `aggregate` | gathers the anchor's connected neighborhood and LLM-**reduces** it to ONE record (a taste summary, a digest) | the anchor's identity; one record per anchor |
 | `extract` | gathers the anchor's neighborhood and **extracts a LIST of typed records** from it — lazy ENTITIES, committed with real containment on first traversal (§5.6) | the anchor key (per-anchor collect); many records per anchor |
 | `tabular` | a published **CSV / TSV / XLSX file**, downloaded lazily, cached deployment-wide, and joined on one of its COLUMNS (§5.8) | the value of `keyColumn`, compared to the anchor key under `keyMatch` |
+| `feed` | an RSS/Atom **search feed** — one search per anchor key, each item a record; optionally FOLLOWING each item's page for phrase-anchored excerpts (§5.10) | the anchor key, substituted into the feed URL |
 
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
 `cache:` policy (`none` / `ttl` / `session` / `immutable`, plus `graph` for aggregates and
@@ -491,6 +492,7 @@ producers:
     keyColumn: "ABN"
     keyMatch: digits          # exact (default) | ci | digits
     keyAs: abn                # the join's recordKeyField
+    rowIdAs: recordKey        # OPTIONAL synthesized per-row id — see below
     userAgent: browser        # some publishers 403 a bare client
     fileCacheSeconds: 21600
     maxRows: 200000
@@ -523,6 +525,19 @@ producers:
 - **A `keyColumn` that is not a column of the file is reported**, listing the columns that were
   found. Publishers rename columns; a realm that goes stale must fail visibly rather than return
   zero rows forever.
+
+**`rowIdAs` — for registers whose rows carry no identifier.** A materialized record MUST carry the
+target type's identity property; one that doesn't is DROPPED — silently, because a register with no
+usable id then produces nothing at all while every fetch log says it matched. Many published
+registers have no per-row id (the NDIS compliance CSV's Provider Number is blank on 98% of rows).
+`rowIdAs: recordKey` stamps a deterministic `<normalized key>:<ordinal>` id, and the type declares
+that property as its identity. It is honest about what it is: a ROW POSITION within one file
+version, not a source identity — stable enough for transient virtual rows, and not a key to store
+or compare across file versions.
+
+**Date tokens carry a FORMAT.** Report URLs use the publisher's own date format, not ISO:
+`{today-90d|date:dd-MMM-yyyy}` renders `03-May-2026`. Without the format suffix a token is ISO
+(`{today}`, `{today-7d}`).
 
 **Costs and limits**
 
@@ -580,6 +595,20 @@ and stamps every record back to the CALLER's key.
   shared day once; each caller's records carry its own key.
 - **Progress is per sub-range** — a long scan ticks "day 18 of 61" on the events stream instead
   of an unmoving spinner.
+
+**`emptyErrorPatterns` — when a source says "no records" through an HTTP error.** Some APIs answer
+an empty range with a failure status rather than an empty list (AusTender returns HTTP 400
+`"No Records found for Date Range"`). Partitioning turns that from a rare edge case into a
+CONSTANT one — every quiet weekend is an empty day — and a warning storm buries the real
+diagnostics. Declaring the patterns on the producer maps a matching failure to an honest empty
+page: no diagnostic, no retry, no breaker; the walk simply ends there.
+
+```yaml
+  emptyErrorPatterns: ["No Records found"]     # substring, case-insensitive
+```
+
+Declare it ONLY for text that unambiguously means zero results. Anything broader converts real
+failures into silent empties — the exact deception the rest of this spec exists to prevent.
 
 **Costs and rules**
 
@@ -645,6 +674,39 @@ engine enforces ceilings a spec may tighten but never exceed, rejected at LOAD t
 a fixed byte cap on every response (5MB); fixed connect/read timeouts; sequential fetching with
 a **pace floor of 500ms** between requests (`minIntervalMs` may slow a producer, never speed it
 past the floor). A feed source is someone's search endpoint, not a bulk API.
+
+### 5.11 Enumerated anchors — `WHERE anchor.key IN [...]`
+
+A virtual anchor is normally pinned to ONE value (`(q:IntegrityQuery {abn:'…'})`). The BATCH form
+is an enumerated `IN` over literals, and it behaves identically — one anchor per value:
+
+```cypher
+MATCH (q:IntegrityQuery)-[:HAS_TAX_RECORD]->(x:TaxRecord)
+WHERE q.abn IN ['31010545267', '29008423005', '46221314841']
+RETURN q.abn, x.name, x.taxPayable
+```
+
+This is the shape every screening question takes — *these twenty suppliers against that register* —
+and it fetches ONCE for the batch (the producer's batch contract), not once per value.
+
+**Guarantees**
+
+- **Each value is probed for a REAL node first**, exactly as a pinned anchor is; only values with
+  no real node are minted as virtual anchors. A mixed list works.
+- **Duplicates collapse**: one anchor per distinct value.
+- **It composes with the rest of the WHERE.** An `IN` combined with other conditions by `AND` still
+  seeds (this matters more than it looks: scope conditions are ANDed onto every query, so an
+  enumerated anchor is essentially always inside a compound).
+
+**What does NOT seed, and why**
+
+- **A parameter list** — `WHERE q.abn IN $abns`. There is nothing to enumerate when the query is
+  read, so nothing is minted and the traversal yields no rows. **Inline the literals** when the
+  anchors are virtual. (A `$param` list is fine for filtering nodes that already exist.)
+- **An `OR` alternative** — `WHERE q.abn IN [...] OR q.abn IN [...]`. One branch of a disjunction
+  must not enumerate the whole anchor set.
+- **The mirror form** — `WHERE 'X' IN n.someList` narrows a node by list membership; it is a
+  filter, not an enumeration of identities.
 
 ## 6. Vector edges — semantic joins in depth
 
