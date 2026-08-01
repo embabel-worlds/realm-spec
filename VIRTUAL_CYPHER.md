@@ -593,6 +593,48 @@ and stamps every record back to the CALLER's key.
   day; a firehose by hour; a sparse register by month. `maxPages` then only has to cover the
   busiest single unit.
 
+### 5.10 `feed` — an RSS/Atom feed as a keyed source
+
+Some sources publish no JSON API — they publish a **search feed** (ParlInfo's Hansard search,
+media-release feeds, gazettes). A `feed` producer makes one a join target: each anchor key becomes
+one search, each feed item one record (`title`, `url`, `publishedAt`, `summary`), stamped with the
+key under `keyAs`.
+
+```yaml
+- name: estimatesMentions
+  kind: feed
+  url: 'https://parlinfo.aph.gov.au/parlInfo/feeds/rss.w3p;query=Dataset:estimate Content:"{key}"'
+  redirectMeansEmpty: true      # this source signals ZERO RESULTS with a redirect
+  keyAs: searchPhrase
+  maxItems: 8
+  minIntervalMs: 1000
+  cache: { kind: ttl, seconds: 3600, negativeTtlSeconds: 3600 }
+```
+
+**URL template.** `{key}` is the whole anchor key, percent-encoded. Composite keys split on `|`
+into `{key1}`..`{key9}`, and a part can carry a DATE FORMAT: `{key2|date:dd/MM/yyyy}` parses that
+part as an ISO date/instant and renders it in the source's own format — so a date-ranged search
+(`Date:{key2|date:dd/MM/yyyy} >> {key3|date:dd/MM/yyyy}`) is first-class, never string-smuggled.
+A non-ISO date part fails that key loudly rather than searching for garbage.
+
+**Guarantees**
+
+- **`publishedAt` is an ISO instant whenever the feed's date parses** (RFC-1123 with numeric
+  offsets included); an unparseable date passes through raw rather than being dropped.
+- **`redirectMeansEmpty: true` maps a redirect to an HONEST EMPTY**, never a failure and never a
+  followed link — for sources that signal "no results" by redirecting to an error page. Without
+  it, redirects are followed normally.
+- **Every failure is a diagnostic plus zero rows** — an unreachable feed, a non-XML body, an HTTP
+  error can never read as "no mentions".
+- **A capped read says so** — hitting `maxItems` reports a truncation.
+
+**A rogue realm cannot consume ridiculous resources — by construction, not by convention.** The
+engine enforces ceilings a spec may tighten but never exceed, rejected at LOAD time:
+`maxItems` ≤ 200; at most **25 anchor keys per fetch** (the excess is dropped and REPORTED);
+a fixed byte cap on every response (5MB); fixed connect/read timeouts; sequential fetching with
+a **pace floor of 500ms** between requests (`minIntervalMs` may slow a producer, never speed it
+past the floor). A feed source is someone's search endpoint, not a bulk API.
+
 ## 6. Vector edges — semantic joins in depth
 
 A `vector` producer is fundamentally different from the keyed kinds, and the difference is worth
