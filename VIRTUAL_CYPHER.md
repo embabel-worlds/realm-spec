@@ -167,6 +167,14 @@ value fetch it once. A scalar property is unaffected — it yields exactly one k
 The same holds for a composite `producerKeyFields`: a list-valued member expands to one composite per
 element, and a member with no value keeps its slot so the composite's arity is fixed.
 
+A type name may be declared by more than one realm, and the declarations **merge**: every
+declaration's `virtualJoins` accumulate onto the one type, while its shape — properties, including
+the `identity: true` merge key — may live in any one of them. This is how a domain realm contributes
+its own edge into a type another realm owns: it re-declares the name with only `virtualJoins`, and
+those joins converge on the owning realm's identity. Identical join declarations collapse, so a
+re-declared file never double-fetches; and the requirement that a type reachable by more than one
+join carry an identity property is judged over the merged type, not each declaration alone.
+
 ### 5.2 Identity bridges — `resolve:` chains
 
 A bridge links a canonical `Person`/`Organization` to an external identity for **any** person/org,
@@ -199,6 +207,7 @@ is on GitHub" doesn't re-storm the source.
 | `generative` | an LLM **invents** plausible records ("suggest things like X"), each resolved onto the spine via `resolveVia`; demand-driven (re-probes with a growing exclusion until enough survive) | the anchor's name/text, batched into ONE prompt |
 | `aggregate` | gathers the anchor's connected neighborhood and LLM-**reduces** it to ONE record (a taste summary, a digest) | the anchor's identity; one record per anchor |
 | `extract` | gathers the anchor's neighborhood and **extracts a LIST of typed records** from it — lazy ENTITIES, committed with real containment on first traversal (§5.6) | the anchor key (per-anchor collect); many records per anchor |
+| `tabular` | a published **CSV / TSV / XLSX file**, downloaded lazily, cached deployment-wide, and joined on one of its COLUMNS (§5.8) | the value of `keyColumn`, compared to the anchor key under `keyMatch` |
 
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
 `cache:` policy (`none` / `ttl` / `session` / `immutable`, plus `graph` for aggregates and
@@ -463,6 +472,126 @@ The cost to accept: a model now sits in the key path, so a fetch is no longer pu
 the query text. The cache and the echo are what make that auditable.
 
 ---
+
+### 5.8 `tabular` — a published file as a joinable source
+
+A large part of the open-data estate publishes no API. It publishes a **file**: a CSV, a
+tab-delimited export named `.csv`, an XLSX with a provenance banner above the real header. A
+`tabular` producer makes that file a first-class join target — the realm declares WHERE the table
+is and WHICH column joins, and nothing else.
+
+```yaml
+producers:
+  - name: paymentTimesByAbn
+    kind: tabular
+    url: "https://example.test/register/{today}-report.xlsx"
+    format: auto              # csv | tsv | xlsx | auto (default: sniff extension, then bytes)
+    sheet: "Standard report"  # xlsx only; omit for the first sheet
+    headerRow: auto           # or a 1-based row number
+    keyColumn: "ABN"
+    keyMatch: digits          # exact (default) | ci | digits
+    keyAs: abn                # the join's recordKeyField
+    userAgent: browser        # some publishers 403 a bare client
+    fileCacheSeconds: 21600
+    maxRows: 200000
+    maxRowsPerKey: 500
+    project:
+      businessName: "Business Name"
+      paidWithinTerms: "% paid within terms"
+```
+
+**Guarantees**
+
+- **Nothing is downloaded until a query traverses the edge.** Declaring a 200MB register costs
+  nothing; a query that never reaches it never pays for it.
+- **One copy per deployment, not per world or per key.** The file is cached by resolved URL and
+  revalidated conditionally, so an unchanged register is not re-transferred. A batch of anchor
+  keys reads one file.
+- **A banner above the header does not become the schema.** With `headerRow: auto` (the default)
+  the header is detected by column shape, so the "Generated on …" lines these exports carry are
+  skipped rather than parsed as column names.
+- **The same rows always yield the same records.** Detection, matching and projection are
+  deterministic; no model is involved anywhere in this producer.
+- **`keyMatch: digits` reconciles the four ways an identifier is published** — spaced, unspaced,
+  as an integer, and as a float (`12345678901.0`). It is opt-in: `exact` never reconciles
+  silently, so a realm chooses when identifier forms may be treated as equal.
+- **A capped read says so.** Hitting `maxRows` is reported as a truncation warning — the rows
+  returned are a prefix of the file, never presented as all of it.
+- **A publisher outage does not become a factual claim.** If the download fails and a cached copy
+  exists, the cached copy is served and the staleness reported. If none exists, the hop returns no
+  rows *with a diagnostic* — never a silent empty that reads as "no such record".
+- **A `keyColumn` that is not a column of the file is reported**, listing the columns that were
+  found. Publishers rename columns; a realm that goes stale must fail visibly rather than return
+  zero rows forever.
+
+**Costs and limits**
+
+- `maxRows` bounds the parse; `maxRowsPerKey` bounds how much one popular key may contribute.
+  Both are honest caps, both are reported.
+- `url` accepts two substitutions: `{today}` / `{today-Nd}` for the date-stamped filenames these
+  publishers use, and `{key}` — which makes the producer **one download per anchor**, appropriate
+  only for a genuine per-entity export.
+- Every value is a **string**. A leading-zero identifier survives; arithmetic is the query's job.
+- Omitting `keyColumn` returns the whole table for every key. Legitimate for a small catalogue,
+  wrong for anything large.
+
+**When NOT to use it.** A file that changes on a feed cadence and is small and static enough to
+enumerate is still not reference data — but a source with a real API is better served by `remote`,
+which can push predicates down to the server instead of filtering a downloaded file.
+
+### 5.9 Range partitioning — `partition:` on a `remote` producer
+
+A producer whose anchor key is a DATE RANGE (`<fromInstant>/<toInstant>`, ISO instants) meets a
+hard limit on sources that cap one request: the page cap. A two-month window against a feed that
+returns newest-first and caps at `maxPages * size` records silently yields the newest slice — a
+result that LOOKS like a recent window, which is worse than an error. `partition:` fixes this at
+the source declaration:
+
+```yaml
+- name: releasesPublishedInWindow
+  kind: remote
+  keyArgs: [from, to]
+  echoKeyAs: publishedWindow        # REQUIRED with partition (see below)
+  paging: { style: cursor, ..., maxPages: 12 }
+  partition: { unit: day, maxUnits: 366 }
+```
+
+The engine splits each range key into per-`unit` sub-ranges (UTC-aligned; `hour` | `day` | `week`
+| `month`), fetches each sub-range as its own request — **each with its own `maxPages` budget** —
+and stamps every record back to the CALLER's key.
+
+**Guarantees**
+
+- **Nothing about queries changes.** The same `MATCH` on the same window key returns the same
+  shape — just complete. The expansion is invisible to the join, the cache, and the query;
+  records always link to the key the caller wrote, never to an engine-minted sub-range.
+- **Union of parts = whole.** Sub-ranges tile the window exactly (contiguous, half-open, the
+  caller's own `from`/`to` at the edges). A record a source returns on both sides of a boundary
+  (inclusive-bounds sources) is deduplicated.
+- **A key that is not a range — or spans a single unit — is fetched AS-IS.** Declaring
+  `partition:` never adds calls to a small request, and a mixed batch (an id and a window)
+  behaves.
+- **Truncation is per sub-range and NAMED.** A day that still caps reports "truncated … for key
+  '2026-06-30…/2026-07-01…'" — the caller knows which slice to re-ask, and every other day stays
+  complete. COMPLETE now means "every sub-range exhausted its feed", a claim with a proof.
+- **`maxUnits` is a backstop, not a result-shaper.** A range expanding past it keeps the MOST
+  RECENT `maxUnits` sub-ranges and reports the uncovered head by name — loudly, never silently.
+- **Overlapping ranges share sub-fetches.** Two windows in one batch that share days fetch each
+  shared day once; each caller's records carry its own key.
+- **Progress is per sub-range** — a long scan ticks "day 18 of 61" on the events stream instead
+  of an unmoving spinner.
+
+**Costs and rules**
+
+- `partition` requires `echoKeyAs`: sub-fetches ask the source with keys the caller never wrote,
+  so the source cannot echo the caller's key — the stamp is the only honest link. A spec without
+  it fails at load time.
+- A complete broad scan makes MORE calls (one-plus per unit) and takes proportionally longer.
+  The producer's declared `cost.rate` paces them; pair broad scans with a watched/background
+  invocation rather than a bigger client timeout.
+- The realm picks `unit` from the source's real volume: a feed of hundreds/day partitions by
+  day; a firehose by hour; a sparse register by month. `maxPages` then only has to cover the
+  busiest single unit.
 
 ## 6. Vector edges — semantic joins in depth
 
