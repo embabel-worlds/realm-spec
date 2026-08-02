@@ -1036,6 +1036,26 @@ RETURN summarize(n.description, 'what is newest and most important') AS digest
 | `relevant(text, criterion)` | list | only the items matching a subjective criterion |
 | `argmax(key, text, criterion)` | winner payload | the best candidate under a comparative rubric |
 
+**Ingested document content is aggregable.** When the accumulated row expression is an ingested
+document's `content` (or `text`) — `holds(d.content, '…')`, `summarize(d.text, '…')` on a matched
+`Document` — the aggregation reads the document's FULL ingested text, not a stored node property.
+The same document always yields the same text; a document whose text was never ingested contributes
+nothing. Cost scales with document length (the reduction is chunked internally), so prefer a
+narrower match when the question targets one section. Cached document summaries remain available
+and cheaper, but can omit specific findings; content is the exhaustive surface.
+
+**A reduction with nothing to reduce says so.** When the accumulated expression is empty for a group
+— no rows matched, or the property carries no values — the cell is an `UNAVAILABLE:` sentinel, never
+a fabricated verdict or digest, and ask surfaces report the result as an honest miss rather than an
+answer. An empty LIST accumulates as empty: `collect()` of zero rows never manufactures evidence.
+
+**`holds` judges the claim as written.** Every specific the claim itself states (a year, a figure, a
+name) must be supported by the evidence, or the verdict is `null` (UNKNOWN) — qualifiers the claim
+does not state are assumed enforced by the query's own filters. Risk or possibility language in the
+evidence ("may be present", "high risk of") never supports TRUE. A verdict of `false` requires
+evidence that addresses the claim and answers no; material that does not bear on the claim cannot
+veto such a grounded no, and if NOTHING bears on it the verdict is `null`, never a confident no.
+
 **Terminal means terminal.** An aggregation is finalized AFTER Neo4j has executed and ordered the
 query, so its cell can be RETURNED but can never feed the same query's `WHERE`, `ORDER BY`, `UNWIND`,
 a later `WITH`/`MATCH`, or another aggregation. `ORDER BY score(...)` orders by the lists Neo4j saw
