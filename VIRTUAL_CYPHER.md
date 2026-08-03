@@ -207,7 +207,7 @@ is on GitHub" doesn't re-storm the source.
 | `generative` | an LLM **invents** plausible records ("suggest things like X"), each resolved onto the spine via `resolveVia`; demand-driven (re-probes with a growing exclusion until enough survive) | the anchor's name/text, batched into ONE prompt |
 | `aggregate` | gathers the anchor's connected neighborhood and LLM-**reduces** it to ONE record (a taste summary, a digest) | the anchor's identity; one record per anchor |
 | `extract` | gathers the anchor's neighborhood and **extracts a LIST of typed records** from it — lazy ENTITIES, committed with real containment on first traversal (§5.6) | the anchor key (per-anchor collect); many records per anchor |
-| `tabular` | a published **CSV / TSV / XLSX file**, downloaded lazily, cached deployment-wide, and joined on one of its COLUMNS (§5.8) | the value of `keyColumn`, compared to the anchor key under `keyMatch` |
+| `tabular` | a published **CSV / TSV / XLSX / XML file** (optionally a zip of XML parts), downloaded lazily, cached deployment-wide, and joined on one of its COLUMNS (§5.8) | the value of `keyColumn`, compared to the anchor key under `keyMatch` |
 | `feed` | an RSS/Atom **search feed** — one search per anchor key, each item a record; optionally FOLLOWING each item's page for phrase-anchored excerpts (§5.10) | the anchor key, substituted into the feed URL |
 
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
@@ -486,7 +486,7 @@ producers:
   - name: paymentTimesByAbn
     kind: tabular
     url: "https://example.test/register/{today}-report.xlsx"
-    format: auto              # csv | tsv | xlsx | auto (default: sniff extension, then bytes)
+    format: auto              # csv | tsv | xlsx | xml | auto (default: sniff extension, then bytes)
     sheet: "Standard report"  # xlsx only; omit for the first sheet
     headerRow: auto           # or a 1-based row number
     keyColumn: "ABN"
@@ -537,18 +537,58 @@ or compare across file versions.
 
 **Date tokens carry a FORMAT.** Report URLs use the publisher's own date format, not ISO:
 `{today-90d|date:dd-MMM-yyyy}` renders `03-May-2026`. Without the format suffix a token is ISO
-(`{today}`, `{today-7d}`).
+(`{today}`, `{today-7d}`). A `|`-separated composite anchor key can safely fill multiple report
+parameters: `{key1|date:dd-MMM-yyyy}` and `{key2|date:dd-MMM-yyyy}` render the two ISO key parts
+in the publisher's date format. Numbered parts are URL-encoded; malformed dates fail loudly.
 
 **Costs and limits**
 
 - `maxRows` bounds the parse; `maxRowsPerKey` bounds how much one popular key may contribute.
   Both are honest caps, both are reported.
-- `url` accepts two substitutions: `{today}` / `{today-Nd}` for the date-stamped filenames these
-  publishers use, and `{key}` — which makes the producer **one download per anchor**, appropriate
-  only for a genuine per-entity export.
+- `url` accepts `{today}` / `{today-Nd}` for date-stamped filenames, and `{key}` or numbered
+  composite parts `{key1}`..`{key9}` — any key token makes the producer **one download per
+  anchor**, appropriate only for a genuine per-entity or per-window export.
 - Every value is a **string**. A leading-zero identifier survives; arithmetic is the query's job.
 - Omitting `keyColumn` returns the whole table for every key. Legitimate for a small catalogue,
   wrong for anything large.
+
+**XML registers — `format: xml` + `recordElement`.** Some registers publish structured XML rather
+than a table (the ABN Bulk Extract). Declaring `format: xml` requires `recordElement`, the element
+that delimits ONE record; the declaration is rejected at load without it. Columns are then
+**slash-joined paths relative to that element**, with `@attr` for attributes:
+
+```yaml
+  - name: abrByAbn
+    kind: tabular
+    format: xml
+    recordElement: ABR
+    url: "https://example.test/public_split_1_10.zip"
+    urls:
+      - "https://example.test/public_split_11_20.zip"
+    keyColumn: "ABN"
+    keyMatch: digits
+    project:
+      abnStatus: "ABN@status"                                    # attribute of a child element
+      legalName: "MainEntity/NonIndividualName/NonIndividualNameText"
+      otherNames: "OtherEntity/NonIndividualName/NonIndividualNameText"
+      lastUpdated: "@recordLastUpdatedDate"                      # attribute of the record element itself
+```
+
+- A path that **repeats** within one record (trading names) yields ALL its values joined with
+  ` | ` — no occurrence is silently dropped.
+- A path absent from a record is **absent** from that record, never blank-filled.
+- An `xml` file that is a **zip container** is read entry by entry (`.xml` members, in name
+  order) as one logical file. The parse streams throughout: file size is bounded by `maxRows`,
+  never by memory.
+- `keyColumn` is a path like any other; `keyMatch` applies unchanged.
+
+**`urls` — one register split across several files.** A register published as multiple files (the
+ABN Bulk Extract is two ~500MB zips) is declared as ONE producer: `url` plus additional `urls`.
+Every anchor key is matched against every file and the results concatenated — so a key found only
+in the second file can never read as absent. Each file is fetched and cached independently,
+deployment-wide, and any URL may carry the usual tokens. Two producers over the halves would force
+every consumer to remember the union; forgetting it would silently halve the register, which is
+why the split lives in the producer, not in queries.
 
 **When NOT to use it.** A file that changes on a feed cadence and is small and static enough to
 enumerate is still not reference data — but a source with a real API is better served by `remote`,
@@ -1048,6 +1088,13 @@ and cheaper, but can omit specific findings; content is the exhaustive surface.
 — no rows matched, or the property carries no values — the cell is an `UNAVAILABLE:` sentinel, never
 a fabricated verdict or digest, and ask surfaces report the result as an honest miss rather than an
 answer. An empty LIST accumulates as empty: `collect()` of zero rows never manufactures evidence.
+
+**A verdict about a NAMED thing requires the name in the corpus.** When a `holds` verdict is
+anchored through document relevance, the seed's words must appear together somewhere in the
+corpus text. A seed that appears nowhere (an address, a name, an identifier the documents never
+mention) yields an honest not-in-graph miss that names the seed — never a verdict judged against
+whatever document happened to be semantically nearest. Topical reductions (summaries, filters,
+themes) keep full semantic reach: aboutness without the literal words remains their contract.
 
 **`holds` judges the claim as written.** Every specific the claim itself states (a year, a figure, a
 name) must be supported by the evidence, or the verdict is `null` (UNKNOWN) — qualifiers the claim
