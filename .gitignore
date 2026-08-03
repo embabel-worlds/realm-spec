@@ -2,3 +2,5 @@
 .idea/
 *.iml
 .vscode/
+__pycache__/
+*.py[cod]
