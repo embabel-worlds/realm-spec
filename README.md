@@ -1140,11 +1140,7 @@ Token-env and `${VAR}` values are resolved in this order: world credential store
 
 ### OAuth2
 
-<<<<<<< HEAD
 For providers that use the OAuth2 authorization-code flow (HubSpot, Slack, Salesforce, GitHub, Google, etc.). The pack ships only the **provider facts** (URLs, scopes, identity introspection). Per-deployment client app credentials live in the host's **org vault**, keyed by provider name — **never in the pack repo and never in any user's workspace**. (The host admin file `oauth-apps.yml` is retired; credentials are no longer read from disk.)
-=======
-For providers that use the OAuth2 authorization-code flow (HubSpot, Slack, Salesforce, GitHub, Google, etc.). The realm ships only the **provider facts** (URLs, scopes, identity introspection). Per-installation client app credentials live in the host admin file `oauth-apps.yml` — **never in the realm repo and never in any user's world**.
->>>>>>> origin/main
 
 ```yaml
 # realm-hubspot/apis/apis.yml
@@ -1173,11 +1169,7 @@ For providers that use the OAuth2 authorization-code flow (HubSpot, Slack, Sales
 | `auth-url` | yes | Provider's authorize endpoint. |
 | `token-url` | yes | Provider's token endpoint. |
 | `scopes` | usually | Space-separated scope list. |
-<<<<<<< HEAD
 | `client-id` / `client-secret` | NO in published packs | Power-user fallback only — accepts `${VAR}` interpolation. **Production setups put these in the host's org vault** (or an individual user's wallet, which takes precedence) so the pack stays public and credential-free. |
-=======
-| `client-id` / `client-secret` | NO in published realms | Power-user fallback only — accepts `${VAR}` interpolation. **Production setups put these in the host admin's `oauth-apps.yml`** so the realm stays public and credential-free. |
->>>>>>> origin/main
 | `identity` | optional | Introspection block — see below. Without it the connect flow still completes, but the UI shows a generic label instead of the real account. |
 
 **`identity:` block — provider-agnostic introspection**
@@ -1226,7 +1218,6 @@ PUT /api/v1/admin/org-vault/provider/hubspot
 
 The provider name (`hubspot`, `slack`, …) matches the `name:` field of the matching `apis.yml` entry.
 
-<<<<<<< HEAD
 Two properties a pack author can rely on:
 
 - **Nothing is read from the filesystem.** The old `admin/oauth-apps.yml` and its per-workspace override are retired, so a pack must never instruct an operator to write credentials to a file.
@@ -1236,14 +1227,6 @@ Two properties a pack author can rely on:
 1. The user's own **wallet** (per-user override — encrypted and self-service, replacing the retired per-workspace file)
 2. The deployment's **org vault** (the default everyone gets)
 3. `${VAR}` from the pack's `oauth2.client-id` / `client-secret` (escape hatch for power users)
-=======
-A world can override the installation default by writing the same shape to `<world>/config/oauth-apps.yml` — useful when one team needs its own provider app under its own brand.
-
-**Lookup order** for client_id / client_secret:
-1. `<world>/config/oauth-apps.yml` (per-world override)
-2. Host admin `oauth-apps.yml` (installation default)
-3. `${VAR}` from the realm's `oauth2.client-id` / `client-secret` (escape hatch for power users)
->>>>>>> origin/main
 
 If none resolve, the provider's status reports `not-configured` and Authorize returns an actionable error message instead of silently failing.
 
