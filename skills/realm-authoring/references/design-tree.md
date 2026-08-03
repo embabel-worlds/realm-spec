@@ -1,111 +1,61 @@
-# Realm creation design tree
+# Session 1 frontier: product and sources
 
-Use this as a frontier map, not a questionnaire. Ask only decisions whose prerequisites are settled. Investigate facts before presenting a decision. After the first new realm is created with this workflow, simplify or extend this map only where actual use shows a gap.
+Use this reference only during Session 1. Settle product decisions first, then establish the source facts needed to support them.
 
-## 1. Product
+## 1. Product decisions
 
-Settle before source or architecture choices:
+Settle:
 
-- Who is the user, and what job are they trying to do?
-- Which concrete questions must the realm answer?
-- What is the smallest valuable promise?
-- Which tempting questions are explicit non-goals?
-- What language would overstate or characterize the evidence?
-- What must a user be able to inspect behind every answer?
+- who the user is and what job they are trying to do;
+- which concrete questions the realm must answer;
+- the **first useful answer**, phrased plainly: “If the first version did only one useful thing, what single question must it answer?”;
+- tempting questions that remain explicit non-goals;
+- language that would overstate, characterize, or invent certainty;
+- the evidence and uncertainty a user must be able to inspect.
 
-Completion: each promised question has an example input, expected answer shape, and explicit boundary.
+For every promised question, record:
 
-## 2. Sources
+- one example input;
+- expected answer shape;
+- explicit boundary;
+- evidence needed to distinguish an empty answer from partial or failed retrieval.
 
-For every promised question, establish with dated evidence:
+Completion: the first useful answer is one bounded question, and every broader promised question has an example, answer shape, and boundary.
 
-- authoritative source, publisher, licence or usage rights;
+## 2. Source facts
+
+For every promised question, establish an **evidence ledger** containing:
+
+- authoritative source and publisher;
+- licence, usage-rights evidence, or a clearly labelled owner attestation;
 - public, credentialed, paid, or restricted access;
-- endpoint/file shape and stable identifiers;
-- supported query axes versus axes users need;
-- filtering behavior, including whether unknown filters are ignored;
-- paging, caps, ordering, declared totals, and truncation signals;
+- endpoint or file shape and stable identifiers;
+- supported query axes compared with the axes the product needs;
+- filtering behavior, including a measured unknown-filter result;
+- default and maximum page sizes, ordering, declared totals, caps, and truncation signals;
+- proof that adjacent pages advance and filtered retrieval narrows;
 - update cadence, corrections, deletion, and historical coverage;
 - rate limits, retries, timeouts, and failure representations;
-- fields needed for provenance and links back to records;
-- privacy, personal-data, and redistribution constraints.
+- fields required for provenance and links back to source records;
+- privacy, personal-data, retention, and redistribution constraints;
+- evidence level: live probe, executable contract test, source inspection, documentation, or owner attestation;
+- date, exact source revision, reproducible command, observed result, and remaining uncertainty.
 
-Use focused executable probes for assumptions that change correctness, completeness, or architecture. Compare filtered/unfiltered calls and adjacent pages rather than trusting documentation alone.
+Prefer focused executable probes for facts that affect correctness, completeness, or later architecture. Compare filtered and unfiltered calls and adjacent pages. A reproducible command identifies the tested revision and constructs or verifies a clean checkout; a mutable local path alone is not reproducible evidence.
 
-Completion: every product question is supported by a measured access path, or is narrowed/rejected.
+When production access is unavailable, use executable local contract tests where they measure the same source behavior and label deployment behavior unmeasured. A correctness-critical unmeasured fact remains on the frontier until the product is narrowed, a different source path is chosen, or the user explicitly accepts the documented operational risk as a decision.
 
-## 3. Domain and graph
+Completion: every product question has a measured access path, or has been narrowed or rejected; every correctness-critical uncertainty is visible and dispositioned; every evidence command is revision-stable and safe to rerun.
 
-Decide:
+## Session procedure
 
-- anchor labels and keys;
-- target types, identity properties, and collision risks;
-- relationships and traversal direction;
-- exact, bounded, inferred, and unknown values;
-- source records versus canonical entities;
-- joins that are identifier-based versus candidate/name/geographic matches;
-- provenance attached to nodes, edges, and rendered answers;
-- public versus user-private data and user anchoring.
+Use the source investigator and adversarial reviewer required by `SKILL.md`. Source findings establish measured constraints and viable candidates; graph topology, producer strategy, surfaces, caching, and other architecture choices remain Session 2 decisions.
 
-Completion: every product question can be written as a traversal without inventing identity or certainty.
+When both completion criteria pass, present the shared understanding and proposed writes. Create only after explicit approval:
 
-## 4. Retrieval and collection contracts
+- `PRODUCT.md` — user, concrete answerable questions, first useful answer, boundaries, and non-goals;
+- `SOURCE-FINDINGS.md` — dated reproducible evidence, evidence level, rights basis, access, limits, uncertainties, and realm-spec commit.
 
-For each collection, decide:
+List contradictions in candidate README or ADR documents before approval. Ask whether each should be marked superseded in this phase; change only those included in the approved writes.
 
-- live, mirrored, reference-seeded, generated, or another current spec-supported strategy;
-- producer kind and operation;
-- per-key versus batch behavior;
-- predicate pushdown and proof that it narrows;
-- pagination and proof that pages advance;
-- projection, coercion, and missing-field behavior;
-- cache and refresh behavior;
-- cost/rate bucket and fan-out limits;
-- identity and deduplication;
-- source-contract shape, partition, ordering, visibility, and completeness;
-- how failure differs from a genuine empty result.
-
-Completion: each traversal has a bounded execution strategy and an honest partial/failure state.
-
-## 5. User surface
-
-Choose only surfaces needed by the product questions:
-
-- composable named views;
-- lenses for procedural or focused experiences;
-- skills for on-demand usage guidance;
-- apps for interactive presentation;
-- actions, events, handlers, commands, or personalities when the product actually calls for them.
-
-For every surface, define drill-down to evidence, warnings, empty states, and unavailable states.
-
-Completion: each promised question has one primary route and no competing ceremonial surface.
-
-## 6. Trust and operations
-
-Decide:
-
-- credential names and host-managed configuration;
-- secret handling and redaction;
-- retry policy based on measured behavior;
-- licensing and attribution shown to users;
-- privacy and retention boundaries;
-- prohibited characterizations and required qualifications;
-- deployment prerequisites and source outages;
-- observability for partial reads, stale data, and failed fetches.
-
-Completion: the realm can fail without turning uncertainty into a confident claim.
-
-## 7. Implementation and validation
-
-Plan:
-
-- the thinnest end-to-end slice;
-- later slices, one bounded capability at a time;
-- fixture and projection tests;
-- executable source probes;
-- host shape/contract tests;
-- app or UI tests when applicable;
-- adversarial review and release checks.
-
-Completion: every slice has a checkable result and the first slice proves the architecture rather than merely scaffolding it.
+Pass the file gate from `SKILL.md`, report the exact Session 2 invocation, and stop.
