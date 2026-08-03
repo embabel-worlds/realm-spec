@@ -1,0 +1,287 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Virtual Cypher — Cheat Sheet</title>
+<style>
+  :root{
+    --ink:#0f1c22; --ink2:#3d5560; --muted:#6b8089; --line:rgba(15,28,34,.13);
+    --paper:#fbfaf7; --card:#fff; --teal:#0d8a76; --teal-soft:rgba(13,138,118,.09);
+    --warn:#a8541c; --bad:#a12d2d; --code:#f3f5f4;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{ --ink:#e9eeec; --ink2:#b6c4c6; --muted:#8ba0a4; --line:rgba(233,238,236,.14);
+           --paper:#0e1618; --card:#141f22; --teal:#4fc9b0; --teal-soft:rgba(79,201,176,.12);
+           --warn:#e0a06a; --bad:#e58585; --code:#101a1d; }
+  }
+  :root[data-theme="dark"]{ --ink:#e9eeec; --ink2:#b6c4c6; --muted:#8ba0a4; --line:rgba(233,238,236,.14);
+           --paper:#0e1618; --card:#141f22; --teal:#4fc9b0; --teal-soft:rgba(79,201,176,.12);
+           --warn:#e0a06a; --bad:#e58585; --code:#101a1d; }
+  :root[data-theme="light"]{ --ink:#0f1c22; --ink2:#3d5560; --muted:#6b8089; --line:rgba(15,28,34,.13);
+           --paper:#fbfaf7; --card:#fff; --teal:#0d8a76; --teal-soft:rgba(13,138,118,.09);
+           --warn:#a8541c; --bad:#a12d2d; --code:#f3f5f4; }
+
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);
+    font:15px/1.5 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
+  code,pre{font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace}
+  header{position:sticky;top:0;z-index:5;background:var(--paper);border-bottom:1px solid var(--line);
+    padding:14px 20px;display:flex;gap:16px;align-items:center;flex-wrap:wrap}
+  h1{font-size:17px;margin:0;letter-spacing:-.01em}
+  h1 small{display:block;font-weight:400;font-size:12px;color:var(--muted);letter-spacing:0}
+  .search{flex:1;min-width:220px;display:flex;align-items:center;gap:8px;
+    border:1px solid var(--line);border-radius:9px;background:var(--card);padding:7px 11px}
+  .search input{border:0;outline:0;background:none;color:var(--ink);font-size:14px;width:100%}
+  .search kbd{border:1px solid var(--line);border-radius:5px;padding:1px 5px;font-size:11px;color:var(--muted)}
+  .filters{display:flex;gap:6px;flex-wrap:wrap}
+  .chip{border:1px solid var(--line);background:var(--card);color:var(--ink2);border-radius:999px;
+    padding:5px 11px;font-size:12px;cursor:pointer}
+  .chip[aria-pressed="true"]{background:var(--teal);border-color:var(--teal);color:#fff}
+  main{padding:20px;max-width:1180px;margin:0 auto}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px;align-items:start}
+  section{background:var(--card);border:1px solid var(--line);border-radius:13px;padding:15px 17px}
+  section h2{font-size:13px;margin:0 0 4px;text-transform:uppercase;letter-spacing:.07em;color:var(--teal)}
+  section p.lede{margin:0 0 11px;color:var(--muted);font-size:12.5px}
+  pre{background:var(--code);border:1px solid var(--line);border-radius:9px;padding:11px 12px;
+    overflow-x:auto;font-size:12.5px;margin:9px 0;position:relative}
+  .copy{position:absolute;top:6px;right:6px;border:1px solid var(--line);background:var(--card);
+    color:var(--muted);border-radius:6px;font-size:10.5px;padding:2px 7px;cursor:pointer;opacity:0;transition:opacity .12s}
+  pre:hover .copy,.copy:focus{opacity:1}
+  table{width:100%;border-collapse:collapse;font-size:13px;margin-top:6px;display:block;overflow-x:auto}
+  th,td{text-align:left;padding:6px 9px 6px 0;border-bottom:1px solid var(--line);vertical-align:top}
+  th{font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--muted);font-weight:600}
+  td code{background:var(--teal-soft);border-radius:4px;padding:1px 5px;font-size:12px;white-space:nowrap}
+  .rule{display:flex;gap:9px;margin:9px 0;font-size:13px}
+  .rule b{flex:0 0 auto;font-size:11px;text-transform:uppercase;letter-spacing:.05em;padding:1px 7px;
+    border-radius:5px;height:fit-content}
+  .must b{background:var(--teal-soft);color:var(--teal)}
+  .never b{background:rgba(161,45,45,.12);color:var(--bad)}
+  .care b{background:rgba(168,84,28,.13);color:var(--warn)}
+  .empty{display:none;color:var(--muted);padding:26px 4px;font-size:14px}
+  footer{max-width:1180px;margin:0 auto;padding:8px 20px 40px;color:var(--muted);font-size:12px}
+  a{color:var(--teal)}
+</style>
+</head>
+<body>
+<header>
+  <h1>Virtual Cypher <small>cheat sheet · the spec is the authority</small></h1>
+  <label class="search">
+    <input id="q" type="search" placeholder="Filter — try &quot;reject&quot;, &quot;cluster&quot;, &quot;cache&quot;" aria-label="Filter the cheat sheet">
+    <kbd>/</kbd>
+  </label>
+  <div class="filters" id="filters" role="group" aria-label="Filter by topic"></div>
+</header>
+
+<main>
+  <div class="grid" id="grid">
+
+    <section data-tags="basics query">
+      <h2>The shape of a query</h2>
+      <p class="lede">Ordinary Cypher. A virtual label is reached by traversing to it from something already bound.</p>
+      <pre><code>MATCH (me:AssistantUser)-[:HAS_GITHUB]-&gt;(g:GitHubIdentity)
+MATCH (g)-[:RAISED]-&gt;(i:GitHubIssue)
+WHERE i.state = 'open'
+RETURN i.title, i.repository
+LIMIT 20</code></pre>
+      <div class="rule must"><b>must</b><span>Bind an anchor first — a real node, or one pinned by its identity.</span></div>
+      <div class="rule never"><b>never</b><span><code>MATCH (i:GitHubIssue) RETURN i</code> — a naked virtual scan has nothing to fetch from.</span></div>
+    </section>
+
+    <section data-tags="reject errors">
+      <h2>Why a query is refused</h2>
+      <p class="lede">Refusals happen before anything runs, and always say which alias is at fault.</p>
+      <table>
+        <tr><th>Refusal</th><th>What it means</th></tr>
+        <tr><td>Naked virtual scan</td><td>The label was matched bare, with no anchor to fetch it for.</td></tr>
+        <tr><td>Unbound anchor</td><td>The anchor exists but nothing narrows it — it would fetch for everyone.</td></tr>
+        <tr><td>Too many anchors</td><td>The probe bound more than <code>maxAnchors</code> (default 200).</td></tr>
+        <tr><td>Fan-out too large</td><td>Materialization would exceed <code>maxFanoutTotal</code> (default 5 000).</td></tr>
+      </table>
+      <div class="rule care"><b>fix</b><span>Pin the anchor, push a predicate to the source, or add a <code>LIMIT</code>.</span></div>
+    </section>
+
+    <section data-tags="aggregations llm cluster">
+      <h2>Aggregations — a group → one cell</h2>
+      <p class="lede">Neo4j's grouping supplies the group; the function reduces it.</p>
+      <table>
+        <tr><th>Function</th><th>Returns</th></tr>
+        <tr><td><code>summarize(text[, instruction])</code></td><td>prose overview</td></tr>
+        <tr><td><code>synthesize(text, goal)</code></td><td>prose, argued toward a goal</td></tr>
+        <tr><td><code>classify(text, 'a,b,c')</code></td><td>one label from the set</td></tr>
+        <tr><td><code>extract(text, what)</code></td><td>list of distinct things</td></tr>
+        <tr><td><code>themes(text[, focus][, n])</code></td><td>recurring topics (labels only)</td></tr>
+        <tr><td><code>cluster(text[, k])</code></td><td>groups with <b>counted</b> sizes + examples</td></tr>
+        <tr><td><code>score(text, rubric)</code></td><td>one number 0–1</td></tr>
+        <tr><td><code>holds(text, claim)</code></td><td>true / false / null</td></tr>
+        <tr><td><code>relevant(text, criterion)</code></td><td>only the matching items</td></tr>
+        <tr><td><code>argmax(key, text, criterion)</code></td><td>the winner</td></tr>
+      </table>
+      <div class="rule never"><b>never</b><span><code>ORDER BY score(...)</code> — an aggregation is finalized after ordering, so it cannot be ordered by.</span></div>
+    </section>
+
+    <section data-tags="cluster aggregations llm">
+      <h2>cluster — groups you can count</h2>
+      <p class="lede">Returns <code>{label, size, share, examples}</code> per group. Its cost does not grow per batch the way the other reductions do, so it suits large groups.</p>
+      <pre><code>MATCH (s:DiseaseScope {registryQuery:'insomnia'})-[:HAS_TRIAL_SEARCH]-&gt;(r:TrialSearchRun)
+MATCH (r)-[:RETURNED]-&gt;(t:ClinicalTrial)
+RETURN cluster(t.title, 6) AS clusters</code></pre>
+      <div class="rule must"><b>true</b><span><code>size</code> is a count of the rows, not a model's estimate.</span></div>
+      <div class="rule must"><b>true</b><span>Same rows → same groups, every run.</span></div>
+      <div class="rule care"><b>pick</b><span><code>themes</code> when membership doesn't matter; <code>cluster</code> when "how many" does.</span></div>
+    </section>
+
+    <section data-tags="llm rows ai">
+      <h2>Per-row judgement — the <code>ai</code> namespace</h2>
+      <p class="lede">Judges rows the query already fetched. Reserved: never a stored property.</p>
+      <table>
+        <tr><th>Position</th><th>Call</th></tr>
+        <tr><td>filter</td><td><code>WHERE ai.relevant(n, '…')</code></td></tr>
+        <tr><td>rerank</td><td><code>ORDER BY ai.score(n, '…') DESC</code></td></tr>
+        <tr><td>label</td><td><code>RETURN ai.classify(n, '…')</code></td></tr>
+        <tr><td>steer a fetch</td><td><code>{ai: {hint: '…'}}</code> on the edge</td></tr>
+      </table>
+      <div class="rule care"><b>note</b><span>Non-deterministic and fail-open: a model error keeps rows rather than dropping them.</span></div>
+    </section>
+
+    <section data-tags="declare producers yaml">
+      <h2>Declaring a join</h2>
+      <p class="lede">The type says where its rows come from; the producer says how to fetch them.</p>
+      <pre><code>virtualJoins:
+  - anchorLabel: Person
+    relationship: HAS_HUBSPOT_CONTACT
+    keyField: email          # on the anchor
+    recordKeyField: email    # on the fetched record
+    producer: hubspotContacts
+    maxAnchors: 50
+    maxFanoutTotal: 500</code></pre>
+      <div class="rule must"><b>must</b><span>The record's key must equal the anchor's <code>keyField</code>, or no edge forms and every row vanishes.</span></div>
+    </section>
+
+    <section data-tags="declare producers keytransform">
+      <h2>keyTransform — the source's query language</h2>
+      <p class="lede">Rewrites the key before the fetch, when the source speaks a dialect a user won't type.</p>
+      <pre><code>keyArg: queries
+echoKeyAs: matchedFor      # REQUIRED alongside keyTransform
+keyTransform:
+  kind: ai
+  instruction: "Rewrite as an Essie expression; AND/OR/NOT uppercase."
+  examples:
+    - input: "parkinsons and anxiety"
+      output: '(Parkinson Disease) AND (Anxiety)'</code></pre>
+      <div class="rule must"><b>must</b><span>Declare <code>echoKeyAs</code> too — identity stays the caller's phrase, only the outgoing call is rewritten.</span></div>
+      <div class="rule must"><b>true</b><span>Cached per phrase, echoed so it can be shown, and falls back verbatim on failure.</span></div>
+    </section>
+
+    <section data-tags="declare producers keys lists">
+      <h2>List-valued join keys</h2>
+      <p class="lede">A <code>keyField</code> holding several values is several keys — one lookup each.</p>
+      <pre><code>keyField: collaborators   # ["Acme", "Beta Institute"]
+recordKeyField: name      # → two fetches, two edges</code></pre>
+      <div class="rule must"><b>true</b><span>Blanks and duplicates are dropped, so the same value is fetched once however many anchors name it.</span></div>
+      <div class="rule must"><b>must</b><span>The target needs an <code>identity</code> property, or convergent paths won't dedupe and every count is inflated.</span></div>
+    </section>
+
+    <section data-tags="pushdown filters cost">
+      <h2>Pushdown — narrowing at the source</h2>
+      <p class="lede">Declared rules turn a <code>WHERE</code> into the source's own query language.</p>
+      <pre><code>pushdown:
+  - property: overallStatus
+    op: EQUALS
+    qualifier: "AREA[OverallStatus]{value}"
+    valuePattern: "^([A-Z_]+)$"
+  - property: ageGroups        # 'OLDER_ADULT' IN t.ageGroups
+    op: HAS_MEMBER
+    qualifier: "AREA[StdAge]{value}"</code></pre>
+      <div class="rule must"><b>true</b><span>Pushdown changes <b>cost, never rows</b> — anything unpushed is still filtered graph-side.</span></div>
+      <div class="rule care"><b>care</b><span><code>'X' IN n.list</code> tests the record's list; <code>n.prop IN [...]</code> tests against a list you wrote. Different questions.</span></div>
+    </section>
+
+    <section data-tags="cache">
+      <h2>Caching</h2>
+      <table>
+        <tr><th>Kind</th><th>Meaning</th></tr>
+        <tr><td><code>ttl</code></td><td>Reuse a fetch for N seconds.</td></tr>
+        <tr><td><code>graph</code></td><td>Persist the materialized result for later queries.</td></tr>
+        <tr><td><code>extract</code></td><td>Lazily derive typed entities from fetched text.</td></tr>
+      </table>
+      <div class="rule care"><b>note</b><span>Without a cache, every query re-fetches — correct, but it costs a call.</span></div>
+    </section>
+
+    <section data-tags="vector similarity">
+      <h2>Vector edges — similarity IS the join</h2>
+      <p class="lede">The key is embeddable text rather than an id; the score rides on the edge.</p>
+      <pre><code>MATCH (p:Person {name:'Ada Lovelace'})-[r:RELEVANT_TO]-&gt;(t:EmailThread)
+RETURN t.subject, r.score ORDER BY r.score DESC</code></pre>
+      <div class="rule care"><b>care</b><span>A <code>minScore</code> floor can return nothing when the anchor text is short. Prefer top-k + <code>ORDER BY r.score</code>.</span></div>
+    </section>
+
+    <section data-tags="guarantees determinism">
+      <h2>What you are promised</h2>
+      <div class="rule must"><b>true</b><span>Nothing is mirrored: fetched rows live for the query and are rolled back.</span></div>
+      <div class="rule must"><b>true</b><span>A refusal happens before any source is called, and names the alias.</span></div>
+      <div class="rule must"><b>true</b><span>A capped or partial result says so — it is never silently truncated.</span></div>
+      <div class="rule care"><b>note</b><span>Anything model-backed (<code>ai.*</code>, reductions, <code>keyTransform</code>) is not bit-identical run to run, except <code>cluster</code>, which is.</span></div>
+    </section>
+
+  </div>
+  <p class="empty" id="empty">Nothing matches that filter.</p>
+</main>
+
+<footer>
+  Summary only — the normative document is <a href="VIRTUAL_CYPHER.md">VIRTUAL_CYPHER.md</a>,
+  and worked examples are in <a href="VIRTUAL_CYPHER_GUIDE.md">VIRTUAL_CYPHER_GUIDE.md</a>.
+  Where this page and the spec disagree, the spec wins.
+</footer>
+
+<script>
+  const sections = [...document.querySelectorAll('#grid section')];
+  const tags = [...new Set(sections.flatMap(s => s.dataset.tags.split(' ')))].sort();
+  const filters = document.getElementById('filters');
+  const q = document.getElementById('q');
+  const empty = document.getElementById('empty');
+  let active = null;
+
+  tags.forEach(tag => {
+    const b = document.createElement('button');
+    b.className = 'chip'; b.textContent = tag; b.setAttribute('aria-pressed', 'false');
+    b.onclick = () => {
+      active = active === tag ? null : tag;
+      [...filters.children].forEach(c => c.setAttribute('aria-pressed', String(c.textContent === active)));
+      apply();
+    };
+    filters.appendChild(b);
+  });
+
+  function apply() {
+    const text = q.value.trim().toLowerCase();
+    let shown = 0;
+    sections.forEach(s => {
+      const okTag = !active || s.dataset.tags.split(' ').includes(active);
+      const okText = !text || s.textContent.toLowerCase().includes(text);
+      const show = okTag && okText;
+      s.style.display = show ? '' : 'none';
+      if (show) shown++;
+    });
+    empty.style.display = shown ? 'none' : 'block';
+  }
+  q.addEventListener('input', apply);
+  document.addEventListener('keydown', e => {
+    if (e.key === '/' && document.activeElement !== q) { e.preventDefault(); q.focus(); }
+    if (e.key === 'Escape' && document.activeElement === q) { q.value = ''; apply(); q.blur(); }
+  });
+
+  // Copy buttons: a cheat sheet exists to be pasted from.
+  document.querySelectorAll('pre').forEach(pre => {
+    const b = document.createElement('button');
+    b.className = 'copy'; b.textContent = 'copy';
+    b.onclick = () => {
+      navigator.clipboard.writeText(pre.querySelector('code').innerText)
+        .then(() => { b.textContent = 'copied'; setTimeout(() => b.textContent = 'copy', 1200); })
+        .catch(() => { b.textContent = 'select manually'; });
+    };
+    pre.appendChild(b);
+  });
+</script>
+</body>
+</html>
