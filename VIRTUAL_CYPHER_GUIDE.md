@@ -190,6 +190,9 @@ email), each resolving to a GitHub login.
   engine fetches **one author per call**, giving each their own budget.
 - **Pagination.** Each per-author search **walks pages** (`paging: { style: page, size: 100, maxPages: 10 }`)
   and accumulates, so an author with 250 issues yields all 250 (3 pages), not just the first 100.
+  Page numbering starts at 1 by default. For a zero-based source, declare
+  `paging: { style: page, startPage: 0, size: 200, maxPages: 2 }`; that fetches pages 0 and 1.
+  `maxPages` counts calls, not absolute page numbers.
 - Materialize / run / roll back.
 
 **The cost levers, conceptually:**
@@ -199,7 +202,8 @@ email), each resolving to a GitHub login.
 - **`batchSafe: false`** — a *capability*, not a number: "one call is not complete per key." Forces
   one key per call regardless of `maxKeysPerCall`, so a realm can't reintroduce starvation by
   tuning.
-- **`paging:`** — capture beyond page 1; `maxPages` bounds the cost.
+- **`paging:`** — capture beyond the first page; `startPage` matches the source's page-number origin,
+  while `maxPages` bounds how many pages are fetched.
 - If pagination hits `maxPages` with a still-full last page, the source **has more than was
   fetched** → the result carries a `PARTIAL_RESULT` truncation note (§9) — never a silent
   "that's everything."

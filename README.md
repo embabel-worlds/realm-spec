@@ -709,18 +709,22 @@ Relatedly, **`project` does not coerce types**: values arrive as the source enco
 A search/list op returns one page; `paging:` makes the producer walk pages and accumulate, bounded by `maxPages`, so a scoped fetch that still exceeds a page is fully captured (and a cross-join intersection doesn't silently miss matches past page 1).
 
 ```yaml
-paging: { style: page, size: 100, maxPages: 10 }     # page-number paging (GitHub, most REST list ops)
+paging: { style: page, size: 100, maxPages: 10 }     # one-based page numbering (default)
+paging: { style: page, startPage: 0, size: 200, maxPages: 25 } # zero-based source
 # or, for opaque cursors (HubSpot ?after=… + paging.next.after):
 paging: { style: cursor, size: 100, maxPages: 10, cursorParam: after, cursorPath: "$.paging.next.after" }
 ```
 
 | Field | Default | Meaning |
 |---|---|---|
-| `style` | `page` | `page` (increment `param` from 1) or `cursor` (opaque). |
+| `style` | `page` | `page` (increment `param` from `startPage`) or `cursor` (opaque). |
 | `param` / `sizeParam` | `page` / `per_page` | Page-number arg, and the page-size arg. |
+| `startPage` | 1 | Page-number style only: first non-negative page number sent to the source. Set `0` for zero-based APIs. |
 | `size` | 100 | Records per page (set to the endpoint's max). |
-| `maxPages` | 5 | Hard cap on pages fetched — bounds cost on an unscoped fetch. |
-| `cursorParam` / `cursorPath` | `after` / — | Cursor style only: request arg + JSONPath to the next cursor. |
+| `maxPages` | 5 | Hard cap on pages fetched, independent of page numbers. `startPage: 0, maxPages: 2` fetches pages 0 and 1. |
+| `cursorParam` / `cursorPath` | `after` / — | Cursor style only: request arg + JSONPath to the next cursor. `startPage` is ignored. |
+
+Omitting `startPage` preserves one-based requests (`1, 2, …`). A negative value is invalid. For either starting convention, a short page ends the walk normally; a full final page at `maxPages` reports the existing truncation warning.
 
 `param` / `sizeParam` name **parameters declared on the operation**, so an API that takes paging somewhere other than the query string is addressed by naming the parameters it actually declares. A handful of APIs pass paging (and even filtering) as HTTP **headers** — the NSW planning feed used by `realm-nsw-property` takes `PageSize`, `PageNumber` and a JSON `filters` string as headers. Declare them as `in: header` parameters in the vendored spec and name them here; the walker then drives them correctly (verified against a live world, 2026-07-28).
 
