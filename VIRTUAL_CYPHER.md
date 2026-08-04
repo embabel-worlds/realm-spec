@@ -214,6 +214,27 @@ All producers honour the **batch contract** (all keys at once, never N+1) and an
 `cache:` policy (`none` / `ttl` / `session` / `immutable`, plus `graph` for aggregates and
 extraction — §5.5/§5.6, where the committed graph itself is the cache tier).
 
+#### Page-number origins
+
+A `remote` producer with page-number paging starts at page 1 unless its declaration sets a
+non-negative `startPage`. This lets a realm match a zero-based source without changing existing
+one-based realms:
+
+```yaml
+paging:
+  style: page
+  param: page
+  sizeParam: size
+  startPage: 0
+  size: 200
+  maxPages: 2
+```
+
+This example fetches pages 0 and 1. `maxPages` always counts pages fetched, not the numeric value of
+the final page. A short page ends the walk normally under either convention; reaching `maxPages`
+on a full page produces the same truncation diagnostic. Omitting `startPage` fetches pages 1, 2,
+and so on. A negative value is rejected. Cursor paging does not send or interpret `startPage`.
+
 The **LLM-backed** kinds (`generative`'s `generator:`, `aggregate`'s `reduce:`, `extract`'s `extract:`) take optional
 per-edge tuning — `role:` (a portable, world-defined model role id such as `chat_cheap`; **never a
 concrete model name**, which stays an ops concern) and `temperature:`. A query can override both for one
