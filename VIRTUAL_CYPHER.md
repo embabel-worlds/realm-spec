@@ -1070,13 +1070,19 @@ So a gate has to be written in a shape the engine can attach:
 |---|---|
 | `r.amount >= 20000000` | yes |
 | `toFloat(r.amount) >= 20000000` | yes — wrapping is fine |
-| `size(trim(coalesce(r.description,''))) <= 60` | yes — nested wrapping is fine |
+| `size(trim(coalesce(r.description,''))) <= 60` | **no** — see below: a length is not the property's value |
 | `r.description CONTAINS 'lease'` | yes |
 | `r.description IS NOT NULL` | **no** |
 | `toLower(r.description) = toLower(r.title)` | **no** — compares two properties, not a value |
 | a condition on a *different* node | **no** |
 | `r.amount >= $threshold` **in a view** | yes — a view's declared params become literals before the query is read |
 | `r.amount >= $threshold` **with caller-bound params** | **no** — the value is not known when the query is read |
+
+**A wrapper that CHANGES the compared quantity cannot gate.** `toFloat(r.amount) >= 5` still compares
+the amount, so it gates. `size(r.description) <= 60` compares a LENGTH, and the engine has only the
+property to offer a source — so the condition is honoured in full, but after the judgment rather than
+before it. The rows are right; the bill is the same as if the gate were absent. `length`, `count` and
+`toString` behave the same way.
 
 That last pair is the one that surprises people. The same text bounds the cost inside a view and does
 not bound it when the parameter is bound by the caller at execution time. If a screen carries an
