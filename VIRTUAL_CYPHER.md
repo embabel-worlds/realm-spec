@@ -1051,6 +1051,58 @@ is always cheaper and more repeatable.
 
 ---
 
+### 7.6.1 Gating an expensive judgment — what actually narrows it
+
+An `ai.*` primitive is **not** evaluated per row the way an ordinary Cypher function is, so the
+position of the call in a `WHERE` decides nothing. Writing the cheap test first and the judgment last
+does not make the judgment lazy, and `AND` does not short-circuit it — nothing in openCypher promises
+an evaluation order for boolean operands anyway.
+
+What does bound the cost is this: **every deterministic condition the engine can attach to the node is
+applied before the judge runs, wherever it appears in the query.** A condition it cannot attach is
+still honoured — the rows that come back are exactly right — but it is applied *after* judging, so the
+model has already read everything fetched. The result looks identical. Only the bill differs, and
+nothing in the answer says so.
+
+So a gate has to be written in a shape the engine can attach:
+
+| Condition | Bounds the judgment? |
+|---|---|
+| `r.amount >= 20000000` | yes |
+| `toFloat(r.amount) >= 20000000` | yes — wrapping is fine |
+| `size(trim(coalesce(r.description,''))) <= 60` | yes — nested wrapping is fine |
+| `r.description CONTAINS 'lease'` | yes |
+| `r.description IS NOT NULL` | **no** |
+| `toLower(r.description) = toLower(r.title)` | **no** — compares two properties, not a value |
+| a condition on a *different* node | **no** |
+| `r.amount >= $threshold` **in a view** | yes — a view's declared params become literals before the query is read |
+| `r.amount >= $threshold` **with caller-bound params** | **no** — the value is not known when the query is read |
+
+That last pair is the one that surprises people. The same text bounds the cost inside a view and does
+not bound it when the parameter is bound by the caller at execution time. If a screen carries an
+expensive judgment, define it as a **view** with declared parameters (§8) and the gates work as
+written.
+
+**Write the gate for cost, not as a finding.** A gate decides which rows are *worth asking about*; it
+is not evidence about them. "Short description" is a good gate for a disclosure screen and a bad
+finding: a lease naming a street address is brief and completely checkable, while a bare product noun
+is brief and tells a reader nothing. Only the judgment can tell those apart — which is exactly why
+the length test belongs in the `WHERE` and the verdict belongs to `ai.score`.
+
+**One criterion, one judgment.** A filter and a projection sharing the *same* criterion string share a
+single judgment, so this reads each row once:
+
+```cypher
+WHERE size(trim(coalesce(r.description,''))) <= 60
+  AND ai.score(r, 'a reader could identify what this bought') < 0.4
+RETURN r.cnId, ai.score(r, 'a reader could identify what this bought') AS disclosure
+```
+
+Two different spellings of the same idea are two judgments, at twice the cost, and they may disagree
+about the same row.
+
+---
+
 ### 7.7 Aggregations — reduce a whole GROUP to one cell
 
 The primitives above judge rows one at a time. An **aggregation** goes the other way: it reduces the
