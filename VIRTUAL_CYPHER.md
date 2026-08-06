@@ -441,6 +441,19 @@ The aggregate rules carry over with extraction-specific twists:
   transient identities and never touches the committed canon.
 - **Demand applies across anchors** — a cold `LIMIT 1` over many documents extracts from the first
   anchor(s) only, until produced records satisfy the budget.
+- **Extraction cost tracks the missing work, not document size.** Extraction over a document
+  proceeds in bounded batches, each cached independently. A repeat traversal over unchanged content
+  makes no model calls — including for portions that extracted to zero records. Editing part of a
+  document re-extracts only the affected portion; the rest of the committed record set is untouched.
+  A cancelled extraction keeps its completed work; re-asking resumes rather than restarts.
+- **Partial materialization converges.** A `LIMIT n` traversal over cold content may stop extracting
+  as soon as `n` records exist, leaving the committed set partial; any later, broader traversal
+  completes it by extracting only what is still missing. Whatever sequence of asks produced it, the
+  set converges to the same records a single full extraction of today's content would produce.
+  Declared record-to-record links (`links:`) appear as soon as both ends exist; until then the
+  citing field still records the claim. The engine's cost estimate for a partially extracted
+  document counts only the remaining work — a query refused as too expensive can become allowed
+  after part of the corpus has been materialized (e.g. via a narrowed opt-in ask).
 
 Because the containment edge is real, `RETURN c` returns the entity itself — prefer it over scalar
 projections when the caller wants the records rather than a report about them.
@@ -768,6 +781,76 @@ and it fetches ONCE for the batch (the producer's batch contract), not once per 
   must not enumerate the whole anchor set.
 - **The mirror form** — `WHERE 'X' IN n.someList` narrows a node by list membership; it is a
   filter, not an enumeration of identities.
+
+### 5.12 Bounded variable-length traversal — self-recursive joins
+
+A virtual join whose anchor and target are the **same type** (an ownership registry's
+`Company -[:OWNED_BY]-> Company`, a stud book's `Pony -[:HAS_PARENT]-> Pony`) may be traversed
+with a variable-length pattern:
+
+```cypher
+MATCH p=(c:Company {companyNumber:'X'})-[:OWNED_BY*1..6]->(o:Company)
+RETURN o.companyNumber, [r IN relationships(p) | r.sourceId]
+```
+
+**Guarantees.**
+
+- Every hop up to the declared bound is resolved before the query evaluates: the traversal
+  composes what the graph already holds with on-demand fetches — a hop already present advances
+  the walk without a fetch, and fetched hops extend past the held data. Convergent paths dedupe
+  to one node.
+- Cycles terminate. A loop's closing edge appears in results; nothing is fetched twice.
+- Rollups and subtree sweeps (`count`, `sum`, generation slices `*k..k`, path predicates) compose
+  as ordinary Cypher over the resolved tree, and the same rows always yield the same tree.
+
+**Costs.** The traversal spends against the join's own declarations, cumulatively across hops:
+total resolved nodes against `maxFanoutTotal`, each hop's frontier width against `maxAnchors`. An
+unbounded `*` is additionally capped at 10 hops.
+
+**Degradation.** If the walk stops short of the query's declared depth — budget, frontier width,
+or the unbounded-`*` cap — the result carries an `INCOMPLETE_TRAVERSAL` warning naming the hop
+reached and the bound hit. Results then cover only the hops walked and any subtree total is a
+**lower bound**. Nothing is ever silently truncated; a tree that simply ends, or ends exactly at
+the declared depth, carries no warning.
+
+**Per-hop provenance.** Every edge the traversal fetched carries three queryable properties:
+`sourceId` (the record's identity at its source), `sourceName` (the producer that asserted it),
+and `hop` (1-based depth). The result envelope additionally carries one `AUDIT_TRAIL` note
+listing every claim — `hop N: (from)-[REL]->(to) source=<producer> sourceId=<id>` — with hops
+that were already held in the graph shown as `source=mirror`. The trail is capped at 500 claims
+(a count of the remainder is appended).
+
+**Limits.** A variable-length pattern whose endpoints are *different* types is not a recursive
+join and resolves only its first hop. `min` bounds (`*2..`) filter results as ordinary Cypher;
+they do not change what is resolved.
+
+**Worked example.** With `Company {companyNumber identity} OWNED_BY Company` declared over an
+ownership registry, and `SC-100 ← SC-220 ← {SC-310, SC-320} ← HOLD-1` at the source,
+`MATCH (c:Company {companyNumber:'SC-100'})-[:OWNED_BY*1..6]->(o) RETURN count(DISTINCT o)`
+answers `4`, each `OWNED_BY` edge cites the registry record that asserted it, and the envelope's
+audit trail lists the four claims in hop order.
+
+### 5.13 Timely sources — `cache:` currency and the `freshness` result block
+
+A producer's `cache:` declares how CURRENT its answers are:
+
+- `cache: {kind: fresh}` (an alias of `kind: none`, the default) declares a **timely** source:
+  every query re-reads the source, so the answer is the current state as of the query — re-running
+  the same query re-observes the source. This is the declaration behind "what is the current X,
+  joined to my graph", and a scheduled re-run of such a query is a fresh observation each time.
+- `cache: {kind: ttl, seconds: N}` declares that an answer up to `N` seconds old is acceptable:
+  within the window the same lookup is served without re-reading the source; past it, the next
+  query re-reads. A query may force one live re-read of a TTL source with `{ai: {fresh: true}}` on
+  the virtual edge; the fresh result then serves subsequent queries within a new window.
+
+**The `freshness` block.** Whenever a query touched an external source, its result envelope carries
+a `freshness` array alongside `rows` and `warnings`: one entry per source read,
+`{producer, source, observedAt, keys}`, where `source` is `"live"` (read during this query) or
+`"cached"` (served within its TTL window) and `observedAt` is the ISO-8601 time the source was
+**actually** read — for a cached entry, the original read, never the query time. A join may mix the
+two (a live anchor layer joined to TTL-served enrichment); each layer reports its own observation.
+Failed reads never appear in `freshness` — they are reported in `warnings`. Purely graph-resident
+answers omit the block.
 
 ## 6. Vector edges — semantic joins in depth
 
@@ -1468,6 +1551,8 @@ is classified and surfaced as a warning on the result:
 | `PRODUCER_ERROR` (`FETCH_FAILURE`) | a timeout, a missing gateway tool, a non-auth error | the source could **not** be reached — *not* "no data". Fix the integration. |
 | `PRODUCER_ERROR` (`AUTH_EXPIRED`) | a 401 / "token expired" / `EXPIRED_AUTHENTICATION` | the OAuth token has **expired** — reconnect to refresh. The empty result is because the source rejected the call. |
 | `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page | the fetch **succeeded but is incomplete** — the source has more. Narrow the query or raise the cap. *Not* a failure. |
+| `PARTIAL_RESULT` (`TIME_BUDGET`) | the query's time budget expired mid-materialization | the fetch **stopped early at a safe boundary** — the rows returned are real and complete in themselves; the remainder was not attempted. Work already done is kept, so asking again continues rather than starting over. *Not* a failure. |
+| `INCOMPLETE_TRAVERSAL` | a variable-length traversal (§5.12) stopped short of its declared depth | the warning names the hop reached and the bound hit (`maxFanoutTotal`, frontier width, or the unbounded-`*` cap). Rows cover only the hops walked; any subtree total is a **lower bound**. |
 | `UNKNOWN_VIA` | an edge pinned `{via:'…'}` that no declared join offers | the rows are **real but came from a different join** than the one named. The query still answers — a via that does not exist must not cost a good answer — and the warning lists the vias that do exist so it can be re-issued. Matters most where several joins converge on one label, since the substitution is otherwise invisible. |
 
 A failed fetch is **never cached** as an empty result (so a later call with a refreshed token finds
@@ -1556,7 +1641,9 @@ schema-level engineering could not touch.
 
 - **Read-only.** A user query never writes the graph. Materialization happens in a transaction that
   is **rolled back**; the sole persisted side effect is a write-through identity **bridge** (a
-  cache of *who* an external identity is, not *what* data they hold).
+  cache of *who* an external identity is, not *what* data they hold). The single, explicitly
+  opted-in exception is the dedicated annotation-write surface (§12) — ordinary queries remain
+  read-only and continue to reject mutating clauses.
 - **Scoped, fail-closed.** Every keyed probe goes through the per-user scope rewriter; vector
   searches are user-filtered at the source. A query can never read across users; an unparseable or
   unscopable query is rejected, not run.
@@ -1568,7 +1655,61 @@ schema-level engineering could not touch.
 
 ---
 
-## 12. The contract, in one line
+## 12. Graph annotation writes — bounded local writes after federated selection
+
+A realm may declare that a type's REAL nodes accept bounded local annotations: mark each writable
+property `annotatable: true`, optionally mark one property `annotationVersion: true` as the
+concurrency field, and the type must have an `identity: true` property. Deployments additionally
+gate the whole surface off by default. Without both opt-ins, no write is possible.
+
+```yaml
+# types/person.yml (excerpt)
+properties:
+  id:           { type: string, identity: true }
+  reviewStatus: { type: string, annotatable: true }
+  reviewedAt:   { type: string, annotationVersion: true }
+```
+
+An annotation statement is: any read selection (it may traverse fetched, source-backed nodes), then
+exactly `WITH DISTINCT <target>[, <expr> AS <alias>…] ORDER BY … LIMIT n`, then exactly
+`SET <target>.<property> = <literal | $parameter | alias>`:
+
+```cypher
+MATCH (u:AssistantUser)-[:EMAILED]->(p:Person)-[:HAS_X]->(v:SomeFetchedLabel)
+WHERE v.field = 'value'
+WITH DISTINCT p ORDER BY p.id LIMIT 50
+SET p.reviewStatus = 'follow-up'
+RETURN p
+```
+
+**Guarantees.**
+
+- The fetched node participates only in *selection*. The transient materialization rolls back as
+  always; the selected real nodes are then updated in a separate write.
+- The limit must be a positive whole number within the deployment maximum; the ordering is
+  required. Everything else — writing a fetched binding, `SET +=`, dynamic property names, label
+  changes, `CREATE`/`MERGE`/`DELETE`/`REMOVE`/`FOREACH`, procedure calls, subqueries, `UNION` — is
+  rejected **before anything runs**. Writing a fetched binding names the durable binding you
+  probably meant, and guarantees no fetch and no write occurred.
+- A write never redirects to the source system, even if the source declares a writable operation.
+  Changing the source record is always its own explicit action.
+- Execution is two-phase: a **dry-run** returns the exact would-be changes under an expiring plan
+  id; **confirming** applies that frozen plan — never a re-run selection. An expired plan requires
+  a new dry-run; a plan applies at most once.
+- At apply time each target is re-found by its identity within your scope: a target that vanished
+  or is no longer yours is skipped (one combined count — the two are deliberately not
+  distinguished), and one whose value (or version field) changed since the dry-run is reported as
+  a conflict and left untouched.
+- Results state committed values only, with `selected` / `applied` / `conflicted` /
+  `disappearedOrUnauthorized` counts.
+- Every applied change is journaled and can be undone. Undo restores the previous value only where
+  your annotation is still the current value — it never overwrites a later edit.
+- Fetched data may flow into an annotation only as a scalar captured at the selection barrier,
+  frozen at dry-run time.
+
+---
+
+## 13. The contract, in one line
 
 > **Bind a real anchor; declare how a label is fetched; the engine probes, fetches once per
 > producer, materializes transiently, runs your Cypher over real + virtual together, and rolls
