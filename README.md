@@ -4,7 +4,7 @@ Realms are self-contained, declarative bundles of agent capabilities that can be
 
 This document is the spec.
 
-> **Status: living draft.** Sections marked _forward-looking_ describe shape that is settled but may still be in implementation across hosts. Everything else describes the format current Embabel hosts already consume.
+> **Status: living draft.** Sections marked _forward-looking_ describe shape that is settled but may still be in implementation across hosts. Everything else describes the format current Embabel hosts already consume. Where this document cites concrete defaults or behaviour of "the reference host", it means the host implementation this spec is developed against; those values are informative, not part of the contract.
 
 ---
 
@@ -53,14 +53,18 @@ realm-name/
 │       └── my-handlers.ts
 ├── tests/                # Vitest specs for handlers
 │   └── my-handlers.test.ts
+├── wasm/                 # Handler source for the wasm host (optional)
+│   └── handlers.js
 ├── mcp/                  # MCP server configurations (YAML)
 │   └── my-server.yml
 ├── commands/             # Slash command mappings (YAML)
 │   └── my-command.yml
 ├── webhooks/             # Webhook registrations (YAML)
 │   └── my-webhook.yml
-├── events/               # Event ingestion (forward-looking) — push + poll
+├── events/               # Event ingestion — push + poll
 │   └── my-source.yml
+├── channels/             # Realm-shipped channel connectors (YAML)
+│   └── my-channel.yml
 ├── handlers/             # Event handlers — TS reactions to signals/cron the user activates
 │   └── my-handler.yml
 ├── decorations/          # Scheduled KG node-decoration manifests
@@ -166,6 +170,7 @@ tags:
 | `author` | No | Author or organization name |
 | `url` | No | Source repository or documentation URL |
 | `tags` | No | Categorization tags |
+| `host` | No | Execution host for the realm's handler verbs: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
 
 ## `actions/`
 
@@ -176,13 +181,13 @@ Action specifications — YAML files that define executable operations. The host
 | `action` | Framework `PromptedActionSpec` — typed LLM call producing `outputTypeName` |
 | `<FQN>` | Any other `ActionSpec` subtype on the classpath. Use this when shipping a host-extension shape whose YAML contract isn't yet stable enough to claim a short name. |
 
-**Short name vs FQN dispatch.** A short name like `action` is a public contract; once realm authors write it, you can't change the spec's shape without breaking their YAML. Reserve short names only for shapes that have stabilised. FQN dispatch lets a host iterate freely on field names, parsing, and dispatch semantics without committing to a YAML slot upstream.
+**Short name vs FQN dispatch.** A short name like `action` is a public contract; once realm authors write it, you can't change the spec's shape without breaking their YAML. Reserve short names only for shapes that have stabilised. FQN dispatch lets a host iterate freely on field names, parsing, and dispatch semantics without committing to a YAML slot upstream. The flip side: an FQN that appears in published realm YAML is itself a public identifier — a host that moves or renames the class must keep the old name resolvable, or every realm that wired against it breaks.
 
 Example host extension (the assistant's predicate-driven `PolicyActionSpec`):
 
 ```yaml
 # realm-email/actions/policy_email_unreplied.yml
-stepType: com.embabel.assistant.policy.spec.PolicyActionSpec
+stepType: com.embabel.world.policy.spec.PolicyActionSpec
 name: email_unreplied
 description: A thread you're a participant in has activity from someone else, ≥ 24h ago
 inputTypeNames:
@@ -253,7 +258,7 @@ The YAML uses FQN dispatch (the predicate DSL is still iterating, so we don't re
 
 ```yaml
 # actions/policy_pr_review_overdue.yml
-stepType: com.embabel.assistant.policy.spec.PolicyActionSpec
+stepType: com.embabel.world.policy.spec.PolicyActionSpec
 name: pr_review_overdue
 description: A review was requested from you and it's been over 48h
 
@@ -271,7 +276,7 @@ value: 1.0
 
 #### `whenExpr` — the predicate DSL
 
-A boolean expression over the matched signal's fields. Parser source: `com.embabel.assistant.policy.PolicyExprParser`. Grammar (today; expect additions as concrete rules need them):
+A boolean expression over the matched signal's fields. Parser source: `com.embabel.world.policy.PolicyExprParser`. Grammar (today; expect additions as concrete rules need them):
 
 **Operators**, lowest to highest precedence:
 
@@ -351,7 +356,7 @@ Dynamic type definitions — custom input/output types for actions, signal types
     body: "Issue body"
 ```
 
-A type whose `parents:` includes `Signal` (the host-defined signal base type) is a **signal type** — automatically eligible for the consequence engine, triage rules, and persistence as a `SignalRecord`. See [`events/`](#events--event-ingestion-forward-looking) below.
+A type whose `parents:` includes `Signal` (the host-defined signal base type) is a **signal type** — automatically eligible for the consequence engine, triage rules, and persistence as a `SignalRecord`. See [`events/`](#events--event-ingestion) below.
 
 ```yaml
 # types/stripe.yml
@@ -1439,7 +1444,7 @@ then acts: `const rows = await gateway.cypher.query({ cypher }); hydrateByType(r
 
 ### Manifest format
 
-Auto-generated by `embabel-build-manifest` (provided by `@embabel/runtime-types`), so realm authors never hand-author it. The host reads it at install time.
+For a TS realm, generated by `embabel-build-manifest` (provided by `@embabel/runtime-types`) — never hand-authored. A wasm realm with no TS build hand-authors the same format (see [Execution hosts](#execution-hosts)). The host reads it at install time.
 
 ```json
 {
@@ -1464,6 +1469,9 @@ Auto-generated by `embabel-build-manifest` (provided by `@embabel/runtime-types`
 | `description` | first JSDoc paragraph | LLM-visible documentation. |
 | `inputSchema` | TS type of `args` parameter | JSON Schema; drives the typed surface on the LLM side. |
 | `outputSchema` | TS type of the unwrapped `Promise<T>` | Same. |
+| `schedule` | manifest author | Optional cron expression (Spring 6-field); the host also runs the verb on this cadence. See [Execution hosts](#execution-hosts). |
+| `onType` | `export class X extends Entity` methods (or manifest author) | The entry is a method on a declared type, surfaced as `<obj>.<name>(args)` rather than a bare gateway function. |
+| `className` | exported class name | Set for class-based type methods; the class to instantiate before invoking `name`. Absent for the function form. |
 
 ### Build and test cycle
 
@@ -1533,6 +1541,253 @@ The host ships a thin wrapper (`embabel-realm`) that drives the JVM-side surface
 embabel-realm sync                        # from inside any realm repo
 embabel-realm sync ~/dev/realm-hubspot     # or pass an explicit path
 ```
+
+## Execution hosts
+
+A realm is a self-contained deployable unit. The author ships logic and declarations; the platform provisions everything around it — the sandbox, the identity binding, the resource limits, the triggers, and the observability. Data flows in through the realm's declared surfaces — `events/` and `channels/` as typed signals, webhooks, and schedules that invoke its verbs directly — and back out through verbs calling the gateway. The realm never reaches around the platform: no ambient credentials, no direct infrastructure, no shared runtime state with other realms.
+
+Two consequences are normative:
+
+- **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's — no shared memory, no shared process, no shared cache — and no realm acts as anyone but the owning user. What realms deliberately share is the world itself: declared types are visible across realms, and graph data written through the gateway is readable by anything with graph access. The prohibition is on runtime state, not on the declared surfaces.
+- **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
+
+The host — where a dispatch physically runs — is a placement decision, not part of a verb's contract. Everything else in a realm — types, producers, lenses, APIs, events, prompts — is host-independent and loads the same way everywhere. What placement does constrain is the verb's implementation: each host runs a different artifact, so moving a realm between today's two hosts means shipping the artifact the target host runs, and a verb must fit its host's capability set (a handler that needs npm cannot become a wasm verb by relabeling). Two hosts exist:
+
+| Host | What runs | Choose it when |
+|---|---|---|
+| `docker` | the compiled `dist/` JS modules, in the host's Node code sandbox | Default. Handlers need npm dependencies, Node APIs, or the full TS project layout. |
+| `wasm` | `dist/handlers.wasm`, in-process inside the host runtime | Verbs are small and dependency-free, per-dispatch latency matters, or the deployment has no container runtime. |
+
+The extension rule, which binds every future host: **adding a host that consumes an existing artifact class changes nothing for a realm author except the `host:` value.** Verbs keep their names and schemas, signals keep their identity, gateway calls keep their envelope, audit keeps its shape. A candidate host that needs more than that from authors is not a host.
+
+### Placement
+
+`host:` in `realm.yml` is optional. The platform reconciles the declared value with what is on disk:
+
+| declared | on disk | placement |
+|---|---|---|
+| absent | `dist/handlers.wasm` present | wasm |
+| absent | no wasm bundle | docker |
+| `docker` | no wasm bundle | docker |
+| `docker` | wasm bundle present | **conflict** |
+| `wasm` | bundle present | wasm |
+| `wasm` | no bundle, `wasm/handlers.js` present | wasm — bundle built on load |
+| `wasm` | neither | **conflict** |
+
+A conflict surfaces as a world-loading problem with a one-sentence reason and a suggested `host:` fix; the realm's declarative content still loads. `docker` with a bundle present is a conflict deliberately: a stale bundle must never sit silently beside a host that isn't running it.
+
+An unrecognized `host:` value fails realm-metadata parsing: the host records a problem, loads the realm as though `realm.yml` declared nothing beyond its name, and infers placement from disk.
+
+Three consequences of the table worth stating:
+
+- With no `host:` declared, wasm artifacts decide placement by themselves: `wasm/handlers.js` beside a docker-style `src/` project places the realm on wasm, and the docker handler modules are not used for dispatch. Declare `host: docker` to keep a mixed-source realm on docker (the wasm bundle then surfaces as the conflict above).
+- When both `wasm/handlers.js` and a bundle exist, the source is the truth: the host rebuilds the bundle whenever the source fingerprint changes ([build on load](#build-on-load)).
+- The wasm kill switch is a dispatch-time control, not a placement input: with wasm disabled the realm still loads and registers its verbs, and every dispatch returns an error.
+
+### Authoring a wasm realm
+
+The minimum is three files — the realm, the handlers, and the manifest that registers them:
+
+```yaml
+# realm.yml
+name: ping
+host: wasm
+```
+
+```js
+// wasm/handlers.js
+globalThis.__embabelHandlers = {
+  "ping.ping": async () => ({ result: "pong" }),
+};
+```
+
+```json
+// dist/manifest.json
+{
+  "version": 1,
+  "entries": [
+    {
+      "namespace": "ping",
+      "name": "ping",
+      "description": "Answers pong.",
+      "inputSchema": { "type": "object", "properties": {} },
+      "outputSchema": { "type": "string" }
+    }
+  ]
+}
+```
+
+Handlers are a dispatch table on `globalThis.__embabelHandlers`, keyed by verb — exactly `"<namespace>.<name>"`, matched literally at dispatch. Each entry is `async (ctx, args)` returning exactly `{ result: ... }` or `{ error: "..." }` — the same wire envelope every gateway call uses. Registration comes from the manifest, not the table: the host registers precisely the manifest's entries as verbs and never introspects the dispatch table. A handler with no manifest entry is unreachable, and a realm with no manifest registers no verbs at all.
+
+`ctx` carries two things:
+
+| Member | Contract |
+|---|---|
+| `ctx.gateway.<namespace>.<method>(args)` | Calls back into the host's gateway surface — the same namespaces and schemas a TS handler or LLM-generated script sees. Executed as the owning user; the guest never holds or presents a credential. |
+| `ctx.log(message)` | Guest logging, surfaced in the host's logs against the dispatch. |
+
+A realistic verb — an activity digest over signals the realm's own event source ingests:
+
+```js
+// wasm/handlers.js
+globalThis.__embabelHandlers = {
+  "chatops.digest": async function (ctx, args) {
+    const limit = Number(args && args.limit) > 0 ? Number(args.limit) : 5;
+    try {
+      const messages = await ctx.gateway.signals.recent({
+        type: "chatops.message",
+        hours: 24 * 7,
+        limit: 200,
+      });
+      const byChannel = {};
+      for (const m of messages) {
+        const channel = (m.properties || {}).channel_name || "unknown";
+        byChannel[channel] = (byChannel[channel] || 0) + 1;
+      }
+      ctx.log("digest over " + messages.length + " message(s)");
+      return {
+        result: {
+          totalMessages: messages.length,
+          channels: Object.entries(byChannel)
+            .map(([name, n]) => ({ name, messages: n }))
+            .sort((a, b) => b.messages - a.messages),
+          recent: messages.slice(0, limit).map((m) => ({
+            subject: m.subject,
+            at: m.occurredAt,
+          })),
+        },
+      };
+    } catch (error) {
+      return { error: "digest failed: " + error.message };
+    }
+  },
+};
+```
+
+What the guest has, and what it does not:
+
+| Available | Absent |
+|---|---|
+| `ctx.gateway.*`, `ctx.log`, plain JavaScript, JSON | Node (`require`, `process`, `fs`), npm packages |
+| The verb's `args`, described by the manifest's `inputSchema` | Network sockets, filesystem, environment variables |
+| | Any credential. Identity is bound host-side to the owning user; there is no key to read, leak, or replay. |
+
+The absences are the point: a wasm verb is pure logic over gateway calls. A handler that needs an npm library, streaming I/O, or the filesystem belongs on the docker host. The engine is an embedded modern-ECMAScript interpreter, not Node: the language and its built-ins (`JSON`, `Promise`, `Math`) are there; host-shaped globals (`require`, timers, `fetch`) are not.
+
+`wasm/` and `src/` are different weights, not alternatives. `src/` is a full TypeScript project — npm, typecheck, vitest, generated manifest — and buys the typed gateway surface. `wasm/handlers.js` is the zero-toolchain path for realms too small to want a build: no package.json, no npm. The intended convergence — _forward-looking_ — is for the TS build to also emit the wasm dispatch table, so one `src/` serves both hosts; `wasm/` stays as the no-build escape hatch.
+
+### The manifest, schedules, and type methods
+
+A wasm realm ships `dist/manifest.json` in the same [manifest format](#manifest-format) as TS handlers, hand-authored (there is no TS extractor to generate it). The schemas drive the typed LLM surface exactly as for docker-hosted verbs; they are documentation for callers, not runtime validation. `outputSchema` describes the unwrapped payload — the value inside `result` after the host strips the envelope — never the envelope itself. Two entry fields matter here:
+
+| Field | Meaning |
+|---|---|
+| `schedule` | A cron expression (Spring 6-field, evaluated in the host's timezone). On world load the host registers the verb as a scheduled job for every user with the realm installed and runs it on that cadence, in addition to it being callable on demand. There is no per-user activation step — unlike [`handlers/`](#handlers--event-handlers-typescript-reactions-to-signals--cron), a manifest schedule fires by virtue of the realm being installed. The scheduled invocation passes empty args, so every `inputSchema` field of a scheduled verb must be optional. |
+| `onType` | The verb is a method on a declared type — callable as `<obj>.<name>(args)` on an in-scope object, not as a bare gateway function. The handler receives the object as `args.self` and the caller's arguments as `args.args`. `schedule` does not combine with `onType`: a scheduled invocation has no receiver. |
+
+```json
+{
+  "version": 1,
+  "generatedAt": "2026-08-01T00:00:00Z",
+  "entries": [
+    {
+      "namespace": "chatops",
+      "name": "digest",
+      "description": "Summarize ingested channel activity — counts per channel and the most recent messages.",
+      "schedule": "0 30 * * * *",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "limit": { "type": "number" } },
+        "required": []
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "totalMessages": { "type": "number" },
+          "channels": { "type": "array" },
+          "recent": { "type": "array" }
+        }
+      }
+    }
+  ]
+}
+```
+
+### Build on load
+
+A realm that ships `wasm/handlers.js` is compiled to `dist/handlers.wasm` by the host when the realm loads:
+
+- A content fingerprint over the handler source and the host's build tooling decides whether to rebuild — content change rebuilds, timestamp games don't.
+- The build writes a candidate and atomically replaces the published bundle only on success. A failed build — bad JavaScript, a hung compiler, a missing toolchain — leaves the previous good bundle (or no bundle) in place and the realm's declarative content loaded, with a warning.
+- The manifest is not part of the fingerprint: after a failed rebuild, the current `dist/manifest.json` pairs with the previous bundle. A verb the manifest declares but the stale bundle lacks registers normally and fails at dispatch with a no-handler error.
+- Bundles are build output. Don't commit them from a source-authored realm.
+
+A realm may instead ship a prebuilt `dist/handlers.wasm` and no source — a **self-contained** realm. The host loads the bundle as-is. This is the right shape when the module is compiled from a language the host has no toolchain for.
+
+### Limits
+
+Normative for every host: dispatch time, guest memory, and payload sizes are bounded, and crossing a bound is an error the caller sees — never a truncation, never a hang. The concrete values are host operations, not something a realm can declare or rely on. The reference host's defaults:
+
+| Setting | Default | Behaviour at the limit |
+|---|---|---|
+| `assistant.wasm.enabled` | `true` | `false` rejects every dispatch with a clear error — the kill switch. Declarative content is unaffected. |
+| `assistant.wasm.dispatch-timeout` | 30s | The dispatch is interrupted and returns an error. Work longer than the budget cannot run on this host. |
+| `assistant.wasm.max-memory-pages` | 1024 (64 MiB) | A module declaring more is rejected with a clear message. |
+| guest I/O | 1 MiB per payload | Each of the verb's args, its result, and every host-call request/response is bounded — at 1 MiB or the module's memory cap, whichever is smaller. Oversized payloads error rather than truncate. |
+
+In the reference host, every dispatch is observable: it records the bundle, verb, elapsed time, error if any, and how many gateway calls the guest made.
+
+### Shipping a compiled module
+
+`wasm/handlers.js` is a convenience, not the contract. The contract is the module's ABI, and any language that can target it — Rust, TinyGo, AssemblyScript, Zig, hand-written WAT — can ship a self-contained realm. Two conventions are accepted, and the host tells them apart by export probe: a module exporting `embabel_dispatch` is a reactor; anything else runs as a WASI command. Reactor wins if a module fits both.
+
+**Reactor.** The module exports `memory`, `embabel_alloc(len: i32) -> i32`, and `embabel_dispatch(verbPtr: i32, verbLen: i32, argsPtr: i32, argsLen: i32) -> i64`, plus optional WASI `_initialize` (invoked before dispatch when present; `_start` is not called). All strings are UTF-8. The returned i64 packs a pointer to the response in its high 32 bits and the response length in its low 32; each half is read as a non-negative 32-bit value (so bounded by 2³¹−1) and must lie inside the module's memory, or the dispatch fails. Allocation is one-way: the host writes the verb and args into guest memory through `embabel_alloc`; the guest allocates its own response buffer; nothing is ever freed, because every dispatch runs in a fresh instance discarded afterwards — which is also what enforces statelessness. The response must be exactly one JSON envelope, `{"result": ...}` or `{"error": "..."}`: anything else fails the dispatch, an `error` envelope fails it with that message, and a guest trap fails it with the trap's.
+
+Reactor host imports live under module `"embabel"`: `call(reqPtr: i32, reqLen: i32) -> i64` invokes a gateway tool — request `{"tool": "<gateway name>", "args": {...}}`, reply an envelope the host writes into guest memory through `embabel_alloc` and returns with the same pointer/length packing — and `log(level: i32, ptr: i32, len: i32)` logs UTF-8 text (level 0 = debug, 1 = info, 2 = warn, anything else = error).
+
+**WASI command stdio.** For interpreter-in-wasm bundles. The host writes exactly one request line to stdin — `{"verb": "<namespace>.<name>", "args": {...}}` plus a newline — and runs `_start`. Stdout is line-oriented: a line whose first byte is NUL is a protocol frame; every other line is guest logging. A frame is a NUL-delimited marker — `\0embabel:call\0` or `\0embabel:result\0` — followed on the same line by the frame's JSON. A call frame carries `{"tool": ..., "args": ...}`; the host invokes the gateway and appends the reply envelope to stdin as a new line before the guest's write returns, so the guest reads the reply by blocking on stdin. There is no correlation id — calls are strictly one at a time, request then reply, in order. The result frame carries the dispatch's response envelope and must appear exactly once: no result frame, a second result frame, or a nonzero exit status each fail the dispatch. A NUL-prefixed line matching neither marker is treated as logging.
+
+Both conventions speak the same `{ result }` / `{ error }` envelope at every hop. The guest gets byte-array stdio only — no inherited descriptors, no preopened filesystem.
+
+### Three realms, three hosts
+
+The same authored shape lands on different hosts by changing one line. A pure-logic realm — no dependencies, millisecond verbs — takes the in-process seat:
+
+```yaml
+# realm-levies/realm.yml
+name: levies
+host: wasm
+description: "Computes council levies from the rates types it ships."
+```
+
+A dependency-heavy realm — renders invoice PDFs with an npm library, needs real Node — takes the sandbox:
+
+```yaml
+# realm-invoices/realm.yml
+name: invoices
+host: docker
+description: "Renders and files invoice PDFs from billing signals."
+```
+
+And a host that does not exist — _forward-looking_, an illustration rather than a value you can write. Suppose a managed isolate pool: the platform ships the built bundle to a remote pool and fans dispatches out a thousand wide for burst work. The bundle is the same wasm artifact; nothing about the realm changes shape — a new `host:` value, and the platform grows an adapter:
+
+```yaml
+# realm-translations/realm.yml — HYPOTHETICAL: no host implements `isolate`;
+# a real host today records a metadata problem and infers placement from disk
+name: translations
+host: isolate
+description: "Translates document batches on demand."
+```
+
+`isolate` is not part of this spec. It is here to state the test every proposed host must pass: if supporting it forces a realm author to change anything beyond `host:`, the design is wrong.
+
+### What placement never changes
+
+- Verb names, namespaces, schemas, and the manifest format.
+- The `{ result }` / `{ error }` envelope, at the verb boundary and on every gateway call.
+- Signal identity: a signal dispatched by a wasm-hosted verb is indistinguishable downstream from the same signal dispatched by a docker-hosted one.
+- The identity model: execution is bound to the owning user by the host; no host puts a credential inside the unit.
+- Declarative content: types, producers, lenses, APIs, events, and prompts load whether or not the executable surface can.
 
 ## `mcp/`
 
@@ -1611,11 +1866,11 @@ Template variables in `register.args` are resolved from:
 
 The bare-webhook flow — payload arrives, gets wrapped in a `WebhookEvent`, the named action fires — stays as documented above. For richer integration that emits **typed signals** into the host's consequence engine, use `events/` (next section).
 
-## `events/` — event ingestion (forward-looking)
+## `events/` — event ingestion
 
 Unifies push (webhook) and pull (polling) sources behind a single contract: **emit typed `Signal`s into the host's consequence engine.** A signal type is a `DomainType` declared in `types/` whose `parents` includes `Signal`.
 
-This section is **forward-looking** — the spec is settled but specific hosts may still be implementing it. Existing webhook receivers in `webhooks/` continue to work in parallel.
+The reference host implements both delivery modes — the poll sweep with signal-id dedup, and webhook delivery. Existing webhook receivers in `webhooks/` continue to work in parallel.
 
 ### Webhook event source
 
@@ -1694,6 +1949,33 @@ A realm may declare both `webhook:` and `poll:` for the same type — the host p
 Both sources produce `Signal`s of the realm-declared type. From there, the consequence engine, triage rules, persistence (`SignalRecord`), notifications, and chat surfacing are all type-aware: `signal.type.isAssignableFrom(StripeEvent)` is a real predicate, not a string match.
 
 No JVM bytecode is shipped — realms that need behaviour beyond mapping should expose it via `actions/` (LLM-driven) or `mcp/` (sandboxed servers).
+
+## `channels/` — realm-shipped channel connectors
+
+Where `events/` is stateless ingestion — call an API, map results to signals, done — a **channel** is a live conversational surface with a lifecycle: a persistent connection the host holds open, an inbound half that ingests messages as signals, and an outbound half the assistant replies through. Use `events/` when data only flows in; use `channels/` when the assistant also talks back on the same surface.
+
+A realm configures a connector the host implements — host-extension via FQN, the same dispatch pattern as `PolicyActionSpec`:
+
+```yaml
+# channels/discord.yml
+type: com.embabel.world.event.channel.discord.DiscordChannelConfig
+name: discord
+token-env: DISCORD_BOT_TOKEN
+auto-start: true
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `type` | yes | FQN of a host-provided channel connector configuration. The host documents which connectors it ships; a realm cannot ship connector code. |
+| `name` | yes | The channel's name on this world. |
+| `token-env` | connector-specific | Environment variable holding the connector's credential, resolved host-side. The credential itself never appears in the realm. |
+| `auto-start` | no | Start the connection on world load. Default `true`. |
+
+The inbound half emits ordinary `Signal`s of a type the realm declares in `types/` — a channel message is downstream-indistinguishable from any other signal, so triage rules, attention, persistence, and handler reactions all apply unchanged. The realm typically ships the message type, its identity projections, and any verbs over the stream (a digest, a search) alongside the connector config.
+
+What this spec pins down is the envelope, not the connector. The file format, the common fields above, and the signals-in / replies-out shape are portable. Everything connector-specific — how platform messages map onto the declared signal type, conversation and thread identity, how an outbound reply is addressed — is defined by the connector `type` and documented by the host that ships it. Additional keys in the file pass through to the connector, which validates them. A channel realm is therefore host-extension territory, like an FQN `stepType`: it runs where the named connector exists.
+
+An unknown `type` is reported against the file and that channel is skipped; the realm's other content loads.
 
 ## `handlers/` — event handlers (TypeScript reactions to signals & cron)
 
@@ -1799,7 +2081,7 @@ The referenced action receives one node's identity + a world user binding and re
 | `nodeProperties` | object | Map of every property currently on the node |
 | `userId` | string | The owning world user |
 
-**Output type**: `DecorationResult` (a host-provided domain type). Action declarations set `outputType: com.embabel.assistant.kg.decoration.DecorationResult`.
+**Output type**: `DecorationResult` (a host-provided domain type). Action declarations set `outputType: com.embabel.world.kg.decoration.DecorationResult`.
 
 ```ts
 interface DecorationResult {
@@ -2107,12 +2389,12 @@ Realms are discoverable via the host's directory system:
 
 ## What's intentionally not in a realm
 
-- **JVM bytecode**, native libraries, scripts to be executed in-process.
-- **Spring beans, classpath contributions, host configuration changes.**
+- **Code that runs with host privileges.** No JVM bytecode, no native libraries, no classpath contributions. Realm code executes only inside a host-managed sandbox — the code sandbox for `dist/` JS handlers, the capability-scoped wasm runtime for `dist/handlers.wasm` (see [Execution hosts](#execution-hosts)) — never as the host itself.
+- **Spring beans, host configuration changes.**
 - **User credentials.** Realms reference secrets by env-var name; the user supplies the secret out-of-band (host UI, env, etc.).
 - **Per-user state.** A realm ships templates and types; the *world* holds the per-user instances.
 
-If a capability needs real code, ship it via `actions/` (LLM in the loop), `mcp/` (sandboxed server, arbitrary code), or as a host-level extension out of band.
+If a capability needs real code, ship it as sandboxed handler code (`src/` or `wasm/`, run on an [execution host](#execution-hosts)), via `actions/` (LLM in the loop), via `mcp/` (sandboxed server, arbitrary code), or as a host-level extension out of band.
 
 ## Conventions
 
