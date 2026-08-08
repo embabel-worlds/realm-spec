@@ -1296,7 +1296,7 @@ realm-name/
 
 ### Handler signature
 
-Every exported async function with a `(ctx, args)` signature is registered as a gateway method.
+Every exported async function with a `(ctx, args)` signature becomes a manifest entry at build time; the host registers from the manifest, never by introspecting the code.
 
 ```ts
 // src/api/docs-editor.ts
@@ -1596,9 +1596,9 @@ host: wasm
 
 ```js
 // wasm/handlers.js
-globalThis.__embabelHandlers = {
-  "ping.ping": async () => ({ result: "pong" }),
-};
+export async function ping(input, ctx) {
+  return "pong";
+}
 ```
 
 ```json
@@ -1617,51 +1617,67 @@ globalThis.__embabelHandlers = {
 }
 ```
 
-Handlers are a dispatch table on `globalThis.__embabelHandlers`, keyed by verb — exactly `"<namespace>.<name>"`, matched literally at dispatch. Each entry is `async (ctx, args)` returning exactly `{ result: ... }` or `{ error: "..." }` — the same wire envelope every gateway call uses. Registration comes from the manifest, not the table: the host registers precisely the manifest's entries as verbs and never introspects the dispatch table. A handler with no manifest entry is unreachable, and a realm with no manifest registers no verbs at all.
+A handler file **contributes named handler functions**, and the manifest binds each declared verb to one by its `name` (the `namespace` is manifest-side and never encoded in the code). A handler is `async (input, ctx)`: it **returns its result value directly** — the value described by the manifest's `outputSchema` — or **throws** to fail. The host wraps the return into the `{ result }` / `{ error }` wire envelope; authors never write the envelope. A return value must be JSON-serializable; `undefined` serializes to a null result. Three forms are supported:
 
-`ctx` carries two things:
+```js
+// Named export — one function per verb (the default). input-first, ctx second.
+export async function ping(input, ctx) {
+  return "pong";
+}
+
+// Default-export object — group a file's verbs.
+export default {
+  async ping(input, ctx) {
+    return "pong";
+  },
+};
+
+// Register by name — for a file that cannot use export syntax (e.g. generated).
+defineHandler("ping", async (input, ctx) => "pong");
+```
+
+The name a form contributes is the export identifier, the property key, or the `defineHandler` string. **Resolution is deterministic:** for each manifest verb the host looks up its `name` among the contributed functions; a name contributed more than once, or by more than one form, is a load-time problem — a name is defined exactly once. **Discovery is the manifest's; the module supplies implementations.** The host reads the manifest for what verbs exist — it never executes guest code to *discover* verbs — then evaluates the module to *resolve* each entry's implementation (collecting the exports and any `defineHandler` registrations) and binds them. A function with no manifest entry is unreachable; a manifest verb with no contributed function registers and fails at dispatch with a no-handler error; a realm with no manifest registers no verbs at all.
+
+`input` is the dispatch input, described by the manifest's `inputSchema`: the call arguments for an on-demand call, or the trigger-discriminated event for a signal- or cron-bound dispatch (see [verb-bodied handlers](#verb-bodied-handlers-and-dispatch-scoped-replies--forward-looking)). An on-demand call passes the arguments verbatim, with no `trigger` key; a handler that is also bound distinguishes the cases by the presence of `trigger`. `ctx` carries:
 
 | Member | Contract |
 |---|---|
 | `ctx.gateway.<namespace>.<method>(args)` | Calls back into the host's gateway surface — the same namespaces and schemas a TS handler or LLM-generated script sees. Executed as the owning user; the guest never holds or presents a credential. |
 | `ctx.log(message)` | Guest logging, surfaced in the host's logs against the dispatch. |
+| `ctx.reply({ text, idempotencyKey })` | Dispatch-scoped reply to the triggering channel thread ([verb-bodied handlers](#verb-bodied-handlers-and-dispatch-scoped-replies--forward-looking)). Returns `{ status }` (one of the reply results listed there). Always present; on a dispatch with no live route it returns `{ status: "NOT_REPLYABLE" }` rather than being absent. |
+
+**Statelessness applies to every form.** Every dispatch runs in a fresh instance, so nothing in the file survives between dispatches — a module-level variable and a value closed over by a default-export object both reset each dispatch. Durable state lives in the graph, through the gateway. `wasm/handlers.js` is compiled as a module; `defineHandler` is a host-provided global available both in that module and in a file with no `export` syntax — reach for it when generating a file that cannot use export syntax.
 
 A realistic verb — an activity digest over signals the realm's own event source ingests:
 
 ```js
-// wasm/handlers.js
-globalThis.__embabelHandlers = {
-  "chatops.digest": async function (ctx, args) {
-    const limit = Number(args && args.limit) > 0 ? Number(args.limit) : 5;
-    try {
-      const messages = await ctx.gateway.signals.recent({
-        type: "chatops.message",
-        hours: 24 * 7,
-        limit: 200,
-      });
-      const byChannel = {};
-      for (const m of messages) {
-        const channel = (m.properties || {}).channel_name || "unknown";
-        byChannel[channel] = (byChannel[channel] || 0) + 1;
-      }
-      ctx.log("digest over " + messages.length + " message(s)");
-      return {
-        result: {
-          totalMessages: messages.length,
-          channels: Object.entries(byChannel)
-            .map(([name, n]) => ({ name, messages: n }))
-            .sort((a, b) => b.messages - a.messages),
-          recent: messages.slice(0, limit).map((m) => ({
-            subject: m.subject,
-            at: m.occurredAt,
-          })),
-        },
-      };
-    } catch (error) {
-      return { error: "digest failed: " + error.message };
-    }
-  },
-};
+// wasm/handlers.js — manifest namespace "chatops", name "digest" binds to export `digest`
+export async function digest(input, ctx) {
+  const limit = Number(input && input.limit) > 0 ? Number(input.limit) : 5;
+  const messages = await ctx.gateway.signals.recent({
+    type: "chatops.message",
+    hours: 24 * 7,
+    limit: 200,
+  });
+  const byChannel = {};
+  for (const m of messages) {
+    const channel = (m.properties || {}).channel_name || "unknown";
+    byChannel[channel] = (byChannel[channel] || 0) + 1;
+  }
+  ctx.log("digest over " + messages.length + " message(s)");
+  // Return the value directly — the host wraps it into the wire envelope.
+  // Throw to fail; the host turns the thrown error into { error }.
+  return {
+    totalMessages: messages.length,
+    channels: Object.entries(byChannel)
+      .map(([name, n]) => ({ name, messages: n }))
+      .sort((a, b) => b.messages - a.messages),
+    recent: messages.slice(0, limit).map((m) => ({
+      subject: m.subject,
+      at: m.occurredAt,
+    })),
+  };
+}
 ```
 
 What the guest has, and what it does not:
@@ -1669,21 +1685,49 @@ What the guest has, and what it does not:
 | Available | Absent |
 |---|---|
 | `ctx.gateway.*`, `ctx.log`, plain JavaScript, JSON | Node (`require`, `process`, `fs`), npm packages |
-| The verb's `args`, described by the manifest's `inputSchema` | Network sockets, filesystem, environment variables |
+| The verb's `input`, described by the manifest's `inputSchema` | Network sockets, filesystem, environment variables |
 | | Any credential. Identity is bound host-side to the owning user; there is no key to read, leak, or replay. |
 
 The absences are the point: a wasm verb is pure logic over gateway calls. A handler that needs an npm library, streaming I/O, or the filesystem belongs on the docker host. The engine is an embedded modern-ECMAScript interpreter, not Node: the language and its built-ins (`JSON`, `Promise`, `Math`) are there; host-shaped globals (`require`, timers, `fetch`) are not.
 
-`wasm/` and `src/` are different weights, not alternatives. `src/` is a full TypeScript project — npm, typecheck, vitest, generated manifest — and buys the typed gateway surface. `wasm/handlers.js` is the zero-toolchain path for realms too small to want a build: no package.json, no npm. The intended convergence — _forward-looking_ — is for the TS build to also emit the wasm dispatch table, so one `src/` serves both hosts; `wasm/` stays as the no-build escape hatch.
+### Single file, or a typed project
+
+Two authoring shapes carry the same verb contract:
+
+- **`wasm/handlers.js` — the zero-toolchain single file.** Plain JavaScript, no `package.json`, no npm. Compiled to `dist/handlers.wasm` on load. The whole realm is `realm.yml` + this file + a hand-authored `dist/manifest.json`. This is the floor.
+
+- **`src/` — a TypeScript project.** When a realm outgrows one file — multiple handlers, shared helpers, real types — it authors a normal TypeScript project: many `.ts` files under `src/`, ordinary `import` semantics between them, a `package.json`, and a typed view of the gateway. The build type-checks, bundles the reachable module graph into one module, **extracts `dist/manifest.json` from the typed exports** (verb names, `inputSchema`/`outputSchema` from the handlers' parameter and return types — the same schema-from-types generation TS handlers already use), and compiles the bundle to `dist/handlers.wasm`. The author runs the build; the shipped artifacts are the bundle and the generated manifest. Extraction sees exports only: `defineHandler` is a single-file form, so a `defineHandler` call in a `src/` project contributes no manifest entry and the build warns.
+
+Types come from two places, both already in the ecosystem: `@embabel/runtime-types` supplies the `Ctx`, event, and envelope types, and a generated `.embabel/gateway.d.ts` (via `embabel-realm sync`) types `ctx.gateway.<namespace>.<method>` against the world's actual tool surface. So `ctx.gateway.signals.recent({ … })` autocompletes and type-checks, and a handler's declared `input`/return types drive the manifest schemas rather than being hand-copied into JSON.
+
+```ts
+// src/api/chatops.ts — typed, multi-file project
+import { digestByChannel } from "../lib/aggregate";
+import type { Ctx } from "@embabel/runtime-types";
+
+export async function digest(input: { limit?: number }, ctx: Ctx): Promise<Digest> {
+  const messages = await ctx.gateway.signals.recent({ type: "chatops.message", hours: 168, limit: 200 });
+  return digestByChannel(messages, input.limit ?? 5);
+}
+```
+
+The project layout and toolchain are the docker `src/` project's: source under `src/api/<namespace>.ts` (the filename is the namespace), each exported handler a verb in that namespace, helpers under `src/lib/` excluded from extraction. Verbs resolve by `(namespace, name)`, so `a.get` and `b.get` are distinct. The build bundles the reachable module graph from those entrypoints into one module and compiles it to the artifact its placement runs — docker JS modules, or a wasm bundle. `wasm/handlers.js` stays the no-build escape hatch; `src/` is the path when you want types, imports, and tests.
+
+A wasm-targeted `src/` project ships its built `dist/handlers.wasm` (and generated manifest) — it is a prebuilt, self-contained realm, loaded as-is; the host does not build `src/` on load (build-on-load covers `wasm/handlers.js` only). CI or the author runs the build and commits, or packages, the bundle.
+
+Two points of this are _forward-looking_ convergence, not shipped today:
+
+- **One signature across hosts.** The canonical handler signature is `(input, ctx)` with the gateway under `ctx.gateway` (as shown throughout). The docker `src/` handler today is `(ctx, args)` with the gateway passed directly as the first argument. The invocation convention is selected by a top-level manifest field `handlerAbi` — one of `"input-ctx"` (the default when absent) or `"ctx-args-legacy"` — applying to the whole artifact, never inferred from parameter names or arity (both are arity-two). Unifying on `(input, ctx)` so one `src/` serves both hosts is the convergence; the `(ctx, args)` form persists only under an explicit `handlerAbi: "ctx-args-legacy"`.
+- **Manifest from types.** The single-file JS path hand-authors `dist/manifest.json`; the TS build extracting it from the typed exports is the same generation the docker `src/` build already points at.
 
 ### The manifest, schedules, and type methods
 
-A wasm realm ships `dist/manifest.json` in the same [manifest format](#manifest-format) as TS handlers, hand-authored (there is no TS extractor to generate it). The schemas drive the typed LLM surface exactly as for docker-hosted verbs; they are documentation for callers, not runtime validation. `outputSchema` describes the unwrapped payload — the value inside `result` after the host strips the envelope — never the envelope itself. Two entry fields matter here:
+A wasm realm ships `dist/manifest.json` in the same [manifest format](#manifest-format) as TS handlers — hand-authored for the single-file JS path, generated by the build for a `src/` TypeScript project. The schemas drive the typed LLM surface exactly as for docker-hosted verbs; they are documentation for callers, not runtime validation. `outputSchema` describes the unwrapped payload — the value the handler returns, before the host wraps it in the wire envelope — never the envelope itself. Two entry fields matter here:
 
 | Field | Meaning |
 |---|---|
-| `schedule` | A cron expression (Spring 6-field, evaluated in the host's timezone). On world load the host registers the verb as a scheduled job for every user with the realm installed and runs it on that cadence, in addition to it being callable on demand. There is no per-user activation step — unlike [`handlers/`](#handlers--event-handlers-typescript-reactions-to-signals--cron), a manifest schedule fires by virtue of the realm being installed. The scheduled invocation passes empty args, so every `inputSchema` field of a scheduled verb must be optional. |
-| `onType` | The verb is a method on a declared type — callable as `<obj>.<name>(args)` on an in-scope object, not as a bare gateway function. The handler receives the object as `args.self` and the caller's arguments as `args.args`. `schedule` does not combine with `onType`: a scheduled invocation has no receiver. |
+| `schedule` | A cron expression (Spring 6-field, evaluated in the host's timezone). On world load the host registers the verb as a scheduled job for every user with the realm installed and runs it on that cadence, in addition to it being callable on demand. There is no per-user activation step — unlike [`handlers/`](#handlers--event-handlers-typescript-reactions-to-signals--cron), a manifest schedule fires by virtue of the realm being installed. A **manifest** schedule passes empty args (`{}`), so every `inputSchema` field of a manifest-scheduled verb must be optional. (A cron *binding* in `handlers/` instead passes `{trigger: "cron", firedAt}` — a different input shape; see [verb-bodied handlers](#verb-bodied-handlers-and-dispatch-scoped-replies--forward-looking).) |
+| `onType` | The verb is a method on a declared type — callable as `<obj>.<name>(args)` on an in-scope object, not as a bare gateway function. The handler receives the object as `input.self` and the caller's arguments as `input.args`. `schedule` does not combine with `onType`: a scheduled invocation has no receiver. |
 
 ```json
 {
@@ -1720,7 +1764,7 @@ A realm that ships `wasm/handlers.js` is compiled to `dist/handlers.wasm` by the
 - A content fingerprint over the handler source and the host's build tooling decides whether to rebuild — content change rebuilds, timestamp games don't.
 - The build writes a candidate and atomically replaces the published bundle only on success. A failed build — bad JavaScript, a hung compiler, a missing toolchain — leaves the previous good bundle (or no bundle) in place and the realm's declarative content loaded, with a warning.
 - The manifest is not part of the fingerprint: after a failed rebuild, the current `dist/manifest.json` pairs with the previous bundle. A verb the manifest declares but the stale bundle lacks registers normally and fails at dispatch with a no-handler error.
-- Bundles are build output. Don't commit them from a source-authored realm.
+- Bundles are build output. Don't commit them from a `wasm/handlers.js` realm — the host rebuilds on load. A `src/` project is different: the host does not build `src/` on load, so the project ships its built `dist/handlers.wasm` (and generated manifest), and that bundle is the truth if it disagrees with the source.
 
 A realm may instead ship a prebuilt `dist/handlers.wasm` and no source — a **self-contained** realm. The host loads the bundle as-is. This is the right shape when the module is compiled from a language the host has no toolchain for.
 
@@ -2070,18 +2114,24 @@ Rules:
 - The binding is declarative content: it loads (inactive) even when the manifest or executable surface is unavailable, and cannot dispatch in that state.
 - One dispatch per (signal, binding); two bindings targeting the same verb dispatch it twice. Dispatch is at-most-once — no retry; a dropped dispatch is recorded, never silent.
 - Verb bindings are **inactive until the user adopts them**, regardless of `autonomous`. `autonomous: false` runs the adopted verb against a read-only gateway: mutating calls return a coded refusal (`channels.reply` returns `NOT_PERMITTED`). Enforcement is host-side; there is no flag the verb is trusted to honor.
-- The verb's args are trigger-discriminated: `{trigger: "signal", signal: {id, typeName, subject, occurredAt, source, properties}}` for a signal firing; `{trigger: "cron", firedAt: <ISO-8601>}` — no `signal` key — for a scheduled one. A binding may declare both `match` and `schedule`; the target verb's `inputSchema` must accept the cron variant or the scheduled binding is rejected at load. Transport, thread, and connector details never appear in either variant.
+- The dispatch input is trigger-discriminated: `{trigger: "signal", signal: {id, typeName, subject, occurredAt, source, properties}}` for a signal firing; `{trigger: "cron", firedAt: <ISO-8601>}` — no `signal` key — for a scheduled one. A binding may declare both `match` and `schedule`; at load the host validates the cron variant `{trigger: "cron", firedAt}` in full against the target verb's `inputSchema` — every constraint, not only `required` (a `type`, `const`/`enum`, or `additionalProperties: false` the variant violates also rejects the scheduled binding). Transport, thread, and connector details never appear in either variant.
 
-A verb dispatched by a channel signal may reply to the originating thread:
+A verb dispatched by a channel signal may reply to the originating thread. The handler receives the trigger-discriminated event as its first argument and `ctx` as its second:
 
 ```js
-const r = await ctx.gateway.channels.reply({
-  message: { text: "Looking into it." },
-  idempotencyKey: "autoreply-" + args.signal.id,
-});
+// wasm/handlers.js — bound to discord.message by a handlers/ verb binding
+export async function onMessage(event, ctx) {
+  if (event.trigger !== "signal") return null;                // no reply route off a cron firing
+  if (!event.signal.properties.content.includes("?")) return null;
+  const r = await ctx.reply({
+    text: "Looking into it.",
+    idempotencyKey: "autoreply-" + event.signal.id,
+  });
+  return { replied: r.status };
+}
 ```
 
-`channels.reply` takes **no destination and no signal id** — the reply can only reach the thread that triggered the current dispatch, and only while that route is live (connector-configured expiry). Results: `SENT` (provider-acknowledged) | `OUTCOME_UNKNOWN` (handoff without acknowledgement) | `NOT_REPLYABLE` (no channel route: cron trigger, non-channel signal) | `NOT_PERMITTED` | `EXPIRED` | `CONNECTOR_UNAVAILABLE` | `REJECTED`. Multiple replies in one dispatch deliver in order; the idempotency key dedupes delivery across re-execution. The outbound envelope is `{text}` only. A connector's own outbound messages never fire bindings — no self-echo loops.
+`ctx.reply({ text, idempotencyKey })` is the dispatch-scoped reply — sugar over `ctx.gateway.channels.reply`, which takes **no destination and no signal id**: the reply can only reach the thread that triggered the current dispatch, and only while that route is live (connector-configured expiry). It returns `{ status }`, where `status` is one of `SENT` (provider-acknowledged) | `OUTCOME_UNKNOWN` (handoff without acknowledgement) | `NOT_REPLYABLE` (no channel route: cron trigger, non-channel signal) | `NOT_PERMITTED` | `EXPIRED` | `CONNECTOR_UNAVAILABLE` | `REJECTED`. Multiple replies in one dispatch deliver in order; the idempotency key dedupes delivery across re-execution. The outbound envelope is `{text}` only. A connector's own outbound messages never fire bindings — no self-echo loops.
 
 Proactive sends to a channel with no triggering signal are a different authority and not part of this contract.
 
