@@ -2046,6 +2046,45 @@ if (isNew) {
 
 A realm handler is **available, not firing**, until the user activates it (adopts it into their own handlers). The host surfaces every realm handler in its "which handlers are active" UX and over MCP; activating one respects the realm's `autonomous` default. A scheduled handler, once activated, is registered as an ordinary cron job — there's no separate handler scheduler. World handlers (`config/handlers/`) and realm handlers merge, the world shadowing a realm on id collision.
 
+### Verb-bodied handlers and dispatch-scoped replies — _forward-looking_
+
+A handler's body may be a realm verb instead of inline TypeScript — the same binding surface feeding a manifest verb on either execution host:
+
+```yaml
+# handlers/discord-autoreply.yml
+- id: discord-autoreply
+  name: Reply to questions in the support channel
+  match:
+    signalType: discord.message
+  autonomous: true
+  spec:
+    kind: verb
+    verb:
+      namespace: discord
+      name: onMessage
+```
+
+Rules:
+
+- `verb` resolves against the owning realm's manifest. A missing target, or a target carrying `schedule` or `onType`, rejects the binding at load with a recorded problem.
+- The binding is declarative content: it loads (inactive) even when the manifest or executable surface is unavailable, and cannot dispatch in that state.
+- One dispatch per (signal, binding); two bindings targeting the same verb dispatch it twice. Dispatch is at-most-once — no retry; a dropped dispatch is recorded, never silent.
+- Verb bindings are **inactive until the user adopts them**, regardless of `autonomous`. `autonomous: false` runs the adopted verb against a read-only gateway: mutating calls return a coded refusal (`channels.reply` returns `NOT_PERMITTED`). Enforcement is host-side; there is no flag the verb is trusted to honor.
+- The verb's args are trigger-discriminated: `{trigger: "signal", signal: {id, typeName, subject, occurredAt, source, properties}}` for a signal firing; `{trigger: "cron", firedAt: <ISO-8601>}` — no `signal` key — for a scheduled one. A binding may declare both `match` and `schedule`; the target verb's `inputSchema` must accept the cron variant or the scheduled binding is rejected at load. Transport, thread, and connector details never appear in either variant.
+
+A verb dispatched by a channel signal may reply to the originating thread:
+
+```js
+const r = await ctx.gateway.channels.reply({
+  message: { text: "Looking into it." },
+  idempotencyKey: "autoreply-" + args.signal.id,
+});
+```
+
+`channels.reply` takes **no destination and no signal id** — the reply can only reach the thread that triggered the current dispatch, and only while that route is live (connector-configured expiry). Results: `SENT` (provider-acknowledged) | `OUTCOME_UNKNOWN` (handoff without acknowledgement) | `NOT_REPLYABLE` (no channel route: cron trigger, non-channel signal) | `NOT_PERMITTED` | `EXPIRED` | `CONNECTOR_UNAVAILABLE` | `REJECTED`. Multiple replies in one dispatch deliver in order; the idempotency key dedupes delivery across re-execution. The outbound envelope is `{text}` only. A connector's own outbound messages never fire bindings — no self-echo loops.
+
+Proactive sends to a channel with no triggering signal are a different authority and not part of this contract.
+
 ## `decorations/` — scheduled KG node enrichment
 
 A realm drives enrichment of nodes already in the knowledge graph by declaring **decoration manifests**. Each manifest binds a realm-declared `action` to a set of Neo4j labels and a cadence; the host's decoration scheduler walks candidate rows, invokes the action per node, and persists the result.
