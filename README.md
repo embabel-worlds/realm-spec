@@ -1565,20 +1565,22 @@ embabel-realm sync ~/dev/realm-hubspot     # or pass an explicit path
 > legacy user/workspace scope alternatives. The guarantees below are release gates for multi-world
 > and shared-store deployment, not a description of current isolation.
 
-A **world** is the durable data and capability isolation boundary. It is not a synonym for the
-person currently acting in it: one owner may have several worlds, several principals may be members
-of one world, and a service principal may act without owning the world. Hosts therefore bind an
-immutable `worldId` and an acting `principalId` independently on every query, gateway call, trigger,
-dispatch, receipt, route, cache entry, and audit record. Realm code and request payloads cannot
-choose or override either value.
+The rule is simple: **isolate by world; authorize by principal; govern by owner or organization.**
+These identities are not interchangeable. One owner may have several worlds. One world may have
+several principals. A service principal may act without owning it.
 
-Realms installed in the same world intentionally compose over that world's typed graph and gateway
-surfaces. Except for deployment-approved `Public`/reference datasets, realms in different worlds do
-not share data, credentials, routes, receipts, canonical entities, or mutable caches, even when the
-same person owns both. A host may share immutable code
-only when it is content-addressed by the canonical full-package `realmDigest`; sharing an execution worker does not
-relax world scoping. Local single-user and single-tenant deployments use this same path with one
-world, rather than relying on the deployment shape as the isolation control.
+The host therefore binds immutable `worldId` and acting `principalId` independently on every query,
+gateway call, trigger, dispatch, receipt, route, cache entry, and audit record. Realm code and request
+payloads cannot choose or override either value.
+
+Realms in one world intentionally compose over that world's typed graph and gateway surfaces. Realms
+in different worlds do not share data, credentials, routes, receipts, canonical entities, or mutable
+caches, even when the same person owns both. Deployment-approved `Public`/reference datasets are the
+only exception.
+
+A host may share immutable code only when the canonical full-package `realmDigest` addresses it.
+Sharing a worker never relaxes world scoping. Local and single-tenant deployments run the same path
+with one world; deployment topology is not an authorization control.
 
 The default identity of a persisted `Person`, `Organization`, mirror, bridge, or other canonical
 entity is consequently `(worldId, type, merge key)`. Cross-world or organization-wide identity is a
@@ -1592,14 +1594,20 @@ between worlds.
 > behavior, and atomic artifact-set publication below require host changes. Until implemented and
 > tested, current Docker/source-validation behavior is not a marketplace security boundary.
 
-A realm is a self-contained deployable unit. The author ships logic and declarations; the platform provisions everything around it — the sandbox, the identity binding, the resource limits, the triggers, and the observability. Data flows in through the realm's declared surfaces — `events/` and `channels/` as typed signals, webhooks, and schedules that invoke its verbs directly — and back out through verbs calling the gateway. The realm never reaches around the platform: no ambient credentials, no direct infrastructure, no shared runtime state with other realms.
+A realm ships logic and declarations. The platform supplies the sandbox, identity binding, resource
+limits, triggers, and observability. Data enters through declared surfaces and leaves through gateway
+calls. A portable realm never reaches around that boundary: no ambient credentials, direct
+infrastructure, or mutable runtime shared with another realm.
 
 Two consequences are normative:
 
 - **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world or principal. Realms deliberately share the world itself: declared types are visible across realms, and graph data written through the gateway is readable by anything with graph access in that world. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world-scoped.
 - **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
 
-The host — where a dispatch physically runs — is a placement decision, not part of a verb's contract. Everything else in a realm — types, producers, lenses, APIs, events, prompts — is host-independent and loads the same way everywhere. What placement does constrain is the verb's implementation: each host runs a different artifact, so moving a realm between today's two hosts means shipping the artifact the target host runs, and a verb must fit its host's capability set (a handler that needs npm cannot become a wasm verb by relabeling). Two hosts exist:
+The host is placement, not the verb contract. Types, producers, lenses, APIs, events, and prompts load
+the same way everywhere. Artifacts do not: each host runs a different artifact, and a verb must fit
+that host's capability set. A handler that needs npm does not become a wasm verb by relabeling it.
+Two hosts exist:
 
 | Host | What runs | Choose it when |
 |---|---|---|
@@ -2174,9 +2182,20 @@ if (isNew) {
 }
 ```
 
-### Activation
+### Activation — _forward-looking_
 
-A realm handler is **available, not firing**, until the user activates it (adopts it into their own handlers). Adoption pins the full-package `realmDigest`, trigger-registration identity, compiled capability-grant digest, world, and an explicit **grant subject** (the adopting principal or a delegated service principal). A signal sender is data, never the authority the realm acts as. Cron and signal triggers act as that grant subject; an on-demand call acts as its authenticated caller. A change to any realm content, trigger registration, or compiled grant pauses the adoption before new dispatches; an organization policy may auto-approve a digest change only under an explicit reviewed rule, never by silently carrying the old approval forward. The host surfaces every realm handler in its "which handlers are active" UX and over MCP; activating one respects the realm's `autonomous` default. A scheduled handler, once activated, is registered as an ordinary cron job — there's no separate handler scheduler. World handlers (`config/handlers/`) and realm handlers merge, the world shadowing a realm on id collision.
+Installation makes a realm handler **available, not runnable**. Adoption makes it runnable and pins the
+full-package `realmDigest`, trigger-registration identity, compiled capability-grant digest, world,
+and explicit **grant subject**. The grant subject is the adopting principal or a delegated service
+principal. A signal sender is data, never authority. Cron and signal triggers act as the grant
+subject; an on-demand call acts as its authenticated caller.
+
+Changing realm content, the trigger registration, or the compiled grant pauses new dispatches. An
+organization may auto-approve a digest change only under an explicit reviewed rule; the host never
+silently carries approval forward. The host surfaces available handlers in its activation UX and
+over MCP. Activation respects the realm's `autonomous` default. A scheduled handler uses the normal
+cron path; there is no second handler scheduler. World handlers (`config/handlers/`) shadow realm
+handlers on id collision.
 
 Observe-only preview is a legibility aid, not a proof of future behaviour: realm code can branch on
 inputs or time after adoption. Security comes from the host-bound grant and method classification.
@@ -2581,7 +2600,9 @@ Realms are discoverable via the host's directory system:
 
 - **Code that runs with host privileges.** No JVM bytecode, no native libraries, no classpath contributions. Realm code executes only inside a host-managed sandbox — the code sandbox for `dist/` JS handlers, the capability-scoped wasm runtime for `dist/handlers.wasm` (see [Execution hosts](#execution-hosts)) — never as the host itself.
 - **Spring beans, host configuration changes.**
-- **User credentials.** Realms reference secrets by env-var name; the user supplies the secret out-of-band (host UI, env, etc.).
+- **User credentials.** Realms carry credential references, never values. Marketplace realms use
+  host-vetted typed slots and auth profiles. Environment-variable references are local or explicitly
+  first-party/org-reviewed compatibility syntax only.
 - **Per-user state.** A realm ships templates and types; the *world* holds the per-user instances.
 
 If a capability needs real code, ship it as sandboxed handler code (`src/` or `wasm/`, run on an [execution host](#execution-hosts)), via `actions/` (LLM in the loop), via `mcp/` (sandboxed server, arbitrary code), or as a host-level extension out of band.

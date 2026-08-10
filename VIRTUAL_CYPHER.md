@@ -6,8 +6,8 @@
 > guarantees, and what it refuses. It states OBSERVABLE behaviour only — never how the engine is
 > built. Where an implementation and this document disagree, this document is the defect report.
 > The 0.2 world/principal separation and world-keyed cache/canonical guarantees are forward-looking
-> host requirements; current Me is not conformant and must not claim multi-world/shared-store
-> isolation until their release gates pass.
+> host requirements. Current Me is not conformant. Multi-world or shared-store isolation is not a
+> valid deployment claim until the corresponding release gates pass.
 >
 > **Relationship to Cypher.** Virtual Cypher is not a new language. A query is ordinary Cypher, and
 > everything the [openCypher](https://opencypher.org/) specification says about pattern matching,
@@ -112,11 +112,11 @@ always rolls back**:
 A naked `MATCH (hc:HubSpotContact)` — no anchor — is **rejected** (§4). This is what stops Virtual
 Cypher from trying to fetch *every* contact in HubSpot.
 
-**Per-world scope.** The probe runs through the **scope rewriter** (fail-closed) under immutable
-host-bound `worldId`; the acting `principalId` is retained separately for authorization and audit.
-You can only materialize virtual data off anchors in that world, and every virtual node is stamped
-with `worldId`. A caller cannot supply either scope value, and a query can never reach another world,
-including another world owned by the same user. Local single-user deployments use the same path.
+**Per-world scope.** The world selects data; the principal supplies authority. The probe runs through
+the fail-closed scope rewriter under immutable host-bound `worldId`, while `principalId` remains
+separate for authorization and audit. Every anchor and virtual node belongs to that world. The caller
+supplies neither identity. A query cannot reach another world, including one owned by the same user.
+Local single-user deployments use the same path.
 
 ---
 
@@ -271,8 +271,9 @@ expensive direction if authored carelessly:
 ### 5.4 Entity canonicalization — the spines a join anchors on
 
 Every example above anchors on a canonical `Person` or `Organization`. Those are **spines**: the
-single node a real human or company resolves to within one world, no matter how many sources mention them. A spine is
-keyed deterministically — **Person by `(worldId, email)`, Organization by `(worldId, registrable domain)`** — so two records
+single node a real human or company resolves to within one world, no matter how many sources mention
+them. A spine is keyed deterministically — **Person by `(worldId, email)`, Organization by
+`(worldId, registrable domain)`** — so two records
 from different sources (a HubSpot contact and a GitHub commit author, both `rod@embabel.com`)
 converge on **one** `Person`, and "my contacts' companies" lands on the same `Organization` the
 email graph already built.
