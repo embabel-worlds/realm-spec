@@ -25,6 +25,31 @@ One durably admitted invocation of Realm logic, retaining the same identity acro
 worker attempts.
 _Avoid_: worker process, execution attempt
 
+**Realm Function**:
+A named, schema-described callable supplied by a Realm and executed by a host. A Realm Function may
+be pure or effectful and may be invoked on demand or through an adopted Trigger Registration.
+_Avoid_: verb, operation, action
+
+**Trigger Binding**:
+A declarative entry under `handlers/` connecting a signal match, a schedule, or both to executable
+logic. Its target may be an inline TypeScript Handler or a Realm Function.
+_Avoid_: verb binding, event handler
+
+**Manifest Schedule**:
+A schedule declared directly on a Realm Function's manifest entry. It is a Trigger Registration,
+but not a Trigger Binding, and invokes the Function with empty arguments.
+_Avoid_: scheduled binding, handler schedule
+
+**Trigger Registration**:
+The adopted identity of an autonomous trigger: either a Trigger Binding or a Manifest Schedule.
+Adoption authorizes it to execute as exactly one principal.
+_Avoid_: trigger when referring to the durable registration
+
+**Handler**:
+Code that implements a Realm Function or the inline TypeScript body of a Trigger Binding. A Handler
+is an implementation, not the declared callable or trigger rule.
+_Avoid_: Realm Function, Trigger Binding
+
 **Knowledge Context**:
 A named confidentiality boundary for knowledge or memory within one world. Its identity and access
 policy are subordinate to the world and cannot authorize access across worlds.

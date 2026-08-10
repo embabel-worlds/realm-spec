@@ -1536,7 +1536,7 @@ naturally frozen.
 
 Consuming a scope: because a **subset** scope RETURNs whole, identity-preserving nodes (§8.2·1), a client
 runtime can hydrate its members directly into typed instances — the type comes off the node's own label, so
-the reader needs no per-query type argument. This is the source side of the type-and-verb model: the saved
+the reader needs no per-query type argument. This is the source side of the type-and-function model: the saved
 scope supplies the objects; their methods (pure compute, or effectful write-back through the producer) live on
 the type. A **tabular** scope (§8.2·3) has no node to hydrate — it is a frozen values table, readable and
 renderable but never bound as a label or hydrated into instances. The store records which kind a handle is and
