@@ -11,19 +11,19 @@ state. A world can outlive, move between, or change the account that owns it.
 _Avoid_: tenant, user workspace, user scope
 
 **Principal**:
-An authenticated human or service identity that can act in a world. A principal may act in several
-worlds, and a world may admit several principals.
-_Avoid_: user when the actor may be a service; owner when describing the current actor
+The stable human or service identity whose authority an execution uses. On-demand work uses the
+authenticated caller; autonomous work uses the run-as principal selected by its adoption.
+_Avoid_: user when the actor may be a service; executor; owner; grant subject
 
-**Owner**:
-The account with administrative and lifecycle authority over a world. Ownership governs the
-boundary but does not define or replace it.
-_Avoid_: tenant, principal, world user
+**Adoption**:
+A host authorization record that makes autonomous Realm work runnable under one principal. It may
+record creators and approvers for audit, but they do not become runtime authorities.
+_Avoid_: installation, ownership
 
-**Grant Subject**:
-The principal whose authority an adopted trigger uses when it runs without a live caller. An inbound
-sender is event data, never the grant subject.
-_Avoid_: sender, triggering user, realm owner
+**Execution**:
+One durably admitted invocation of Realm logic, retaining the same identity across recovery and
+worker attempts.
+_Avoid_: worker process, execution attempt
 
 **Knowledge Context**:
 A named confidentiality boundary for knowledge or memory within one world. Its identity and access
@@ -32,10 +32,5 @@ _Avoid_: world, user context
 
 **World Incarnation**:
 The exclusively active runtime epoch of one durable world. A new incarnation fences stale execution
-after restore, migration, or ownership transfer without changing the world's identity.
+after restore, migration, or administrative transfer without changing the world's identity.
 _Avoid_: world version, cloned world
-
-**User ID**:
-A host-specific identifier for a human account. It may identify a principal or owner but never a
-world or a portable Realm scope.
-_Avoid_: using `userId` as an alias for `worldId`

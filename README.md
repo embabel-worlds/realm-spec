@@ -1175,7 +1175,7 @@ Four auth modes plus the implicit headers-only path:
 # 5. OAuth2 — see next section
 ```
 
-Credential references resolve through a host binding keyed by world, grant subject, connection, and
+Credential references resolve through a host binding keyed by world, context, principal, connection, and
 grant revision, with context access checked on every call. In the local/first-party compatibility
 tier, `token-env` and `${VAR}` may then resolve from that world's credential store (set via
 `set NAME = ...` in chat or via the admin UI), followed by the process environment. Process fallback
@@ -1585,25 +1585,32 @@ embabel-realm sync ~/dev/realm-hubspot     # or pass an explicit path
 
 Canonical terminology is defined in the [Realm domain glossary](./CONTEXT.md).
 
-The rule is simple: **isolate by world; authorize by principal; govern by owner or organization.**
-These identities are not interchangeable. One owner may have several worlds. One world may have
-several principals. A service principal may act without owning it.
+The portable rule is simple: **isolate by world and context; authorize every execution as exactly one
+principal.** A world may admit several human and service principals. Concurrent executions of the
+same Realm in the same world may therefore run as different principals without changing their data
+boundary.
 
-| Identity | Meaning | Contract role |
-|---|---|---|
-| `worldId` | The opaque, durable identity of the world | Partitions all private data, configuration, credentials, routes, receipts, caches, dispatch state, and canonical entities. |
-| `principalId` | The authenticated human or service currently acting | Authorizes and attributes an on-demand operation. It is never a data-partition substitute for `worldId`. |
-| `ownerId` | The account with administrative and lifecycle authority over the world | Governs ownership, transfer, deletion, and billing. It is not a query or cache scope. |
-| `grantSubjectId` | The principal whose approved authority an adopted trigger spends | Authorizes cron and signal-triggered work when no live caller exists. An inbound sender is data, never the grant subject. |
+| Field | Contract role |
+|---|---|
+| `worldId` | Opaque, durable identity that partitions all private data, configuration, credentials, routes, receipts, caches, execution state, and canonical entities. |
+| `contextId` | Explicit confidentiality boundary within a world. It never replaces `worldId`. |
+| `principalId` | Human or service identity whose authority the execution uses. It authorizes and attributes the operation; it is not a data-partition substitute for `worldId`. |
+| `executionId` | Identity of one durably admitted logical execution, stable across recovery and worker attempts. |
 
 `userId` is not a portable Realm scope. A host may use it for a human account that is a principal or
-owner, but Realm manifests, guest inputs, persisted scope stamps, and cache keys must never use it as
-an alias for `worldId`.
+may map it to a `principalId`, but Realm manifests, guest inputs, persisted scope stamps, and cache
+keys never use `userId` as an alias for `worldId` or as the general runtime authority. Administration,
+billing, and ownership are host management-plane concerns, not portable execution identities.
 
-`worldId` is globally unique, persisted with the world, and independent of its owner, name, and
-filesystem or deployment location. Renaming, moving, restoring, or transferring the same world
-preserves its id. A copy intended to become an independent world receives a new id. Transferring
-ownership does not rewrite world data or silently transfer authority: existing adoptions and
+`principalId` is an opaque, stable identifier in the host security domain and is never recycled.
+For federated authentication the host derives it from a verified issuer and subject, not from an
+email address, display name, or unqualified provider-local id. Membership and access to each world
+and context are separate policy and are rechecked at admission and every privileged handoff.
+
+`worldId` is globally unique, persisted with the world, and independent of its administrative
+account, name, and filesystem or deployment location. Renaming, moving, restoring, or transferring the same world
+preserves its id. A copy intended to become an independent world receives a new id. Administrative
+transfer does not rewrite world data or silently transfer authority: existing adoptions and
 credentials pause until an explicit transfer policy revalidates them.
 
 A host may subdivide a world into named knowledge or memory contexts. Such a context is identified
@@ -1613,16 +1620,19 @@ includes `contextId` and the applicable access-policy revision. The default cont
 absent context fails closed. A context may narrow which principals can read within a world; it never
 replaces `worldId` as the isolation boundary or authorizes a cross-world read.
 
-The host therefore binds immutable `worldId` and acting `principalId` independently on every query,
-gateway call, trigger, dispatch, receipt, route, cache entry, and audit record. Realm code and request
-payloads cannot choose or override either value. A host-only dispatch also carries
-`grantSubjectId`: for on-demand work it is the authenticated acting principal; for cron and signal
-work both `principalId` and `grantSubjectId` are the subject approved at adoption. A platform worker
-may have a separate `executorId`, but that operational identity grants no Realm authority and does
-not enter data or cache scope. Credential resolution is consequently keyed by world, grant subject,
-connection, and grant revision rather than by an undifferentiated user id. Audit records include
-world, grant subject/acting principal, trigger identity, and—when useful for operations—the executor
-separately.
+The host binds immutable `worldId`, `contextId`, `principalId`, and `executionId` on every execution.
+Realm code and request payloads cannot choose or override them. On-demand work uses the authenticated
+caller as `principalId`. Autonomous work uses the run-as human or service principal selected by its
+adoption. A signal, webhook sender, or channel author is input data, never the principal merely
+because it caused an execution.
+
+An adoption records who created or approved it for audit, separately from its run-as principal.
+Those audit identities grant no execution authority. A platform may record `workerId` for the
+process handling an attempt, but it is operational telemetry only: it grants no authority and enters
+no data, credential, cache, cursor, route, or receipt key. Credential resolution is keyed by world,
+context, principal, connection, and grant revision. Audit records include world, context, principal,
+adoption when present, execution, trigger or sender data, observed world epoch, and optionally the
+worker.
 
 Realms in one world intentionally compose over that world's typed graph and gateway surfaces. Realms
 in different worlds do not share data, credentials, routes, receipts, canonical entities, or mutable
@@ -1654,10 +1664,10 @@ leases, sessions, tokens, and captured routes. Any `IN_FLIGHT` or `OUTCOME_UNKNO
 reconciled or surfaced for a decision, never automatically replayed. `worldEpoch` is a fencing value,
 not part of an effect receipt key; incrementing it must not make the same logical effect spend again.
 
-Ownership transfer is an atomic suspended state. Before the world resumes, policy revalidates or
-revokes owner and principal membership, context ACLs, service principals, grants/adoptions,
+Administrative transfer is an atomic suspended state. Before the world resumes, host policy
+revalidates or revokes principal membership, context ACLs, service principals, grants/adoptions,
 credentials, sessions, tokens, routes, and queued work. Data, receipts, and audit retain `worldId`;
-authority does not silently transfer with them.
+authority does not silently transfer with them. The world resumes under a new `worldEpoch`.
 
 A fork is a new world, not a second incarnation. It receives a new `worldId`, new context ids, and
 rekeys every private/context/canonical identity. It copies no adoptions, credentials, service
@@ -1677,7 +1687,7 @@ infrastructure, or mutable runtime shared with another realm.
 
 Two consequences are normative:
 
-- **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world, context, principal, or grant subject. Realms deliberately share declared types inside a world; graph data is readable only through the current context/access policy or an explicit policy-authorized bridge. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world- and context-scoped.
+- **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world, context, principal, or execution. Realms deliberately share declared types inside a world; graph data is readable only through the current context/access policy or an explicit policy-authorized bridge. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world-, context-, and where principal-dependent, principal-scoped.
 - **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
 
 The host is placement, not the verb contract. Types, producers, lenses, APIs, events, and prompts load
@@ -1782,7 +1792,7 @@ The name a form contributes is the export identifier, the property key, or the `
 
 | Member | Contract |
 |---|---|
-| `ctx.gateway.<namespace>.<method>(args)` | Calls back into the host's gateway surface — the same namespaces and schemas a TS handler or LLM-generated script sees. The host binds the world, context, and access-policy revision; on-demand calls authorize as the acting principal, while autonomous calls spend the pinned `grantSubjectId` grant. The guest never holds or presents a credential or scope key. |
+| `ctx.gateway.<namespace>.<method>(args)` | Calls back into the host's gateway surface — the same namespaces and schemas a TS handler or LLM-generated script sees. The host binds the world, context, access-policy revision, execution, and principal. On-demand calls run as the authenticated caller; autonomous calls run as the adoption's pinned principal. The guest never holds or presents a credential or scope key. |
 | `ctx.log(message)` | Guest logging, surfaced in the host's logs against the dispatch. |
 | `ctx.reply({ text, idempotencyKey })` | Dispatch-scoped reply to the triggering channel thread ([verb-bodied handlers](#verb-bodied-handlers-and-dispatch-scoped-replies--forward-looking)). Returns `{ status }` (one of the reply results listed there). Always present; on a dispatch with no live route it returns `{ status: "NOT_REPLYABLE" }` rather than being absent. |
 
@@ -2014,8 +2024,8 @@ brings their own MCP server.
 
 MCP servers are lazy-loaded — the Docker container starts on first tool use, not on world init. A
 mutable or credential-bearing MCP instance is keyed by `(worldId, contextId, realmDigest,
-grantSubjectId, access-policy revision, grant/credential revision)` and is never shared across
-contexts, grant subjects, or worlds. A `worldEpoch` change destroys the instance or fences it from
+principalId, access-policy revision, grant/credential revision)` and is never shared across
+contexts, principals, or worlds. A `worldEpoch` change destroys the instance or fences it from
 all later calls. Only an immutable, credential-free server proven to hold no caller-derived state
 may use a deployment-wide cache. Existing credential-fingerprint or config-only sharing is not a
 shared-tenancy boundary.
@@ -2038,7 +2048,7 @@ Webhook registrations — declare webhooks the realm wants to receive. When the 
 Registration runs under the same trust tier as `apis/`: marketplace realms cannot interpolate a
 credential into `register.args` or call a directly networked tool holding a durable secret. The host
 binds registration and callback authentication to the world, context, access-policy revision, full
-`realmDigest`, source-registration generation, grant subject, and grant revision. Callback routing
+`realmDigest`, source-registration generation, run-as principal, and grant revision. Callback routing
 also verifies the current `worldEpoch`. The templated form below is local/first-party compatibility
 syntax.
 
@@ -2126,9 +2136,12 @@ into the consequence engine. The payload cannot select or override that route.
 For services without webhook support — or where polling is preferable — declare a `poll` block
 instead of (or in addition to) `webhook`. Polling reuses the host's task scheduler. Like a handler,
 the source must be adopted before it can run. Its cursor identity is `(worldId, contextId,
-sourceRegistrationId, grantSubjectId, type)`; the cursor record also carries the current realm,
-access-policy, grant, and credential revisions. A revision change pauses polling for revalidation
-without silently starting a fresh cursor and replaying the source.
+adoptionId, sourceRegistrationId, type)`; the cursor record also carries the current principal,
+realm, access-policy, grant, and credential revisions as fences. A principal, credential, or revision
+change pauses polling. The host may resume the existing cursor only after proving it addresses the
+same source stream; otherwise an operator must explicitly reset it. A reset is audited, and events
+already persisted under the source's stable event identity remain deduplicated. No change silently
+starts a fresh cursor and replays the source.
 
 ```yaml
 # events/linear.yml
@@ -2155,7 +2168,7 @@ without silently starting a fresh cursor and replaying the source.
 | `poll.every` | yes | Cadence (e.g. `5m`, `1h`). |
 | `poll.api` | yes | Name of an API declared in `apis/` (this or another realm). |
 | `poll.method` | yes | Method name on that API. |
-| `poll.args` | no | Arguments to the call. Jinja-templated against `{ cursor }` only. World, context, grant subject, and credentials are host-bound and unavailable to the template. Methods such as `list_my_issues` derive the subject from the bound credential. |
+| `poll.args` | no | Arguments to the call. Jinja-templated against `{ cursor }` only. World, context, principal, and credentials are host-bound and unavailable to the template. Methods such as `list_my_issues` derive the subject from the bound credential. |
 | `poll.cursor.param` | no | API parameter the host populates with the persisted cursor. |
 | `poll.cursor.from` | no | JSONPath into each returned result, used to compute the next cursor (the maximum value across the batch becomes the new cursor). |
 | `poll.mapping` | yes | Same shape as the webhook `mapping` block. |
@@ -2197,7 +2210,7 @@ both worlds to the first owner. Organization-owned shared connectors require a l
 `orgId` membership and route-attribution contract.
 
 Within that world, every inbound and reply route is bound to one explicit context, access-policy
-revision, and grant subject. A connector session may multiplex such routes only when it keeps those
+revision, and run-as principal. A connector session may multiplex such routes only when it keeps those
 bindings separate; it never broadcasts an event or reply route into every context by default.
 
 The inbound half emits ordinary `Signal`s of a type the realm declares in `types/` — a channel message is downstream-indistinguishable from any other signal, so triage rules, attention, persistence, and handler reactions all apply unchanged. The realm typically ships the message type, its identity projections, and any verbs over the stream (a digest, a search) alongside the connector config.
@@ -2274,15 +2287,21 @@ if (isNew) {
 ### Activation — _forward-looking_
 
 Installation makes a realm handler **available, not runnable**. Adoption makes it runnable and pins
-an `adoptionId`, the full-package `realmDigest`, trigger-registration identity, compiled
-capability-grant digest and revision, `worldId`, `contextId`, access-policy revision, and explicit
-**`grantSubjectId`**. The grant subject is the adopting principal or a delegated service principal.
-A signal sender is data, never authority. Cron and signal triggers act as the grant subject; an
-on-demand call acts as its authenticated caller.
+the full-package `realmDigest`, trigger-registration identity, compiled capability-grant digest and
+revision, `worldId`, `contextId`, access-policy revision, and one run-as **`principalId`**. The
+principal may be the adopting human or a service principal they are allowed to delegate to. The
+adoption retains its `adoptionId` across reapproval and records its creator and approvers for audit;
+those records confer no runtime authority. A signal sender is data, never authority. Cron and signal
+triggers run as the adoption's principal; an on-demand call runs as its authenticated caller.
 
-Changing realm content, the trigger registration, compiled grant or grant subject, context, or its
-access-policy revision pauses new dispatches. An organization may auto-approve a compatible change
-only under an explicit reviewed rule; the host never silently carries approval forward or expands
+Changing realm content, the trigger registration, compiled grant, run-as principal, context, or its
+access-policy revision increments the adoption revision and pauses new dispatches. Reapproval keeps
+the same `adoptionId`; deleting and recreating an adoption creates a new one. Disabling or removing a
+principal pauses every adoption that runs as it and invalidates its credentials and mutable caches.
+Removing an approver triggers host-policy revalidation of adoptions they approved, but does not
+silently revoke or inherit an independently authorized service principal's authority.
+An organization may auto-approve a compatible change only under an explicit reviewed rule; the host
+never silently carries approval forward or expands
 an adoption's authority. The host surfaces available handlers in its activation UX and over MCP.
 Activation respects the realm's `autonomous` default. A scheduled handler uses the normal cron path;
 there is no second handler scheduler. World handlers (`config/handlers/`) shadow realm handlers on
@@ -2316,15 +2335,23 @@ Rules:
 
 - `verb` resolves against the owning realm's manifest. A missing target, or a target carrying `schedule` or `onType`, rejects the binding at load with a recorded problem.
 - The binding is declarative content: it loads (inactive) even when the manifest or executable surface is unavailable, and cannot dispatch in that state.
-- One dispatch per (signal, binding); two bindings targeting the same verb dispatch it twice. Before
-  fan-out, the host durably admits the dispatch by atomically inserting its dispatch key. A crash
-  after signal deduplication but before queueing must therefore leave a recoverable `QUEUED` or
+- One execution per (signal, binding); two bindings targeting the same verb create two executions.
+  Before fan-out, the host durably admits autonomous work by atomically inserting its deterministic
+  `executionId`, derived from `(adoptionId, trigger-registration generation, concrete trigger
+  occurrence)`. The same occurrence therefore retains one id across crash recovery and worker
+  attempts. An on-demand call receives an `executionId` at durable admission. Its request
+  idempotency mapping is keyed by `(worldId, contextId, principalId, target verb, request
+  idempotency key)`, so transport retries reach the same execution without deduplicating or exposing
+  another principal's work. The mapping stores a canonical request digest and rejects reuse of the
+  same key with different arguments. A call without a request idempotency key is a new execution. An
+  explicit operator replay creates a new `executionId` linked to the original in
+  audit. A crash after signal deduplication but before queueing must leave a recoverable `QUEUED` or
   `ABANDONED` record, never only an in-memory gap. Multi-instance hosts put the lease epoch/fencing
-  token in host-only dispatch context; every gateway, effect, and delivery handoff atomically verifies
-  current `RUNNING` ownership and current adoption, refusing a partitioned stale worker. A host
-  without those controls must declare itself single-instance. v1 is at-most-once
-  after admission and does not retry guest execution.
-- Verb bindings are **inactive until the user adopts them**, regardless of `autonomous`. `autonomous: false` runs the adopted verb against a read-only gateway: mutating calls return a coded refusal (`channels.reply` returns `NOT_PERMITTED`). Enforcement is host-side; there is no flag the verb is trusted to honor.
+  token in host-only dispatch context; every gateway, effect, and delivery handoff atomically
+  verifies current `RUNNING` ownership, world epoch, principal authority, and adoption, refusing a
+  partitioned stale worker. A host without those controls must declare itself single-instance. v1
+  is at-most-once after admission and does not retry guest execution.
+- Verb bindings are **inactive until adopted**, regardless of `autonomous`. `autonomous: false` runs the adopted verb against a read-only gateway: mutating calls return a coded refusal (`channels.reply` returns `NOT_PERMITTED`). Enforcement is host-side; there is no flag the verb is trusted to honor.
 - The dispatch input is trigger-discriminated: `{trigger: "signal", signal: {id, typeName, subject, occurredAt, source, properties}}` for a signal firing; `{trigger: "cron", firedAt: <ISO-8601>}` — no `signal` key — for a scheduled one. A binding may declare both `match` and `schedule`. At load the host validates the target and schema and rejects any trigger shape it can prove incompatible. Immediately before every concrete signal or cron dispatch, it validates the complete input against `inputSchema`; invalid input records a failed dispatch and guest code does not run. Transport, thread, connector, `worldId`, and principal details never appear in either variant.
 
 A verb dispatched by a channel signal may reply to the originating thread. The handler receives the trigger-discriminated event as its first argument and `ctx` as its second:
@@ -2342,7 +2369,7 @@ export async function onMessage(event, ctx) {
 }
 ```
 
-`ctx.reply({ text, idempotencyKey })` is the dispatch-scoped reply — sugar over `ctx.gateway.channels.reply`, which takes **no destination and no signal id**: the reply can only reach the thread that triggered the current dispatch, and only while that route is live (connector-configured expiry). It returns `{ status }`, where `status` is one of `SENT` (provider-acknowledged) | `OUTCOME_UNKNOWN` (handoff without acknowledgement) | `NOT_REPLYABLE` (no channel route: cron trigger, non-channel signal) | `NOT_PERMITTED` | `EXPIRED` | `CONNECTOR_UNAVAILABLE` | `REJECTED`. Multiple replies in one dispatch are serialized by host acceptance order and bounded by a host-configured per-binding and per-route reply budget; exhausting the budget returns `REJECTED`. The receipt key is `(worldId, contextId, adoptionId, realmDigest, grantSubjectId, invocation identity, surface, operation, idempotencyKey)`; invocation identity folds in the trigger registration and concrete trigger, so the same author key in independent dispatches never collides. The host verifies the adoption's current grant and context-policy revisions before accepting or delivering the effect, but those revisions and `worldEpoch` are fences rather than receipt-key fields: changing one cannot make the same logical effect spend again. An omitted key is derived from the dispatch-local acceptance sequence and is safe only within that attempt. The outbound envelope is `{text}` only. A connector's own outbound messages never fire bindings; the reply budget bounds loops involving other bots that self-echo suppression cannot identify.
+`ctx.reply({ text, idempotencyKey })` is the dispatch-scoped reply — sugar over `ctx.gateway.channels.reply`, which takes **no destination and no signal id**: the reply can only reach the thread that triggered the current dispatch, and only while that route is live (connector-configured expiry). It returns `{ status }`, where `status` is one of `SENT` (provider-acknowledged) | `OUTCOME_UNKNOWN` (handoff without acknowledgement) | `NOT_REPLYABLE` (no channel route: cron trigger, non-channel signal) | `NOT_PERMITTED` | `EXPIRED` | `CONNECTOR_UNAVAILABLE` | `REJECTED`. Multiple replies in one execution are serialized by host acceptance order and bounded by a host-configured per-binding and per-route reply budget; exhausting the budget returns `REJECTED`. The receipt key is `(worldId, contextId, executionId, surface, operation, idempotencyKey)`, so the same author key in independent executions never collides. `principalId`, `adoptionId`, `realmDigest`, policy/grant revisions, and `worldEpoch` remain immutable audit or fencing fields on the execution and receipt, not key fields; changing one cannot make the same logical execution spend again. An omitted key is derived from the durably recorded execution-local acceptance sequence. The outbound envelope is `{text}` only. A connector's own outbound messages never fire bindings; the reply budget bounds loops involving other bots that self-echo suppression cannot identify.
 
 Proactive sends to a channel with no triggering signal are a different authority and not part of this contract.
 
@@ -2370,8 +2397,8 @@ A file may carry a single manifest or a YAML list of them (`- name: ...` per ent
 ### The action contract
 
 The referenced action receives one node snapshot and returns a structured `DecorationResult`
-describing what to write. The host owns persistence and binds world, context, principal, and grant
-subject out of band; none is serialized into the action input. The action stays pure.
+describing what to write. The host owns persistence and binds world, context, principal, and
+execution out of band; none is serialized into the action input. The action stays pure.
 
 **Input bindings** (the action's `inputs:` block in `actions/<name>.yml` must accept these):
 
@@ -2403,9 +2430,10 @@ interface DecorationResult {
 ```
 
 Reserved host metadata includes scope, identity, policy, lease, provenance-control, and credential
-fields such as `worldId`, `contextId`, `ownerId`, `principalId`, `grantSubjectId`, and `worldEpoch`.
-It is never included in `nodeProperties`. The host rejects `propsToSet`, relationship targets, or any
-other guest result that attempts to set, remove, or substitute a reserved field.
+fields such as `worldId`, `contextId`, `principalId`, `executionId`, and `worldEpoch`. Retired or
+legacy host identity fields remain reserved so old data cannot be forged. Reserved metadata is never
+included in `nodeProperties`. The host rejects `propsToSet`, relationship targets, or any other guest
+result that attempts to set, remove, or substitute a reserved field.
 
 Empty result is fine — the scheduler stamps the row regardless, so the decorator doesn't re-run before its `refreshAfter` (or never, if one-shot). Return empty when the action surveyed the row and decided there was nothing to add (e.g. "no signature in this email", "no Wikipedia article for this person").
 

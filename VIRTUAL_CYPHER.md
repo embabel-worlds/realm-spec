@@ -106,7 +106,8 @@ always rolls back**:
 - pinned by an inline literal — `(p:Person {primaryEmail:'a@b.com'})`, or
 - pinned by a `WHERE` equality — `WHERE p.primaryEmail = 'a@b.com'`, or
 - narrowed by **any** property predicate — `WHERE toLower(p.name) CONTAINS 'grace'`, or
-- the current user — `(me:AssistantUser)` (the scope rewriter pins it to you), or
+- the acting human principal — `(me:AssistantUser)` (the scope rewriter resolves the node linked to
+  `principalId`; a service principal has no implicit `me` anchor), or
 - reachable over a *required* edge from another bound node.
 
 A naked `MATCH (hc:HubSpotContact)` — no anchor — is **rejected** (§4). This is what stops Virtual
@@ -1464,20 +1465,25 @@ MATCH (d:breach_mentions) RETURN count(DISTINCT d) AS incidents      -- an aggre
 
 The materialized-view cache is a **strategy behind an interface**, not a fixed mechanism. The default strategy
 is graph-colocated and transactional: a
-`MaterializedView {view, worldId, contextId, accessPolicyRevision, expiresAt}` marker node with
+`MaterializedView {view, worldId, contextId, accessPolicyRevision, principalId?, expiresAt}` marker node with
 `[:MEMBER]` edges to the cached result nodes, swept by TTL. But the store is an SPI:
 
 ```kotlin
 interface ViewMaterializationStore {
-  fun freshUntil(view: String, worldId: String, contextId: String, accessPolicyRevision: String): Long?
-  fun materialize(view: String, worldId: String, contextId: String, accessPolicyRevision: String, memberIds: List<NodeId>, expiresAt: Long)
-  fun members(view: String, worldId: String, contextId: String, accessPolicyRevision: String): List<NodeId>
-  fun clear(view: String, worldId: String, contextId: String, accessPolicyRevision: String)
+  fun freshUntil(view: String, worldId: String, contextId: String, accessPolicyRevision: String, principalId: String?): Long?
+  fun materialize(view: String, worldId: String, contextId: String, accessPolicyRevision: String, principalId: String?, memberIds: List<NodeId>, expiresAt: Long)
+  fun members(view: String, worldId: String, contextId: String, accessPolicyRevision: String, principalId: String?): List<NodeId>
+  fun clear(view: String, worldId: String, contextId: String, accessPolicyRevision: String, principalId: String?)
   fun sweepExpired()
 }
 ```
 
-so an alternative strategy swaps in without touching the query path: an **in-memory LRU** for a single-process
+`principalId` is required when the view body uses principal-specific credentials, policy, inputs, a
+principal anchor, or any producer not proven principal-invariant. It may be `null` only when the
+planner verifies that the entire view is principal-invariant. A view that cannot prove either mode is
+rejected rather than cached at context scope.
+
+An alternative strategy swaps in without touching the query path: an **in-memory LRU** for a single-process
 deployment, an **external KV / Redis** for a horizontally-scaled one, or an **`immutable`** strategy (no TTL,
 explicit invalidation only) for reference data. The refresh policy (`ttl`, cron `refresh:`) is orthogonal to
 the store.
@@ -1485,9 +1491,10 @@ the store.
 ### 8.5 A general result / entity cache — and negative results
 
 The same store generalizes beyond views to a **producer result cache** — the answer to "should API fetches be
-cached?" A private producer call is `(worldId, contextId, grantSubjectId, access-policy digest, realm/producer digest,
+cached?" A principal-dependent producer call is `(worldId, contextId, principalId, access-policy digest, realm/producer digest,
 source/credential revision, producer args/key) → records`; every component participates in the cache
-key. Deployment-approved public/reference producers use a separate explicitly public namespace and
+key. `principalId` may be omitted only for a producer the host verifies is principal-invariant.
+Deployment-approved public/reference producers use a separate explicitly public namespace and
 dataset revision. Caching is governed by the §9 diagnostics:
 
 - **Positive result** — a genuine, successful fetch (**including a real "no records"**) is cacheable with a
