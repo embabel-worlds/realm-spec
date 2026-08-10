@@ -375,7 +375,10 @@ A type whose `parents:` includes `Signal` (the host-defined signal base type) is
 Every entry created via `create_entry` for a type defined here lands as a node in the world graph (the same graph the host's Cypher / schema-projector / proposition-recall tools talk to). Two consequences worth knowing when writing a realm:
 
 - **The entry's `name` is the host's headline for it.** The host picks a single field per type to use as the node `name` for rendering — first `title`, then `name`, then `summary` if any exists. Add at least one of those if you want list / Cypher output to be human-readable.
-- **The host adds an implicit edge to the world user on every create.** Default is `(entry)-[:OWNED_BY]->(user)` — fine for most types. When the predicate reads more naturally in the other direction, declare a `userAnchor:` on the type:
+- **The host can add an implicit edge to the acting human principal's `AssistantUser` node.** The
+  compatibility default is `(entry)-[:OWNED_BY]->(principal)` — fine for most human-authored types.
+  Service principals have no implicit anchor. When the predicate reads more naturally in the other
+  direction, declare a `userAnchor:` on the type:
 
 ```yaml
 # types/movies.yml
@@ -383,7 +386,7 @@ Every entry created via `create_entry` for a type defined here lands as a node i
   description: "The user's score for a Movie."
   userAnchor:
     predicate: RATED          # uppercase; stored uppercase
-    direction: from-user      # `user -[RATED]-> rating` (default is `from-entry`)
+    direction: from-user      # `principal -[RATED]-> rating` (default is `from-entry`)
   properties:
     imdbId: "IMDb id of the rated Movie."
     rating:
@@ -394,12 +397,12 @@ Every entry created via `create_entry` for a type defined here lands as a node i
 | Field | Default | Notes |
 |-------|---------|-------|
 | `predicate` | `OWNED_BY` | Cypher-style relationship name. Required when the key is declared. Stored uppercase. |
-| `direction` | `from-entry` | `from-entry` → `(entry)-[:PREDICATE]->(user)`. `from-user` → `(user)-[:PREDICATE]->(entry)`. Pick whichever reads naturally. |
+| `direction` | `from-entry` | `from-entry` → `(entry)-[:PREDICATE]->(principal)`. `from-user` → `(principal)-[:PREDICATE]->(entry)`. Pick whichever reads naturally. |
 | (sentinel) | — | Set `userAnchor: false` to opt the type out of the implicit edge entirely (reference data, type registries, etc.). |
 
 #### Explicit relations between entries
 
-`create_entry` accepts an optional `relations:` array so a realm's skill can wire the new entry to another entry that already exists in the world. The host emits each requested edge on save; if any target can't be found in the same world, the whole create is refused (no orphan node, no orphan edge). Example shape, taken from the movie realm's `rate-movie` skill:
+`create_entry` accepts an optional `relations:` array so a realm's skill can wire the new entry to another entry that already exists in the host-bound visibility scope. The host emits each requested edge on save; if any target can't be found in that scope, the whole create is refused (no orphan node, no orphan edge). A cross-context relation requires an explicit policy-authorized bridge. Example shape, taken from the movie realm's `rate-movie` skill:
 
 ```jsonc
 // inside execute_javascript / execute_python, via the repository tool:
@@ -415,15 +418,21 @@ create_entry({
 //   - The OF edge comes from `relations:` (explicit, from the skill).
 ```
 
-Each relation is `{predicate, to: {type, ...keyProps}}` — `to.type` names the target's type, the remaining `to.*` fields are the key properties the host MATCHes against on the target's world-scoped nodes. Use this pattern any time a realm's typed records form a small connected graph (rating → movie, comment → ticket, note → contact, etc.) — the same graph is then walkable by Cypher and feeds the recall path automatically.
+Each relation is `{predicate, to: {type, ...keyProps}}` — `to.type` names the target's type, and the
+remaining `to.*` fields are the key properties the host MATCHes against on target nodes in the same
+host-bound visibility scope. Cross-context matching is never implicit. Use this pattern any time a realm's typed records form a small
+connected graph (rating → movie, comment → ticket, note → contact, etc.) — the same graph is then
+walkable by Cypher and feeds the recall path automatically.
 
 ### Populating types from an external system (deterministic, no code)
 
 The patterns above cover types the *user* creates. A realm can also declare a type that the host **populates automatically from a connected external system — deterministically, with no LLM and no Kotlin/Java in the realm.** A structured record (a CRM contact, an issue, a calendar attendee) is already typed at the source, so extracting it with an LLM is wasteful and error-prone; instead the realm declares a *projection* in property `metadata:` and the host's projector does the rest.
 
-This builds on a small canonical-entity model the host ships: within one world, a `Contact` is a
-`Person` resolved by email. The world key is always part of the host-side merge even though realm YAML
-does not repeat it. Declare a **mirror type** that `parents: [Contact]` and annotate each property:
+This builds on a small canonical-entity model the host ships: within one host-bound visibility scope,
+a `Contact` is a `Person` resolved by email. The host-side merge key is
+`(worldId, visibilityScopeId, type, email)` even though realm YAML does not repeat the scope fields.
+`visibilityScopeId` is `WORLD` for world-visible data and `contextId` for context-private data.
+Declare a **mirror type** that `parents: [Contact]` and annotate each property:
 
 ```yaml
 # types/hubspot.yml — populated from HubSpot CRM, no Kotlin in the realm
@@ -446,7 +455,7 @@ does not repeat it. Declare a **mirror type** that `parents: [Contact]` and anno
 
 | Metadata key | Effect |
 |--------------|--------|
-| `identity: "true"` | This field's value is the within-world email **merge key**: records with the same `(worldId, email)` resolve to one canonical `:Person` (no LLM entity resolution). Also unioned onto the Person's `emails`. |
+| `identity: "true"` | This field's value is the email portion of the **merge key**: records with the same `(worldId, visibilityScopeId, type, email)` resolve to one canonical `:Person` (no LLM entity resolution). Also unioned onto the Person's `emails`. |
 | `canonical: <field>` | Project this source field onto the canonical Person's `<field>`. Single-valued → a winner is chosen by host precedence then most-recent; mark `multivalued: "true"` (or `cardinality: LIST`) to **union** instead. |
 | `relationship: <EDGE>` + `target: <Label>` + `matchBy: <prop>` | Create-or-match a `<Label>` keyed on `matchBy`, and link `(:Person)-[:EDGE]->(:Label)`. |
 | *(none)* | Source-private — the value lands only on the per-record mirror node. |
@@ -464,7 +473,7 @@ Population (above) **eagerly mirrors** a whole external collection into the grap
 1. **probes** the bound *real* anchors the query selects — applying the query's own `WHERE` / pinned-literal predicates so only the anchors that will survive are chosen (a filtered `… WHERE p.name CONTAINS 'governor'` resolves just those people, not the whole address book), preferring an existing real node and only **seeding** a transient one when none exists;
 2. **plans** each fetch with a cost-based optimizer — pushing predicates to the source (below), fetching **per-key or batched** per the producer's declared capability (`batchSafe`), and budgeting calls against the source's shared rate bucket (`cost:`), emitting an `EXPLAIN` with rewrite **advice** when a query can't fit the budget;
 3. **fetches** the external records through the named **producer**;
-4. **materializes** them — and any `brings` sub-graph — as transient nodes carrying the extra `:Virtual` label, a `dateRetrieved` timestamp, and the host-bound `worldId` (with the acting principal retained separately for audit);
+4. **materializes** them — and any `brings` sub-graph — as transient nodes carrying the extra `:Virtual` label, a `dateRetrieved` timestamp, and the host-bound `worldId`, `contextId`, and access-policy revision (with the acting principal retained separately for audit);
 5. runs the user's (scope-rewritten) query over the combined **real + virtual** graph;
 6. **rolls back** — nothing persists.
 
@@ -497,7 +506,7 @@ A virtual type declares one or more `virtualJoins:`. Each says how the type is r
 
 `virtualJoins` fields: `anchorLabel`, `relationship`, `keyField`, `recordKeyField` (defaults to `keyField` — a same-property id-match), `producer`, optional `brings` (declared sub-graph), `maxAnchors`/`maxFanoutTotal` (caps). For a join to an **external-identity node** (a bridge like `GitHubIdentity` / `HubSpotOwner`), declare a `resolve:` rule chain + `writeThrough`/`refreshAfter` instead — see **Identity bridges** below (`persist: true` is the older eager-only form). A list with more than one entry, or any join that can fan in, requires an `identity` property so convergent paths dedupe to one node.
 
-The query may only reach a virtual label by **traversing a declared join from a bound anchor** — a naked `MATCH (hc:HubSpotContact)` is rejected. Every materialized node carries the extra `:Virtual` label, a `dateRetrieved` ISO-8601 timestamp, and the host-bound `worldId` (so the normal scope rewriter matches it); the user's query runs through the rewriter unchanged, and the whole materialization is rolled back when the query completes.
+The query may only reach a virtual label by **traversing a declared join from a bound anchor** — a naked `MATCH (hc:HubSpotContact)` is rejected. Every materialized node carries the extra `:Virtual` label, a `dateRetrieved` ISO-8601 timestamp, and the host-bound `worldId`, `contextId`, and access-policy revision (so the normal scope rewriter matches it); the user's query runs through the rewriter unchanged, and the whole materialization is rolled back when the query completes.
 
 A query may also reach a virtual node by **pinning the anchor with a literal** — `MATCH (g:GitHubIdentity {login:'octocat'})-[:RAISED]->(i:GitHubIssue)` — even when no `GitHubIdentity{login:'octocat'}` exists in the graph. The literal (inline `{...}` **or** a `WHERE alias.login = '…'`) seeds a transient anchor, so a producer can be keyed on a *named* identity (any GitHub login, not just the connecting user's), fetched with the connecting user's credentials. Multiple joins onto the same virtual node compose: `(me)-[:RAISED]->(i)<-[:ASSIGNED]-(:GitHubIdentity {login:'octocat'})` materializes both sides and intersects them.
 
@@ -544,7 +553,7 @@ Producer `kind`s:
 | `compute` | an in-process computation over the keys | scores / rollups / synthesis — no external I/O; *local*, so NOT a RemoteRepository |
 | `vector` | top-k **semantic similarity** to the anchor | for joins with no key — similarity *is* the join (related docs/chunks); rides the host embedder |
 | `generative` | **GENERATES** the edge (resumably) rather than reading it — an LLM's world knowledge (`SIMILAR_TO`, `IN_INDUSTRY`) or a code function | pluggable generator (`llm` \| `function`); keeps generating; resolves each answer onto the type spine; provenance-stamped |
-| `aggregate` | **REDUCES** an anchor's connected neighborhood to ONE node (fan-IN) — e.g. a per-user summary node distilled from many rows | gathers via a scoped graph read; delegates the reduction to an existing LLM aggregation (`synthesize`/`summarize`/…); TTL-cache = periodic refresh |
+| `aggregate` | **REDUCES** an anchor's connected neighborhood to ONE node (fan-IN) — e.g. a per-principal or per-organization summary distilled from many rows | gathers via a scoped graph read; delegates the reduction to an existing LLM aggregation (`synthesize`/`summarize`/…); TTL-cache = periodic refresh |
 
 > **Naming:** `kind: remote` is the current spelling for an externally-backed repository; `kind: api` is accepted as a back-compat alias and still works in existing realms.
 
@@ -612,7 +621,7 @@ Semantics (both generators):
 
 Every other producer is **fan-OUT**: one anchor → many target records. An `aggregate` producer is the
 **fan-IN** mirror: it gathers the anchor's connected neighborhood and **reduces it to ONE node**. Use it when
-the reduction should itself be a node you can traverse to and cache — a per-user summary, a per-org rollup, a
+the reduction should itself be a node you can traverse to and cache — a per-principal summary, a per-org rollup, a
 per-topic digest — rather than a scalar computed inline.
 
 It does **not** reimplement the reduction: it **delegates to an existing LLM aggregation** (`synthesize` /
@@ -626,7 +635,7 @@ host ships no domain prompt and no model (the aggregation uses the ops-controlle
 - name: movieTasteSummary
   kind: aggregate
   edgeType: HAS_MOVIE_TASTE_SUMMARY
-  identityField: userId          # ONE node per user (MERGE on this folds the anchor's identity spellings)
+  identityField: anchorKey       # ONE node per bound anchor inside the host-bound world
   anchorKeyField: anchorKey      # the join's recordKeyField — links the one node back to the anchor
   collect:                       # the fan-IN neighborhood: a scoped read (a:anchorLabel)-[:via]->(t:targetLabel)
     anchorLabel: AssistantUser
@@ -838,7 +847,7 @@ Most producers don't need `echoKeyAs` — e.g. HubSpot owners/contacts records a
 
 Anywhere a realm ships code that runs in the host's `code_mode` sandbox — a **handler** (`handlers/`), a **decoration** action, a skill recipe — it writes **CypherScript**: an ordinary TypeScript/JavaScript program that interleaves graph queries with procedural logic, integration calls, and inline LLM, all over the one typed `gateway.*` surface. It is not a separate language — it's TS/JS with first-class graph access:
 
-- **Cypher for the graph** — `await gateway.kg.query({ cypher, params })`. The query runs through **Virtual Cypher** (above): scope-rewritten to the acting user, read-only, and materializing on-demand virtual joins exactly as a chat query would — so one `MATCH` spans persisted **and** virtual (integration) data.
+- **Cypher for the graph** — `await gateway.kg.query({ cypher, params })`. The query runs through **Virtual Cypher** (above): rewritten to the host-bound world, context, and access policy, read-only, and materializing on-demand virtual joins exactly as a chat query would — so one `MATCH` spans persisted **and** virtual (integration) data.
 - **TypeScript/JavaScript** for what Cypher can't express — branching, aggregation, reshaping, loops.
 - **Integrations** — `gateway.<ns>.*` (the realm's own verbs + connected APIs), e.g. fetch the actual email body the graph only holds an edge for.
 - **Inline LLM** — `gateway.ai.classify` / `gateway.ai.*` for fuzzy predicates Cypher can't state.
@@ -918,9 +927,9 @@ Supported `spec.kind` values:
 | `fixed` | `key`, optional `params` | A host-registered fixed query. |
 | `anchor` | `ref` | A typed graph-node anchor. |
 
-A realm-shipped Lens is code, not mutable per-user state: its definition is refreshed when the
-realm is updated. One opening's arguments, focus, presentation, Watch snapshots and other user
-state remain in the world. An app should invoke a named Lens or view through the host's typed
+A realm-shipped Lens is code, not mutable per-world or per-principal state: its definition is
+refreshed when the realm is updated. One opening's arguments, focus, presentation, Watch snapshots
+and other scoped state remain in the world. An app should invoke a named Lens or view through the host's typed
 invocation surface; it should not accept or submit arbitrary Cypher or JavaScript from a browser.
 
 A CypherScript Lens may depend on a reusable **node view** by referencing the view name as a label
@@ -1075,7 +1084,11 @@ A record is the **same `{type, data, relations}` shape as the `create_entry` too
 Semantics:
 
 - **Idempotent.** A record whose `type` declares an `identity` property is upserted on that key, so re-seeding on every boot is a no-op (or an in-place update). Types with no identity would duplicate — give reference types an identity.
-- **User-anchored reference is per-user.** If the `type` is `userAnchor`, each seeded record gets its `(:AssistantUser)-[:PREDICATE]->(record)` edge automatically — the way to seed a per-user preference (e.g. which services the user subscribes to). Global catalog data uses `userAnchor: false`.
+- **Principal-anchored reference is per principal.** The compatibility type name is `userAnchor`;
+  each seeded record gets its `(:AssistantUser)-[:PREDICATE]->(record)` edge automatically inside the
+  host-bound world and context — the way to seed a human principal's preference (e.g. which services
+  that person subscribes to). A service principal has no implicit `AssistantUser` anchor. Global
+  catalog data uses `userAnchor: false`.
 - **Relations resolve like `create_entry`.** An optional `relations: [{ predicate, to: { type, ...keyProps } }]` links a record to another entry that must already exist (seed it first / in another realm's `reference/`), else the record is refused.
 - **Merges with virtual data.** A reference type can also be a virtual-join *target* (e.g. `StreamingService` seeded here AND materialized on demand by a producer): both write paths MERGE on the shared identity, so a producer-fetched node picks up the catalog's stable fields.
 
@@ -1162,7 +1175,12 @@ Four auth modes plus the implicit headers-only path:
 # 5. OAuth2 — see next section
 ```
 
-Token-env and `${VAR}` values are resolved in this order: world credential store first (set via `set NAME = ...` in chat or via the admin UI), then process env var. Missing creds → the entry is skipped at world load with a logged warning; the API never appears in the gateway.
+Credential references resolve through a host binding keyed by world, grant subject, connection, and
+grant revision, with context access checked on every call. In the local/first-party compatibility
+tier, `token-env` and `${VAR}` may then resolve from that world's credential store (set via
+`set NAME = ...` in chat or via the admin UI), followed by the process environment. Process fallback
+is unavailable in shared multi-world or untrusted marketplace deployments. Missing credentials mean
+the entry is skipped at world load with a logged warning; the API never appears in the gateway.
 
 ### OAuth2
 
@@ -1565,13 +1583,46 @@ embabel-realm sync ~/dev/realm-hubspot     # or pass an explicit path
 > legacy user/workspace scope alternatives. The guarantees below are release gates for multi-world
 > and shared-store deployment, not a description of current isolation.
 
+Canonical terminology is defined in the [Realm domain glossary](./CONTEXT.md).
+
 The rule is simple: **isolate by world; authorize by principal; govern by owner or organization.**
 These identities are not interchangeable. One owner may have several worlds. One world may have
 several principals. A service principal may act without owning it.
 
+| Identity | Meaning | Contract role |
+|---|---|---|
+| `worldId` | The opaque, durable identity of the world | Partitions all private data, configuration, credentials, routes, receipts, caches, dispatch state, and canonical entities. |
+| `principalId` | The authenticated human or service currently acting | Authorizes and attributes an on-demand operation. It is never a data-partition substitute for `worldId`. |
+| `ownerId` | The account with administrative and lifecycle authority over the world | Governs ownership, transfer, deletion, and billing. It is not a query or cache scope. |
+| `grantSubjectId` | The principal whose approved authority an adopted trigger spends | Authorizes cron and signal-triggered work when no live caller exists. An inbound sender is data, never the grant subject. |
+
+`userId` is not a portable Realm scope. A host may use it for a human account that is a principal or
+owner, but Realm manifests, guest inputs, persisted scope stamps, and cache keys must never use it as
+an alias for `worldId`.
+
+`worldId` is globally unique, persisted with the world, and independent of its owner, name, and
+filesystem or deployment location. Renaming, moving, restoring, or transferring the same world
+preserves its id. A copy intended to become an independent world receives a new id. Transferring
+ownership does not rewrite world data or silently transfer authority: existing adoptions and
+credentials pause until an explicit transfer policy revalidates them.
+
+A host may subdivide a world into named knowledge or memory contexts. Such a context is identified
+by `(worldId, contextId)` and is a confidentiality boundary with a versioned access policy. Every
+context-owned node, edge, vector record, materialization, and positive or negative cache entry
+includes `contextId` and the applicable access-policy revision. The default context is explicit; an
+absent context fails closed. A context may narrow which principals can read within a world; it never
+replaces `worldId` as the isolation boundary or authorizes a cross-world read.
+
 The host therefore binds immutable `worldId` and acting `principalId` independently on every query,
 gateway call, trigger, dispatch, receipt, route, cache entry, and audit record. Realm code and request
-payloads cannot choose or override either value.
+payloads cannot choose or override either value. A host-only dispatch also carries
+`grantSubjectId`: for on-demand work it is the authenticated acting principal; for cron and signal
+work both `principalId` and `grantSubjectId` are the subject approved at adoption. A platform worker
+may have a separate `executorId`, but that operational identity grants no Realm authority and does
+not enter data or cache scope. Credential resolution is consequently keyed by world, grant subject,
+connection, and grant revision rather than by an undifferentiated user id. Audit records include
+world, grant subject/acting principal, trigger identity, and—when useful for operations—the executor
+separately.
 
 Realms in one world intentionally compose over that world's typed graph and gateway surfaces. Realms
 in different worlds do not share data, credentials, routes, receipts, canonical entities, or mutable
@@ -1582,11 +1633,36 @@ A host may share immutable code only when the canonical full-package `realmDiges
 Sharing a worker never relaxes world scoping. Local and single-tenant deployments run the same path
 with one world; deployment topology is not an authorization control.
 
-The default identity of a persisted `Person`, `Organization`, mirror, bridge, or other canonical
-entity is consequently `(worldId, type, merge key)`. Cross-world or organization-wide identity is a
-separate, explicit host capability: it needs an `orgId`, verified membership, an adoption-visible
-grant, and an organization-scoped merge key. A bare email or domain must never merge canonical data
-between worlds.
+The default identity of a world-visible persisted `Person`, `Organization`, mirror, bridge, or other
+canonical entity is consequently `(worldId, WORLD, type, merge key)`. Context-private identity is
+`(worldId, contextId, type, merge key)`: it cannot add properties or edges to a world-visible spine
+until an explicit, policy-checked promotion makes that information world-visible. Cross-world or
+organization-wide identity is a separate host capability: it needs an `orgId`, verified membership,
+an adoption-visible grant, and an organization-scoped merge key. A bare email or domain must never
+merge canonical data between contexts or worlds.
+
+### Restore, transfer, and fork
+
+At most one **world incarnation** may be active. Activation allocates a monotonically increasing
+`worldEpoch`; every lease, dispatch, gateway call, token, and delivery handoff proves the current
+epoch. Restore or migration preserves `worldId` only through an exclusive handoff that fences the
+old incarnation before the new one runs. Restoring a copy while the original remains active is
+rejected.
+
+Restore preserves effect receipts so their idempotency identity survives recovery. It invalidates
+leases, sessions, tokens, and captured routes. Any `IN_FLIGHT` or `OUTCOME_UNKNOWN` effect is
+reconciled or surfaced for a decision, never automatically replayed. `worldEpoch` is a fencing value,
+not part of an effect receipt key; incrementing it must not make the same logical effect spend again.
+
+Ownership transfer is an atomic suspended state. Before the world resumes, policy revalidates or
+revokes owner and principal membership, context ACLs, service principals, grants/adoptions,
+credentials, sessions, tokens, routes, and queued work. Data, receipts, and audit retain `worldId`;
+authority does not silently transfer with them.
+
+A fork is a new world, not a second incarnation. It receives a new `worldId`, new context ids, and
+rekeys every private/context/canonical identity. It copies no adoptions, credentials, service
+principals, routes, sessions, tokens, leases, queued work, or effect receipts. Those capabilities
+require adoption in the fork.
 
 ## Execution hosts
 
@@ -1601,7 +1677,7 @@ infrastructure, or mutable runtime shared with another realm.
 
 Two consequences are normative:
 
-- **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world or principal. Realms deliberately share the world itself: declared types are visible across realms, and graph data written through the gateway is readable by anything with graph access in that world. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world-scoped.
+- **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world, context, principal, or grant subject. Realms deliberately share declared types inside a world; graph data is readable only through the current context/access policy or an explicit policy-authorized bridge. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world- and context-scoped.
 - **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
 
 The host is placement, not the verb contract. Types, producers, lenses, APIs, events, and prompts load
@@ -1616,7 +1692,7 @@ Two hosts exist:
 
 The portable contract is capability-based on both hosts: no sockets, DNS, arbitrary `fetch`, process
 environment, inherited file descriptors, or ambient credentials. External access goes through the
-host gateway, which applies world scope, policy, receipts, quotas, and audit. A deployment may define
+host gateway, which applies world/context scope, policy, receipts, quotas, and audit. A deployment may define
 a privileged container extension with raw network access, but that is organization-reviewed host
 code outside the portable/marketplace realm contract and must not be selected merely by declaring
 `host: docker`.
@@ -1706,7 +1782,7 @@ The name a form contributes is the export identifier, the property key, or the `
 
 | Member | Contract |
 |---|---|
-| `ctx.gateway.<namespace>.<method>(args)` | Calls back into the host's gateway surface — the same namespaces and schemas a TS handler or LLM-generated script sees. Executed in the host-bound world as the acting principal; the guest never holds or presents a credential or scope key. |
+| `ctx.gateway.<namespace>.<method>(args)` | Calls back into the host's gateway surface — the same namespaces and schemas a TS handler or LLM-generated script sees. The host binds the world, context, and access-policy revision; on-demand calls authorize as the acting principal, while autonomous calls spend the pinned `grantSubjectId` grant. The guest never holds or presents a credential or scope key. |
 | `ctx.log(message)` | Guest logging, surfaced in the host's logs against the dispatch. |
 | `ctx.reply({ text, idempotencyKey })` | Dispatch-scoped reply to the triggering channel thread ([verb-bodied handlers](#verb-bodied-handlers-and-dispatch-scoped-replies--forward-looking)). Returns `{ status }` (one of the reply results listed there). Always present; on a dispatch with no live route it returns `{ status: "NOT_REPLYABLE" }` rather than being absent. |
 
@@ -1937,10 +2013,12 @@ brings their own MCP server.
 ```
 
 MCP servers are lazy-loaded — the Docker container starts on first tool use, not on world init. A
-mutable or credential-bearing MCP instance is keyed by `(worldId, realmDigest, grant/credential
-revision)` and is never shared across worlds. Only an immutable, credential-free server proven to
-hold no caller-derived state may use a deployment-wide cache. Existing credential-fingerprint or
-config-only sharing is not a shared-tenancy boundary.
+mutable or credential-bearing MCP instance is keyed by `(worldId, contextId, realmDigest,
+grantSubjectId, access-policy revision, grant/credential revision)` and is never shared across
+contexts, grant subjects, or worlds. A `worldEpoch` change destroys the instance or fences it from
+all later calls. Only an immutable, credential-free server proven to hold no caller-derived state
+may use a deployment-wide cache. Existing credential-fingerprint or config-only sharing is not a
+shared-tenancy boundary.
 
 ## `commands/`
 
@@ -1959,8 +2037,10 @@ Webhook registrations — declare webhooks the realm wants to receive. When the 
 
 Registration runs under the same trust tier as `apis/`: marketplace realms cannot interpolate a
 credential into `register.args` or call a directly networked tool holding a durable secret. The host
-binds registration and callback authentication to the world, full `realmDigest`, source-registration
-generation, and grant subject. The templated form below is local/first-party compatibility syntax.
+binds registration and callback authentication to the world, context, access-policy revision, full
+`realmDigest`, source-registration generation, grant subject, and grant revision. Callback routing
+also verifies the current `worldEpoch`. The templated form below is local/first-party compatibility
+syntax.
 
 ```yaml
 # webhooks/github-issues.yml
@@ -2028,7 +2108,9 @@ The reference host implements both delivery modes — the poll sweep with signal
       TIMELY:       "{{ payload.type == 'invoice.upcoming' }}"
 ```
 
-The host receives the webhook, verifies the signature, resolves the tenant, projects the payload through the `mapping` into a `StripeEvent` instance, and emits it as a `Signal` into the consequence engine.
+The host receives the webhook, verifies the signature, resolves its registered world and context,
+projects the payload through the `mapping` into a `StripeEvent` instance, and emits it as a `Signal`
+into the consequence engine. The payload cannot select or override that route.
 
 | Field | Required | Meaning |
 |---|---|---|
@@ -2041,7 +2123,12 @@ The host receives the webhook, verifies the signature, resolves the tenant, proj
 
 ### Polling event source
 
-For services without webhook support — or where polling is preferable — declare a `poll` block instead of (or in addition to) `webhook`. Polling reuses the host's task scheduler and persists a per-`(user, type)` cursor so each run only sees what's new.
+For services without webhook support — or where polling is preferable — declare a `poll` block
+instead of (or in addition to) `webhook`. Polling reuses the host's task scheduler. Like a handler,
+the source must be adopted before it can run. Its cursor identity is `(worldId, contextId,
+sourceRegistrationId, grantSubjectId, type)`; the cursor record also carries the current realm,
+access-policy, grant, and credential revisions. A revision change pauses polling for revalidation
+without silently starting a fresh cursor and replaying the source.
 
 ```yaml
 # events/linear.yml
@@ -2050,8 +2137,6 @@ For services without webhook support — or where polling is preferable — decl
     every: 10m
     api: linear                # the realm's already-learned API (apis/linear.yml)
     method: list_my_issues     # method name on that API
-    args:
-      assignee: "{{ user.email }}"
     cursor:
       param: updated_after     # the API parameter that takes the cursor value
       from: $.updatedAt        # how to extract the next cursor from each result
@@ -2070,7 +2155,7 @@ For services without webhook support — or where polling is preferable — decl
 | `poll.every` | yes | Cadence (e.g. `5m`, `1h`). |
 | `poll.api` | yes | Name of an API declared in `apis/` (this or another realm). |
 | `poll.method` | yes | Method name on that API. |
-| `poll.args` | no | Arguments to the call. Jinja-templated against `{ user, cursor }`. |
+| `poll.args` | no | Arguments to the call. Jinja-templated against `{ cursor }` only. World, context, grant subject, and credentials are host-bound and unavailable to the template. Methods such as `list_my_issues` derive the subject from the bound credential. |
 | `poll.cursor.param` | no | API parameter the host populates with the persisted cursor. |
 | `poll.cursor.from` | no | JSONPath into each returned result, used to compute the next cursor (the maximum value across the batch becomes the new cursor). |
 | `poll.mapping` | yes | Same shape as the webhook `mapping` block. |
@@ -2111,6 +2196,10 @@ must reject the second registration rather than instantiate another session or s
 both worlds to the first owner. Organization-owned shared connectors require a later explicit
 `orgId` membership and route-attribution contract.
 
+Within that world, every inbound and reply route is bound to one explicit context, access-policy
+revision, and grant subject. A connector session may multiplex such routes only when it keeps those
+bindings separate; it never broadcasts an event or reply route into every context by default.
+
 The inbound half emits ordinary `Signal`s of a type the realm declares in `types/` — a channel message is downstream-indistinguishable from any other signal, so triage rules, attention, persistence, and handler reactions all apply unchanged. The realm typically ships the message type, its identity projections, and any verbs over the stream (a digest, a search) alongside the connector config.
 
 What this spec pins down is the envelope, not the connector. The file format, the common fields above, and the signals-in / replies-out shape are portable. Everything connector-specific — how platform messages map onto the declared signal type, conversation and thread identity, how an outbound reply is addressed — is defined by the connector `type` and documented by the host that ships it. Additional keys in the file pass through to the connector, which validates them. A channel realm is therefore host-extension territory, like an FQN `stepType`: it runs where the named connector exists.
@@ -2123,7 +2212,7 @@ Where `events/` *produces* signals, `handlers/` *reacts* to them. A realm can sh
 
 > Not to be confused with the `src/` **TypeScript handlers** that implement a realm type's gateway methods. Those are gateway *code*; these are *reactions*. (Same substrate — sandboxed TS — different job.)
 
-A handler is the event-side mirror of a lens: a lens *queries → declares focus*; a handler *is handed a signal → queries/judges → takes an effect*. It's authored as TypeScript run through the host's per-user code-mode runtime — the same vibe-codeable substrate, so a handler can be generated or hand-written.
+A handler is the event-side mirror of a lens: a lens *queries → declares focus*; a handler *is handed a signal → queries/judges → takes an effect*. It's authored as TypeScript run through the host's per-dispatch, world/context-scoped code-mode runtime — the same vibe-codeable substrate, so a handler can be generated or hand-written.
 
 ```yaml
 # handlers/pr-review.yml
@@ -2184,18 +2273,20 @@ if (isNew) {
 
 ### Activation — _forward-looking_
 
-Installation makes a realm handler **available, not runnable**. Adoption makes it runnable and pins the
-full-package `realmDigest`, trigger-registration identity, compiled capability-grant digest, world,
-and explicit **grant subject**. The grant subject is the adopting principal or a delegated service
-principal. A signal sender is data, never authority. Cron and signal triggers act as the grant
-subject; an on-demand call acts as its authenticated caller.
+Installation makes a realm handler **available, not runnable**. Adoption makes it runnable and pins
+an `adoptionId`, the full-package `realmDigest`, trigger-registration identity, compiled
+capability-grant digest and revision, `worldId`, `contextId`, access-policy revision, and explicit
+**`grantSubjectId`**. The grant subject is the adopting principal or a delegated service principal.
+A signal sender is data, never authority. Cron and signal triggers act as the grant subject; an
+on-demand call acts as its authenticated caller.
 
-Changing realm content, the trigger registration, or the compiled grant pauses new dispatches. An
-organization may auto-approve a digest change only under an explicit reviewed rule; the host never
-silently carries approval forward. The host surfaces available handlers in its activation UX and
-over MCP. Activation respects the realm's `autonomous` default. A scheduled handler uses the normal
-cron path; there is no second handler scheduler. World handlers (`config/handlers/`) shadow realm
-handlers on id collision.
+Changing realm content, the trigger registration, compiled grant or grant subject, context, or its
+access-policy revision pauses new dispatches. An organization may auto-approve a compatible change
+only under an explicit reviewed rule; the host never silently carries approval forward or expands
+an adoption's authority. The host surfaces available handlers in its activation UX and over MCP.
+Activation respects the realm's `autonomous` default. A scheduled handler uses the normal cron path;
+there is no second handler scheduler. World handlers (`config/handlers/`) shadow realm handlers on
+id collision.
 
 Observe-only preview is a legibility aid, not a proof of future behaviour: realm code can branch on
 inputs or time after adoption. Security comes from the host-bound grant and method classification.
@@ -2251,7 +2342,7 @@ export async function onMessage(event, ctx) {
 }
 ```
 
-`ctx.reply({ text, idempotencyKey })` is the dispatch-scoped reply — sugar over `ctx.gateway.channels.reply`, which takes **no destination and no signal id**: the reply can only reach the thread that triggered the current dispatch, and only while that route is live (connector-configured expiry). It returns `{ status }`, where `status` is one of `SENT` (provider-acknowledged) | `OUTCOME_UNKNOWN` (handoff without acknowledgement) | `NOT_REPLYABLE` (no channel route: cron trigger, non-channel signal) | `NOT_PERMITTED` | `EXPIRED` | `CONNECTOR_UNAVAILABLE` | `REJECTED`. Multiple replies in one dispatch are serialized by host acceptance order and bounded by a host-configured per-binding and per-route reply budget; exhausting the budget returns `REJECTED`. The receipt key is `(worldId, realmDigest, invocation identity, surface, operation, idempotencyKey)`; invocation identity folds in the trigger registration and concrete trigger, so the same author key in independent dispatches never collides. An omitted key is derived from the dispatch-local acceptance sequence and is safe only within that attempt. The outbound envelope is `{text}` only. A connector's own outbound messages never fire bindings; the reply budget bounds loops involving other bots that self-echo suppression cannot identify.
+`ctx.reply({ text, idempotencyKey })` is the dispatch-scoped reply — sugar over `ctx.gateway.channels.reply`, which takes **no destination and no signal id**: the reply can only reach the thread that triggered the current dispatch, and only while that route is live (connector-configured expiry). It returns `{ status }`, where `status` is one of `SENT` (provider-acknowledged) | `OUTCOME_UNKNOWN` (handoff without acknowledgement) | `NOT_REPLYABLE` (no channel route: cron trigger, non-channel signal) | `NOT_PERMITTED` | `EXPIRED` | `CONNECTOR_UNAVAILABLE` | `REJECTED`. Multiple replies in one dispatch are serialized by host acceptance order and bounded by a host-configured per-binding and per-route reply budget; exhausting the budget returns `REJECTED`. The receipt key is `(worldId, contextId, adoptionId, realmDigest, grantSubjectId, invocation identity, surface, operation, idempotencyKey)`; invocation identity folds in the trigger registration and concrete trigger, so the same author key in independent dispatches never collides. The host verifies the adoption's current grant and context-policy revisions before accepting or delivering the effect, but those revisions and `worldEpoch` are fences rather than receipt-key fields: changing one cannot make the same logical effect spend again. An omitted key is derived from the dispatch-local acceptance sequence and is safe only within that attempt. The outbound envelope is `{text}` only. A connector's own outbound messages never fire bindings; the reply budget bounds loops involving other bots that self-echo suppression cannot identify.
 
 Proactive sends to a channel with no triggering signal are a different authority and not part of this contract.
 
@@ -2278,7 +2369,9 @@ A file may carry a single manifest or a YAML list of them (`- name: ...` per ent
 
 ### The action contract
 
-The referenced action receives one node's identity + a world user binding and returns a structured `DecorationResult` describing what to write. The host owns persistence; the action stays pure.
+The referenced action receives one node snapshot and returns a structured `DecorationResult`
+describing what to write. The host owns persistence and binds world, context, principal, and grant
+subject out of band; none is serialized into the action input. The action stays pure.
 
 **Input bindings** (the action's `inputs:` block in `actions/<name>.yml` must accept these):
 
@@ -2287,8 +2380,7 @@ The referenced action receives one node's identity + a world user binding and re
 | `nodeId` | string | The candidate node's stable id |
 | `nodeName` | string | The node's display name |
 | `nodeLabels` | list&lt;string&gt; | Every Neo4j label on the node |
-| `nodeProperties` | object | Map of every property currently on the node |
-| `userId` | string | The owning world user |
+| `nodeProperties` | object | Map of realm-visible properties on the node. Reserved host metadata is redacted. |
 
 **Output type**: `DecorationResult` (a host-provided domain type). Action declarations set `outputType: com.embabel.world.kg.decoration.DecorationResult`.
 
@@ -2309,6 +2401,11 @@ interface DecorationResult {
   }>
 }
 ```
+
+Reserved host metadata includes scope, identity, policy, lease, provenance-control, and credential
+fields such as `worldId`, `contextId`, `ownerId`, `principalId`, `grantSubjectId`, and `worldEpoch`.
+It is never included in `nodeProperties`. The host rejects `propsToSet`, relationship targets, or any
+other guest result that attempts to set, remove, or substitute a reserved field.
 
 Empty result is fine — the scheduler stamps the row regardless, so the decorator doesn't re-run before its `refreshAfter` (or never, if one-shot). Return empty when the action surveyed the row and decided there was nothing to add (e.g. "no signature in this email", "no Wikipedia article for this person").
 
@@ -2603,7 +2700,8 @@ Realms are discoverable via the host's directory system:
 - **User credentials.** Realms carry credential references, never values. Marketplace realms use
   host-vetted typed slots and auth profiles. Environment-variable references are local or explicitly
   first-party/org-reviewed compatibility syntax only.
-- **Per-user state.** A realm ships templates and types; the *world* holds the per-user instances.
+- **World, context, or principal-owned state.** A realm ships templates and types; host-owned scopes
+  hold mutable instances and their access policy.
 
 If a capability needs real code, ship it as sandboxed handler code (`src/` or `wasm/`, run on an [execution host](#execution-hosts)), via `actions/` (LLM in the loop), via `mcp/` (sandboxed server, arbitrary code), or as a host-level extension out of band.
 

@@ -85,9 +85,9 @@ always rolls back**:
    fetcher (a REST op, a SQL query, a vector search, an in-process computation).
 
 3. **Materialize.** Each returned record becomes a transient node carrying the extra `:Virtual`
-   label, a `dateRetrieved` timestamp, and the host-bound `worldId`. The engine links it to the anchor it was
-   fetched for (`keyField == recordKeyField`). A record may also carry its own **sub-graph**
-   (`brings:`), materialized in the same pass.
+   label, a `dateRetrieved` timestamp, and the host-bound `worldId`, `contextId`, and access-policy
+   revision. The engine links it to the anchor it was fetched for (`keyField == recordKeyField`). A
+   record may also carry its own **sub-graph** (`brings:`), materialized in the same pass.
 
 4. **Run.** Your full query now runs over the combined graph. `WHERE`, `ORDER BY`, `RETURN`,
    aggregates — all of Cypher — apply to virtual nodes exactly as to real ones.
@@ -112,11 +112,14 @@ always rolls back**:
 A naked `MATCH (hc:HubSpotContact)` — no anchor — is **rejected** (§4). This is what stops Virtual
 Cypher from trying to fetch *every* contact in HubSpot.
 
-**Per-world scope.** The world selects data; the principal supplies authority. The probe runs through
-the fail-closed scope rewriter under immutable host-bound `worldId`, while `principalId` remains
-separate for authorization and audit. Every anchor and virtual node belongs to that world. The caller
-supplies neither identity. A query cannot reach another world, including one owned by the same user.
-Local single-user deployments use the same path.
+**Per-world and per-context scope.** The world selects the outer data boundary; the context selects a
+confidentiality boundary within it; the principal supplies authority. The probe runs through the
+fail-closed scope rewriter under immutable host-bound `(worldId, contextId, access-policy revision)`,
+while `principalId` remains separate for authorization and audit. Every anchor and virtual node
+belongs to that scope. The caller supplies none of these identities. A query cannot reach another
+context without an explicit policy-authorized bridge, and cannot reach another world at all,
+including one owned by the same user. Local single-user deployments use the same path and an explicit
+default context. `userId` is never accepted as an alias for either scope.
 
 ---
 
@@ -271,9 +274,10 @@ expensive direction if authored carelessly:
 ### 5.4 Entity canonicalization — the spines a join anchors on
 
 Every example above anchors on a canonical `Person` or `Organization`. Those are **spines**: the
-single node a real human or company resolves to within one world, no matter how many sources mention
-them. A spine is keyed deterministically — **Person by `(worldId, email)`, Organization by
-`(worldId, registrable domain)`** — so two records
+single node a real human or company resolves to within one visibility scope, no matter how many
+sources mention them. A world-visible spine is keyed deterministically — **Person by
+`(worldId, WORLD, Person, email)`, Organization by `(worldId, WORLD, Organization, registrable domain)`**. A context-private
+spine substitutes its `contextId` for `WORLD`, so two records
 from different sources (a HubSpot contact and a GitHub commit author, both `rod@embabel.com`)
 converge on **one** `Person`, and "my contacts' companies" lands on the same `Organization` the
 email graph already built.
@@ -294,7 +298,7 @@ only the display name; the `Organization` is keyed by the contact's email **doma
 on `@acme.com` share one `Organization` however they spelled "Acme", and a freemail/no-domain contact
 yields **no** `Organization` (a name alone never invents a spine — fuzzy name resolution is a
 separate, async, confidence-scored layer, never in the query path). The result is a durable
-`(p:Person)-[:WORKS_FOR]->(o:Organization)` edge onto the shared spine — read the contact's company
+`(p:Person)-[:WORKS_FOR]->(o:Organization)` edge onto the current visibility-scope spine — read the contact's company
 through its canonical Person, no source-specific company walk.
 
 This runs **on demand, and persists ONLY the spine** — never the source record. When a query
@@ -309,10 +313,15 @@ re-fetched live each query. Identity and durable relationships are durable; sour
 
 **Resolution is O(log n), through indexed key-nodes.** Each spine has a key-node — `EmailAddress`
 (`email-address:<addr>`) for Person, `Domain` (`dom:<domain>`) for Organization — with a uniqueness
-constraint on `(worldId, id)`. Resolving a key is one indexed hop
+constraint on `(worldId, visibilityScopeId, id)`. Resolving a key is one indexed hop
 (`(:Domain {id})-[:USED_BY_ORG]->(o:Organization)`), never a scan, and the key-nodes are **shared**
-with the email/sender graph, so a canonicalized record and an emailed person dedupe to one spine. The
-spine's own `(worldId, id)` is uniqueness-constrained too, so the deterministic MERGE can never fork a duplicate or merge customers. Organization-wide spines require an explicit `orgId`, verified membership, and an organization-scoped key; a bare email or domain is never cross-world authority.
+with the email/sender graph inside that visibility scope, so a canonicalized record and an emailed
+person dedupe to one spine. The
+spine's own `(worldId, visibilityScopeId, id)` is uniqueness-constrained too, so the deterministic
+MERGE can never fork a duplicate or merge contexts/customers. Context-private evidence cannot mutate
+a `WORLD` spine without explicit policy-checked promotion. Organization-wide spines require an
+explicit `orgId`, verified membership, and an organization-scoped key; a bare email or domain is
+never cross-context or cross-world authority.
 
 **The two built-in spines are not hardwired — they are config.** A spine is declared by a
 `CanonicalSpec` (label, key property, id prefix, normalization primitives, key-node + edge); Person
@@ -353,7 +362,7 @@ and serves from the graph thereafter.
 The rules, all engine-enforced:
 
 - **Per-anchor collection.** `collect.anchorKeyProperty` switches the aggregate from its default
-  per-USER mode (the anchor is the acting user's own node; one reduction for the whole batch) to
+  per-principal mode (the anchor is the acting principal's own node when it has one; one reduction for the whole batch) to
   per-ANCHOR: each producer key names one anchor (matched on that property, guarded to the acting
   user's own nodes), and each anchor's neighborhood reduces independently. `incoming: true` flips the
   traversal for containment shapes like `(Chunk)-[:PART_OF]->(Document)`.
@@ -373,13 +382,14 @@ The rules, all engine-enforced:
   regenerated canonical through.
 - **An honest miss never earns a node.** A reduction that answers with the no-answer sentinel stays
   transient and is retried on the next traversal — fabrication can never become durable.
-- **Node-only, world-stamped writes.** The engine commits only the node (stamped with immutable
-  `worldId`, so it is visible in that world and only that world — two worlds summarizing an
-  identical URI get two nodes); the anchor edge is re-linked transiently per query. The node's label
-  is stamped by the engine from the join's own target type — a realm never declares it, so it can
-  never drift.
+- **Node-only, scope-stamped writes.** The engine commits only the node, stamped with immutable
+  `worldId`, `contextId`, and access-policy revision. Two contexts summarizing an identical URI do
+  not share a node unless policy explicitly promotes the result to `WORLD` visibility; two worlds
+  never share one. The anchor edge is re-linked transiently per query. The node's label is stamped by
+  the engine from the join's own target type — a realm never declares it, so it can never drift.
 
-Cost intuition: the expensive thing (the reduction) runs once per (anchor, band) and again only on
+Cost intuition: the expensive thing (the reduction) runs once per
+`(worldId, contextId, access-policy revision, anchor, band)` and again only on
 change; everything else — the freshness probe, the hit path, the re-link — is indexed graph reads.
 
 ### 5.6 Typed extraction — `kind: extract` (lazy entities)
@@ -899,14 +909,15 @@ list, and the score is the only signal of how good each match is.
   floor can return nothing. Prefer `minScore: 0` + top-k + `ORDER BY r.score`, and let the caller
   judge relevance from the score, rather than a hard cutoff that silently drops everything.
 
-### 6.4 Privacy: the source enforces world scope, not the rewriter
+### 6.4 Privacy: the source enforces world and context scope, not the rewriter
 
 A vector search runs *inside* the producer (against an embedding index), **bypassing** the Cypher
-scope rewriter that guards keyed traversals. So the **producer/index is responsible for per-world
-scoping**: the search is filtered by the host-bound `worldId`, and a search with no world returns
-**nothing** (fail-closed). `principalId` may further restrict access inside a collaborative world but
-never substitutes for `worldId`. A `vector` producer over shared infrastructure must apply the same
-world filter; a vector join can never surface another world's documents.
+scope rewriter that guards keyed traversals. So the **producer/index is responsible for per-world and
+per-context scoping**: the search is filtered by host-bound `worldId`, `contextId`, and access-policy
+revision, and a search missing any required scope returns **nothing** (fail-closed). `principalId`
+authorizes access but never substitutes for either data scope. A `vector` producer over shared
+infrastructure must apply the same filters; a vector join can never surface another context's or
+world's documents.
 
 ### 6.5 Anchors and composition
 
@@ -1398,8 +1409,10 @@ anyway. The concept splits cleanly:
     RETURN c
 ```
 
-The same body can be authored at runtime by the assistant on the user's behalf (`viewService.define(user, name,
-cypher, materialized)`, surfaced as a `define_view` tool) — "save this as my key accounts."
+The same body can be authored at runtime by the assistant on the acting principal's behalf
+(`viewService.define(hostScope, name, cypher, materialized)`, surfaced as a `define_view` tool) —
+"save this as my key accounts." `hostScope` contains the host-bound world, context, policy revision,
+and principal; it is never a guest-supplied tool argument.
 
 ### 8.2 Output typing — identity preservation is the rule
 
@@ -1450,15 +1463,16 @@ MATCH (d:breach_mentions) RETURN count(DISTINCT d) AS incidents      -- an aggre
 ### 8.4 The materialization cache is pluggable
 
 The materialized-view cache is a **strategy behind an interface**, not a fixed mechanism. The default strategy
-is graph-colocated and transactional: a `MaterializedView {view, worldId, expiresAt}` marker node with
+is graph-colocated and transactional: a
+`MaterializedView {view, worldId, contextId, accessPolicyRevision, expiresAt}` marker node with
 `[:MEMBER]` edges to the cached result nodes, swept by TTL. But the store is an SPI:
 
 ```kotlin
 interface ViewMaterializationStore {
-  fun freshUntil(view: String, worldId: String): Long?             // marker expiry epoch-ms, or null if absent
-  fun materialize(view: String, worldId: String, memberIds: List<NodeId>, expiresAt: Long)
-  fun members(view: String, worldId: String): List<NodeId>         // the cached node ids to bind the label off
-  fun clear(view: String, worldId: String)
+  fun freshUntil(view: String, worldId: String, contextId: String, accessPolicyRevision: String): Long?
+  fun materialize(view: String, worldId: String, contextId: String, accessPolicyRevision: String, memberIds: List<NodeId>, expiresAt: Long)
+  fun members(view: String, worldId: String, contextId: String, accessPolicyRevision: String): List<NodeId>
+  fun clear(view: String, worldId: String, contextId: String, accessPolicyRevision: String)
   fun sweepExpired()
 }
 ```
@@ -1471,7 +1485,7 @@ the store.
 ### 8.5 A general result / entity cache — and negative results
 
 The same store generalizes beyond views to a **producer result cache** — the answer to "should API fetches be
-cached?" A private producer call is `(worldId, grant/access-policy identity, realm/producer digest,
+cached?" A private producer call is `(worldId, contextId, grantSubjectId, access-policy digest, realm/producer digest,
 source/credential revision, producer args/key) → records`; every component participates in the cache
 key. Deployment-approved public/reference producers use a separate explicitly public namespace and
 dataset revision. Caching is governed by the §9 diagnostics:
@@ -1652,10 +1666,11 @@ schema-level engineering could not touch.
   cache of *who* an external identity is, not *what* data they hold). The single, explicitly
   opted-in exception is the dedicated annotation-write surface (§12) — ordinary queries remain
   read-only and continue to reject mutating clauses.
-- **Scoped, fail-closed.** Every keyed probe goes through the world scope rewriter; vector
-  searches are world-filtered at the source. A query can never read another world's world-owned
-  data; deployment-approved, revisioned `Public`/reference datasets are the explicit exception. An
-  unparseable or unscopable query is rejected, not run.
+- **Scoped, fail-closed.** Every keyed probe goes through the world/context scope rewriter; vector
+  searches are filtered by world, context, and access-policy revision at the source. A query can
+  never read another context without an explicit authorized bridge and never another world's
+  private data; deployment-approved, revisioned `Public`/reference datasets are the explicit
+  exception. An unparseable or unscopable query is rejected, not run.
 - **Bounded.** Every fetch is bounded by a bound anchor, `maxAnchors`/`maxFanoutTotal`, `paging`
   caps, `k`, and rate budgets. Truncation is reported.
 - **Idempotent re-runs.** A re-run re-fetches; caching (`ttl`/`immutable`) and `temperature: 0` for
