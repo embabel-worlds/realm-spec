@@ -1,10 +1,13 @@
 # Virtual Cypher — Specification
 
-**Spec version: 0.1.0**
+**Spec version: 0.2.0**
 
 > **Status: normative.** This document defines what a Virtual Cypher query means, what it
 > guarantees, and what it refuses. It states OBSERVABLE behaviour only — never how the engine is
 > built. Where an implementation and this document disagree, this document is the defect report.
+> The 0.2 world/principal separation and world-keyed cache/canonical guarantees are forward-looking
+> host requirements; current Me is not conformant and must not claim multi-world/shared-store
+> isolation until their release gates pass.
 >
 > **Relationship to Cypher.** Virtual Cypher is not a new language. A query is ordinary Cypher, and
 > everything the [openCypher](https://opencypher.org/) specification says about pattern matching,
@@ -63,7 +66,7 @@ always rolls back**:
 ```
    ┌─ parse + plan ──────────────────────────────────────────────────────────┐
    │                                                                          │
-   │  1. PROBE    bind the REAL anchors the query selects (scoped to you)     │
+   │  1. PROBE    bind REAL anchors in the host-bound world                  │
    │  2. FETCH    call each producer ONCE with all anchor keys (batched)      │
    │  3. MATERIALIZE  splice fetched records in as transient :Virtual nodes   │
    │  4. RUN      run your query over the combined real + virtual graph       │
@@ -82,7 +85,7 @@ always rolls back**:
    fetcher (a REST op, a SQL query, a vector search, an in-process computation).
 
 3. **Materialize.** Each returned record becomes a transient node carrying the extra `:Virtual`
-   label, a `dateRetrieved` timestamp, and your `userId`. The engine links it to the anchor it was
+   label, a `dateRetrieved` timestamp, and the host-bound `worldId`. The engine links it to the anchor it was
    fetched for (`keyField == recordKeyField`). A record may also carry its own **sub-graph**
    (`brings:`), materialized in the same pass.
 
@@ -109,9 +112,11 @@ always rolls back**:
 A naked `MATCH (hc:HubSpotContact)` — no anchor — is **rejected** (§4). This is what stops Virtual
 Cypher from trying to fetch *every* contact in HubSpot.
 
-**Per-user scope.** The probe runs through the per-user **scope rewriter** (fail-closed). You can
-only ever materialize virtual data off **your own** anchors; a virtual node is stamped with your
-`userId` so the rewriter's scope predicate matches it. A query can never reach across users.
+**Per-world scope.** The probe runs through the **scope rewriter** (fail-closed) under immutable
+host-bound `worldId`; the acting `principalId` is retained separately for authorization and audit.
+You can only materialize virtual data off anchors in that world, and every virtual node is stamped
+with `worldId`. A caller cannot supply either scope value, and a query can never reach another world,
+including another world owned by the same user. Local single-user deployments use the same path.
 
 ---
 
@@ -266,8 +271,8 @@ expensive direction if authored carelessly:
 ### 5.4 Entity canonicalization — the spines a join anchors on
 
 Every example above anchors on a canonical `Person` or `Organization`. Those are **spines**: the
-single node a real human or company resolves to, no matter how many sources mention them. A spine is
-keyed deterministically — **Person by email, Organization by registrable domain** — so two records
+single node a real human or company resolves to within one world, no matter how many sources mention them. A spine is
+keyed deterministically — **Person by `(worldId, email)`, Organization by `(worldId, registrable domain)`** — so two records
 from different sources (a HubSpot contact and a GitHub commit author, both `rod@embabel.com`)
 converge on **one** `Person`, and "my contacts' companies" lands on the same `Organization` the
 email graph already built.
@@ -303,10 +308,10 @@ re-fetched live each query. Identity and durable relationships are durable; sour
 
 **Resolution is O(log n), through indexed key-nodes.** Each spine has a key-node — `EmailAddress`
 (`email-address:<addr>`) for Person, `Domain` (`dom:<domain>`) for Organization — with a uniqueness
-constraint on its `id`. Resolving a key is one indexed hop
+constraint on `(worldId, id)`. Resolving a key is one indexed hop
 (`(:Domain {id})-[:USED_BY_ORG]->(o:Organization)`), never a scan, and the key-nodes are **shared**
 with the email/sender graph, so a canonicalized record and an emailed person dedupe to one spine. The
-spine's own `id` is uniqueness-constrained too, so the deterministic MERGE can never fork a duplicate.
+spine's own `(worldId, id)` is uniqueness-constrained too, so the deterministic MERGE can never fork a duplicate or merge customers. Organization-wide spines require an explicit `orgId`, verified membership, and an organization-scoped key; a bare email or domain is never cross-world authority.
 
 **The two built-in spines are not hardwired — they are config.** A spine is declared by a
 `CanonicalSpec` (label, key property, id prefix, normalization primitives, key-node + edge); Person
@@ -367,8 +372,8 @@ The rules, all engine-enforced:
   regenerated canonical through.
 - **An honest miss never earns a node.** A reduction that answers with the no-answer sentinel stays
   transient and is retried on the next traversal — fabrication can never become durable.
-- **Node-only, owner-stamped writes.** The engine commits only the node (stamped `userId` +
-  `workspaceId`, so it is visible to its owner and only its owner — two users summarizing an
+- **Node-only, world-stamped writes.** The engine commits only the node (stamped with immutable
+  `worldId`, so it is visible in that world and only that world — two worlds summarizing an
   identical URI get two nodes); the anchor edge is re-linked transiently per query. The node's label
   is stamped by the engine from the join's own target type — a realm never declares it, so it can
   never drift.
@@ -893,14 +898,14 @@ list, and the score is the only signal of how good each match is.
   floor can return nothing. Prefer `minScore: 0` + top-k + `ORDER BY r.score`, and let the caller
   judge relevance from the score, rather than a hard cutoff that silently drops everything.
 
-### 6.4 Privacy: the source enforces scope, not the rewriter
+### 6.4 Privacy: the source enforces world scope, not the rewriter
 
 A vector search runs *inside* the producer (against an embedding index), **bypassing** the Cypher
-scope rewriter that guards keyed traversals. So the **producer/index is responsible for per-user
-scoping**: the search is filtered by `userId`, and a search with no user returns **nothing**
-(fail-closed). For `relatedThreads` this is intrinsic — it searches *the acting user's own*
-thread-summary index. A `vector` producer over shared data must apply the same `userId` filter; a
-vector join can never surface another user's documents.
+scope rewriter that guards keyed traversals. So the **producer/index is responsible for per-world
+scoping**: the search is filtered by the host-bound `worldId`, and a search with no world returns
+**nothing** (fail-closed). `principalId` may further restrict access inside a collaborative world but
+never substitutes for `worldId`. A `vector` producer over shared infrastructure must apply the same
+world filter; a vector join can never surface another world's documents.
 
 ### 6.5 Anchors and composition
 
@@ -1444,15 +1449,15 @@ MATCH (d:breach_mentions) RETURN count(DISTINCT d) AS incidents      -- an aggre
 ### 8.4 The materialization cache is pluggable
 
 The materialized-view cache is a **strategy behind an interface**, not a fixed mechanism. The default strategy
-is graph-colocated and transactional: a `MaterializedView {view, userId, expiresAt}` marker node with
+is graph-colocated and transactional: a `MaterializedView {view, worldId, expiresAt}` marker node with
 `[:MEMBER]` edges to the cached result nodes, swept by TTL. But the store is an SPI:
 
 ```kotlin
 interface ViewMaterializationStore {
-  fun freshUntil(view: String, userId: String): Long?             // marker expiry epoch-ms, or null if absent
-  fun materialize(view: String, userId: String, memberIds: List<NodeId>, expiresAt: Long)
-  fun members(view: String, userId: String): List<NodeId>         // the cached node ids to bind the label off
-  fun clear(view: String, userId: String)
+  fun freshUntil(view: String, worldId: String): Long?             // marker expiry epoch-ms, or null if absent
+  fun materialize(view: String, worldId: String, memberIds: List<NodeId>, expiresAt: Long)
+  fun members(view: String, worldId: String): List<NodeId>         // the cached node ids to bind the label off
+  fun clear(view: String, worldId: String)
   fun sweepExpired()
 }
 ```
@@ -1465,8 +1470,10 @@ the store.
 ### 8.5 A general result / entity cache — and negative results
 
 The same store generalizes beyond views to a **producer result cache** — the answer to "should API fetches be
-cached?" A producer call is `(producer, key) → records`; caching keys on exactly that, governed by the §9
-diagnostics:
+cached?" A private producer call is `(worldId, grant/access-policy identity, realm/producer digest,
+source/credential revision, producer args/key) → records`; every component participates in the cache
+key. Deployment-approved public/reference producers use a separate explicitly public namespace and
+dataset revision. Caching is governed by the §9 diagnostics:
 
 - **Positive result** — a genuine, successful fetch (**including a real "no records"**) is cacheable with a
   per-producer `ttl` (or `immutable` for stable reference data). A repeat query for the same key reads the
@@ -1644,9 +1651,10 @@ schema-level engineering could not touch.
   cache of *who* an external identity is, not *what* data they hold). The single, explicitly
   opted-in exception is the dedicated annotation-write surface (§12) — ordinary queries remain
   read-only and continue to reject mutating clauses.
-- **Scoped, fail-closed.** Every keyed probe goes through the per-user scope rewriter; vector
-  searches are user-filtered at the source. A query can never read across users; an unparseable or
-  unscopable query is rejected, not run.
+- **Scoped, fail-closed.** Every keyed probe goes through the world scope rewriter; vector
+  searches are world-filtered at the source. A query can never read another world's world-owned
+  data; deployment-approved, revisioned `Public`/reference datasets are the explicit exception. An
+  unparseable or unscopable query is rejected, not run.
 - **Bounded.** Every fetch is bounded by a bound anchor, `maxAnchors`/`maxFanoutTotal`, `paging`
   caps, `k`, and rate budgets. Truncation is reported.
 - **Idempotent re-runs.** A re-run re-fetches; caching (`ttl`/`immutable`) and `temperature: 0` for
