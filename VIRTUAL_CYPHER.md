@@ -209,7 +209,7 @@ is on GitHub" doesn't re-storm the source.
 | `remote` (alias `api`) | a gateway op — realm handler or learned REST API | the anchor's id/email/login (list, string-template, or path-param mode) |
 | `sql` | a `SELECT … IN (:keys)` against a realm datasource | the anchor key, expanded into the `IN` clause |
 | `compute` | an in-process function over the keys (scores, rollups, synthesis) | the anchor key; no external I/O |
-| `vector` | top-k semantic similarity to the anchor's **text** | nothing — *similarity is the join* (§6) |
+| `vector` | top-k semantic relevance to the anchor's **text** — a fused semantic + lexical retrieval, ranked as one list (§6.6) | nothing — *relevance is the join* (§6) |
 | `keyword` | top-k **lexical** (fulltext, exact-token) match to the anchor's text — the honest fit for "MENTIONS \<term\>" | nothing — same relevance contract as `vector`, only the mode differs (§6.6) |
 | `agentic-rag` | a **bounded LLM retrieval loop** over the same index: reformulates, runs both modes, reads further into inconclusive candidates, returns only documents it *judges* fit the edge's `intent` brief | nothing — relevance as a judgment (§6.6); EXPENSIVE, select explicitly |
 | `remote-search` | top-k **lexical** match via the REMOTE store's OWN search API (a gateway op with `{query}` substituted per anchor — e.g. Drive `fullText contains`); live, nothing ingested | nothing — same relevance contract as `keyword`, but the source searches itself; per-match `mode:'keyword'`/`rank` on the edge, score is a neutral 1.0 (matched, not similarity) |
@@ -969,6 +969,29 @@ The three modes answer three different questions — *about* X (vector), *mentio
 `agentic-rag` mode hands retrieval to a **bounded LLM loop** that may reformulate the query, run
 both deterministic modes, and read further into a candidate whose snippet is inconclusive — then
 returns only the documents it judges fit the brief.
+
+**The `vector` mode is FUSED, and `r.mode` says which retrieval actually ran.** Asking what a
+corpus says *about* X is not answered by embedding similarity alone: an exact token the corpus
+does contain — a clause number, a part number, an invoice id — can sit below the similarity
+threshold while a passage that merely reads like the question sits above it. So the semantic lane
+runs a semantic and a lexical retrieval over the same scope and interleaves them into one ranking,
+and reports `r.mode:'fused'`. Three guarantees follow, and they are what a query may rely on:
+
+- **A document either arm finds is reachable.** Adding a distinctive identifier to an otherwise
+  prose question cannot lose the document that contains it.
+- **`r.score` is a SIMILARITY, not a ranking artefact.** Comparisons and thresholds
+  (`r.score > 0.7`) keep meaning what they meant before fusion. What fusion decides is the ORDER
+  and the SET, not the number.
+- **`r.rank` is the fused order, and is the ordering to trust.** The two retrievals score on
+  scales that do not compare, so `ORDER BY r.score DESC` re-orders documents by a quantity that
+  means something different in each half. Order by `r.rank` when the ranking matters.
+
+`r.mode` always reports the retrieval that RAN, never the one requested: `fused` for the semantic
+lane, `keyword` when a lexical retrieval produced the rows — including when a semantic lane found
+nothing and fell back, which is why a `vector` edge may legitimately return `mode:'keyword'` rows.
+A `keyword` edge never reports anything else: a lexical miss is an honest empty, because answering
+"which documents MENTION X" with "documents ABOUT X" collapses the one distinction the two modes
+exist to draw.
 
 **The `intent` directive** is the loop's retrieval brief: a top-level edge property (like `via`,
 not in the `ai:` namespace), read by the engine and passed to the producer. The producer may
