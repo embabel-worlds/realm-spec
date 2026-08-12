@@ -383,6 +383,17 @@ The rules, all engine-enforced:
   regenerated canonical through.
 - **An honest miss never earns a node.** A reduction that answers with the no-answer sentinel stays
   transient and is retried on the next traversal — fabrication can never become durable.
+- **Regeneration is progressive — for reductions whose results compose.** When content changes,
+  only the changed portions re-reduce: the reduction proceeds over content windows, unchanged
+  windows reuse their previous partial results, and the partials combine into the answer — a
+  re-reduction for prose (`summarize`, `synthesize`), a pure truth combination for a verdict
+  (`holds`: any supporting window ⇒ true; a grounded no with no true ⇒ false; all silent ⇒ no
+  answer), a union for a semantic filter (`relevant`). Appending to a large document costs a
+  reduction proportional to the appended content, not the whole document; the same content always
+  yields the same windows. A reduction that must read the whole group at once (`classify`, `score`,
+  `themes`, `cluster`, `extract`, `argmax`) always re-reduces whole. `{ai: {fresh: true}}`
+  regenerates everything. A window whose reduction honestly found nothing keeps that answer until
+  its own content changes.
 - **Node-only, scope-stamped writes.** The engine commits only the node, stamped with immutable
   `worldId`, `contextId`, and access-policy revision. Two contexts summarizing an identical URI do
   not share a node unless policy explicitly promotes the result to `WORLD` visibility; two worlds
@@ -391,7 +402,8 @@ The rules, all engine-enforced:
 
 Cost intuition: the expensive thing (the reduction) runs once per
 `(worldId, contextId, access-policy revision, anchor, band)` and again only on
-change; everything else — the freshness probe, the hit path, the re-link — is indexed graph reads.
+change — and on change, only over the windows that changed; everything else — the freshness probe,
+the hit path, the re-link — is indexed graph reads.
 
 ### 5.6 Typed extraction — `kind: extract` (lazy entities)
 
