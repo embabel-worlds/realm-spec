@@ -1,10 +1,10 @@
 # Embabel Realm Specification
 
-Realms are self-contained, declarative bundles of agent capabilities that can be installed into an Embabel-based host. Each realm is a git repository (no JVM bytecode, no native binaries) that provides actions, types, APIs, MCP servers, commands, webhooks, event sources, event handlers, skills, prompts, and apps. The host platform reads the realm and wires its contents into the running agent.
+Realms are self-contained, declarative bundles of agent capabilities that can be installed into an Embabel-based host. Each realm is a git repository (no JVM bytecode, no native binaries) that provides actions, types, APIs, MCP servers, commands, webhooks, event sources, Trigger Bindings, skills, prompts, and apps. The host platform reads the realm and wires its contents into the running agent.
 
 This document is the spec.
 
-> **Status: living draft.** Sections marked _forward-looking_ describe shape that is settled but may still be in implementation across hosts. Everything else describes the format current Embabel hosts already consume.
+> **Status: living draft.** Sections marked _forward-looking_ describe shape that is settled but may still be in implementation across hosts. Everything else describes the format current Embabel hosts already consume. Where this document cites concrete defaults or behaviour of "the reference host", it means the host implementation this spec is developed against; those values are informative, not part of the contract.
 
 ---
 
@@ -53,15 +53,19 @@ realm-name/
 │       └── my-handlers.ts
 ├── tests/                # Vitest specs for handlers
 │   └── my-handlers.test.ts
+├── wasm/                 # Handler source for the wasm host (optional)
+│   └── handlers.js
 ├── mcp/                  # MCP server configurations (YAML)
 │   └── my-server.yml
 ├── commands/             # Slash command mappings (YAML)
 │   └── my-command.yml
 ├── webhooks/             # Webhook registrations (YAML)
 │   └── my-webhook.yml
-├── events/               # Event ingestion (forward-looking) — push + poll
+├── events/               # Event ingestion — push + poll
 │   └── my-source.yml
-├── handlers/             # Event handlers — TS reactions to signals/cron the user activates
+├── channels/             # Realm-shipped channel connectors (YAML)
+│   └── my-channel.yml
+├── handlers/             # Trigger Bindings — reactions to signals/cron the user adopts
 │   └── my-handler.yml
 ├── decorations/          # Scheduled KG node-decoration manifests
 │   └── my-decoration.yml
@@ -166,6 +170,7 @@ tags:
 | `author` | No | Author or organization name |
 | `url` | No | Source repository or documentation URL |
 | `tags` | No | Categorization tags |
+| `host` | No | Execution host for the Realm's Functions: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
 
 ## `actions/`
 
@@ -176,13 +181,13 @@ Action specifications — YAML files that define executable operations. The host
 | `action` | Framework `PromptedActionSpec` — typed LLM call producing `outputTypeName` |
 | `<FQN>` | Any other `ActionSpec` subtype on the classpath. Use this when shipping a host-extension shape whose YAML contract isn't yet stable enough to claim a short name. |
 
-**Short name vs FQN dispatch.** A short name like `action` is a public contract; once realm authors write it, you can't change the spec's shape without breaking their YAML. Reserve short names only for shapes that have stabilised. FQN dispatch lets a host iterate freely on field names, parsing, and dispatch semantics without committing to a YAML slot upstream.
+**Short name vs FQN dispatch.** A short name like `action` is a public contract; once realm authors write it, you can't change the spec's shape without breaking their YAML. Reserve short names only for shapes that have stabilised. FQN dispatch lets a host iterate freely on field names, parsing, and dispatch semantics without committing to a YAML slot upstream. The flip side: an FQN that appears in published realm YAML is itself a public identifier — a host that moves or renames the class must keep the old name resolvable, or every realm that wired against it breaks.
 
 Example host extension (the assistant's predicate-driven `PolicyActionSpec`):
 
 ```yaml
 # realm-email/actions/policy_email_unreplied.yml
-stepType: com.embabel.assistant.policy.spec.PolicyActionSpec
+stepType: com.embabel.world.policy.spec.PolicyActionSpec
 name: email_unreplied
 description: A thread you're a participant in has activity from someone else, ≥ 24h ago
 inputTypeNames:
@@ -253,7 +258,7 @@ The YAML uses FQN dispatch (the predicate DSL is still iterating, so we don't re
 
 ```yaml
 # actions/policy_pr_review_overdue.yml
-stepType: com.embabel.assistant.policy.spec.PolicyActionSpec
+stepType: com.embabel.world.policy.spec.PolicyActionSpec
 name: pr_review_overdue
 description: A review was requested from you and it's been over 48h
 
@@ -271,7 +276,7 @@ value: 1.0
 
 #### `whenExpr` — the predicate DSL
 
-A boolean expression over the matched signal's fields. Parser source: `com.embabel.assistant.policy.PolicyExprParser`. Grammar (today; expect additions as concrete rules need them):
+A boolean expression over the matched signal's fields. Parser source: `com.embabel.world.policy.PolicyExprParser`. Grammar (today; expect additions as concrete rules need them):
 
 **Operators**, lowest to highest precedence:
 
@@ -351,7 +356,7 @@ Dynamic type definitions — custom input/output types for actions, signal types
     body: "Issue body"
 ```
 
-A type whose `parents:` includes `Signal` (the host-defined signal base type) is a **signal type** — automatically eligible for the consequence engine, triage rules, and persistence as a `SignalRecord`. See [`events/`](#events--event-ingestion-forward-looking) below.
+A type whose `parents:` includes `Signal` (the host-defined signal base type) is a **signal type** — automatically eligible for the consequence engine, triage rules, and persistence as a `SignalRecord`. See [`events/`](#events--event-ingestion) below.
 
 ```yaml
 # types/stripe.yml
@@ -370,7 +375,10 @@ A type whose `parents:` includes `Signal` (the host-defined signal base type) is
 Every entry created via `create_entry` for a type defined here lands as a node in the world graph (the same graph the host's Cypher / schema-projector / proposition-recall tools talk to). Two consequences worth knowing when writing a realm:
 
 - **The entry's `name` is the host's headline for it.** The host picks a single field per type to use as the node `name` for rendering — first `title`, then `name`, then `summary` if any exists. Add at least one of those if you want list / Cypher output to be human-readable.
-- **The host adds an implicit edge to the world user on every create.** Default is `(entry)-[:OWNED_BY]->(user)` — fine for most types. When the predicate reads more naturally in the other direction, declare a `userAnchor:` on the type:
+- **The host can add an implicit edge to the acting human principal's `AssistantUser` node.** The
+  compatibility default is `(entry)-[:OWNED_BY]->(principal)` — fine for most human-authored types.
+  Service principals have no implicit anchor. When the predicate reads more naturally in the other
+  direction, declare a `userAnchor:` on the type:
 
 ```yaml
 # types/movies.yml
@@ -378,7 +386,7 @@ Every entry created via `create_entry` for a type defined here lands as a node i
   description: "The user's score for a Movie."
   userAnchor:
     predicate: RATED          # uppercase; stored uppercase
-    direction: from-user      # `user -[RATED]-> rating` (default is `from-entry`)
+    direction: from-user      # `principal -[RATED]-> rating` (default is `from-entry`)
   properties:
     imdbId: "IMDb id of the rated Movie."
     rating:
@@ -389,12 +397,12 @@ Every entry created via `create_entry` for a type defined here lands as a node i
 | Field | Default | Notes |
 |-------|---------|-------|
 | `predicate` | `OWNED_BY` | Cypher-style relationship name. Required when the key is declared. Stored uppercase. |
-| `direction` | `from-entry` | `from-entry` → `(entry)-[:PREDICATE]->(user)`. `from-user` → `(user)-[:PREDICATE]->(entry)`. Pick whichever reads naturally. |
+| `direction` | `from-entry` | `from-entry` → `(entry)-[:PREDICATE]->(principal)`. `from-user` → `(principal)-[:PREDICATE]->(entry)`. Pick whichever reads naturally. |
 | (sentinel) | — | Set `userAnchor: false` to opt the type out of the implicit edge entirely (reference data, type registries, etc.). |
 
 #### Explicit relations between entries
 
-`create_entry` accepts an optional `relations:` array so a realm's skill can wire the new entry to another entry that already exists in the world. The host emits each requested edge on save; if any target can't be found in the same world, the whole create is refused (no orphan node, no orphan edge). Example shape, taken from the movie realm's `rate-movie` skill:
+`create_entry` accepts an optional `relations:` array so a realm's skill can wire the new entry to another entry that already exists in the host-bound visibility scope. The host emits each requested edge on save; if any target can't be found in that scope, the whole create is refused (no orphan node, no orphan edge). A cross-context relation requires an explicit policy-authorized bridge. Example shape, taken from the movie realm's `rate-movie` skill:
 
 ```jsonc
 // inside execute_javascript / execute_python, via the repository tool:
@@ -410,13 +418,21 @@ create_entry({
 //   - The OF edge comes from `relations:` (explicit, from the skill).
 ```
 
-Each relation is `{predicate, to: {type, ...keyProps}}` — `to.type` names the target's type, the remaining `to.*` fields are the key properties the host MATCHes against on the target's world-scoped nodes. Use this pattern any time a realm's typed records form a small connected graph (rating → movie, comment → ticket, note → contact, etc.) — the same graph is then walkable by Cypher and feeds the recall path automatically.
+Each relation is `{predicate, to: {type, ...keyProps}}` — `to.type` names the target's type, and the
+remaining `to.*` fields are the key properties the host MATCHes against on target nodes in the same
+host-bound visibility scope. Cross-context matching is never implicit. Use this pattern any time a realm's typed records form a small
+connected graph (rating → movie, comment → ticket, note → contact, etc.) — the same graph is then
+walkable by Cypher and feeds the recall path automatically.
 
 ### Populating types from an external system (deterministic, no code)
 
 The patterns above cover types the *user* creates. A realm can also declare a type that the host **populates automatically from a connected external system — deterministically, with no LLM and no Kotlin/Java in the realm.** A structured record (a CRM contact, an issue, a calendar attendee) is already typed at the source, so extracting it with an LLM is wasteful and error-prone; instead the realm declares a *projection* in property `metadata:` and the host's projector does the rest.
 
-This builds on a small canonical-entity model the host ships: a `Contact` is a `Person` resolved by email. Declare a **mirror type** that `parents: [Contact]` and annotate each property:
+This builds on a small canonical-entity model the host ships: within one host-bound visibility scope,
+a `Contact` is a `Person` resolved by email. The host-side merge key is
+`(worldId, visibilityScopeId, type, email)` even though realm YAML does not repeat the scope fields.
+`visibilityScopeId` is `WORLD` for world-visible data and `contextId` for context-private data.
+Declare a **mirror type** that `parents: [Contact]` and annotate each property:
 
 ```yaml
 # types/hubspot.yml — populated from HubSpot CRM, no Kotlin in the realm
@@ -439,7 +455,7 @@ This builds on a small canonical-entity model the host ships: a `Contact` is a `
 
 | Metadata key | Effect |
 |--------------|--------|
-| `identity: "true"` | This field's value is the email **merge key**: records with the same email resolve to one canonical `:Person` (no LLM entity resolution). Also unioned onto the Person's `emails`. |
+| `identity: "true"` | This field's value is the email portion of the **merge key**: records with the same `(worldId, visibilityScopeId, type, email)` resolve to one canonical `:Person` (no LLM entity resolution). Also unioned onto the Person's `emails`. |
 | `canonical: <field>` | Project this source field onto the canonical Person's `<field>`. Single-valued → a winner is chosen by host precedence then most-recent; mark `multivalued: "true"` (or `cardinality: LIST`) to **union** instead. |
 | `relationship: <EDGE>` + `target: <Label>` + `matchBy: <prop>` | Create-or-match a `<Label>` keyed on `matchBy`, and link `(:Person)-[:EDGE]->(:Label)`. |
 | *(none)* | Source-private — the value lands only on the per-record mirror node. |
@@ -457,7 +473,7 @@ Population (above) **eagerly mirrors** a whole external collection into the grap
 1. **probes** the bound *real* anchors the query selects — applying the query's own `WHERE` / pinned-literal predicates so only the anchors that will survive are chosen (a filtered `… WHERE p.name CONTAINS 'governor'` resolves just those people, not the whole address book), preferring an existing real node and only **seeding** a transient one when none exists;
 2. **plans** each fetch with a cost-based optimizer — pushing predicates to the source (below), fetching **per-key or batched** per the producer's declared capability (`batchSafe`), and budgeting calls against the source's shared rate bucket (`cost:`), emitting an `EXPLAIN` with rewrite **advice** when a query can't fit the budget;
 3. **fetches** the external records through the named **producer**;
-4. **materializes** them — and any `brings` sub-graph — as transient nodes carrying the extra `:Virtual` label, a `dateRetrieved` timestamp, and the acting user's `userId`;
+4. **materializes** them — and any `brings` sub-graph — as transient nodes carrying the extra `:Virtual` label, a `dateRetrieved` timestamp, and the host-bound `worldId`, `contextId`, and access-policy revision (with the acting principal retained separately for audit);
 5. runs the user's (scope-rewritten) query over the combined **real + virtual** graph;
 6. **rolls back** — nothing persists.
 
@@ -490,7 +506,7 @@ A virtual type declares one or more `virtualJoins:`. Each says how the type is r
 
 `virtualJoins` fields: `anchorLabel`, `relationship`, `keyField`, `recordKeyField` (defaults to `keyField` — a same-property id-match), `producer`, optional `brings` (declared sub-graph), `maxAnchors`/`maxFanoutTotal` (caps). For a join to an **external-identity node** (a bridge like `GitHubIdentity` / `HubSpotOwner`), declare a `resolve:` rule chain + `writeThrough`/`refreshAfter` instead — see **Identity bridges** below (`persist: true` is the older eager-only form). A list with more than one entry, or any join that can fan in, requires an `identity` property so convergent paths dedupe to one node.
 
-The query may only reach a virtual label by **traversing a declared join from a bound anchor** — a naked `MATCH (hc:HubSpotContact)` is rejected. Every materialized node carries the extra `:Virtual` label, a `dateRetrieved` ISO-8601 timestamp, and the acting user's `userId` (so the normal scope rewriter matches it); the user's query runs through the rewriter unchanged, and the whole materialization is rolled back when the query completes.
+The query may only reach a virtual label by **traversing a declared join from a bound anchor** — a naked `MATCH (hc:HubSpotContact)` is rejected. Every materialized node carries the extra `:Virtual` label, a `dateRetrieved` ISO-8601 timestamp, and the host-bound `worldId`, `contextId`, and access-policy revision (so the normal scope rewriter matches it); the user's query runs through the rewriter unchanged, and the whole materialization is rolled back when the query completes.
 
 A query may also reach a virtual node by **pinning the anchor with a literal** — `MATCH (g:GitHubIdentity {login:'octocat'})-[:RAISED]->(i:GitHubIssue)` — even when no `GitHubIdentity{login:'octocat'}` exists in the graph. The literal (inline `{...}` **or** a `WHERE alias.login = '…'`) seeds a transient anchor, so a producer can be keyed on a *named* identity (any GitHub login, not just the connecting user's), fetched with the connecting user's credentials. Multiple joins onto the same virtual node compose: `(me)-[:RAISED]->(i)<-[:ASSIGNED]-(:GitHubIdentity {login:'octocat'})` materializes both sides and intersects them.
 
@@ -537,7 +553,7 @@ Producer `kind`s:
 | `compute` | an in-process computation over the keys | scores / rollups / synthesis — no external I/O; *local*, so NOT a RemoteRepository |
 | `vector` | top-k **semantic similarity** to the anchor | for joins with no key — similarity *is* the join (related docs/chunks); rides the host embedder |
 | `generative` | **GENERATES** the edge (resumably) rather than reading it — an LLM's world knowledge (`SIMILAR_TO`, `IN_INDUSTRY`) or a code function | pluggable generator (`llm` \| `function`); keeps generating; resolves each answer onto the type spine; provenance-stamped |
-| `aggregate` | **REDUCES** an anchor's connected neighborhood to ONE node (fan-IN) — e.g. a per-user summary node distilled from many rows | gathers via a scoped graph read; delegates the reduction to an existing LLM aggregation (`synthesize`/`summarize`/…); TTL-cache = periodic refresh |
+| `aggregate` | **REDUCES** an anchor's connected neighborhood to ONE node (fan-IN) — e.g. a per-principal or per-organization summary distilled from many rows | gathers via a scoped graph read; delegates the reduction to an existing LLM aggregation (`synthesize`/`summarize`/…); TTL-cache = periodic refresh |
 
 > **Naming:** `kind: remote` is the current spelling for an externally-backed repository; `kind: api` is accepted as a back-compat alias and still works in existing realms.
 
@@ -605,7 +621,7 @@ Semantics (both generators):
 
 Every other producer is **fan-OUT**: one anchor → many target records. An `aggregate` producer is the
 **fan-IN** mirror: it gathers the anchor's connected neighborhood and **reduces it to ONE node**. Use it when
-the reduction should itself be a node you can traverse to and cache — a per-user summary, a per-org rollup, a
+the reduction should itself be a node you can traverse to and cache — a per-principal summary, a per-org rollup, a
 per-topic digest — rather than a scalar computed inline.
 
 It does **not** reimplement the reduction: it **delegates to an existing LLM aggregation** (`synthesize` /
@@ -619,7 +635,7 @@ host ships no domain prompt and no model (the aggregation uses the ops-controlle
 - name: movieTasteSummary
   kind: aggregate
   edgeType: HAS_MOVIE_TASTE_SUMMARY
-  identityField: userId          # ONE node per user (MERGE on this folds the anchor's identity spellings)
+  identityField: anchorKey       # ONE node per bound anchor inside the host-bound world
   anchorKeyField: anchorKey      # the join's recordKeyField — links the one node back to the anchor
   collect:                       # the fan-IN neighborhood: a scoped read (a:anchorLabel)-[:via]->(t:targetLabel)
     anchorLabel: AssistantUser
@@ -831,9 +847,9 @@ Most producers don't need `echoKeyAs` — e.g. HubSpot owners/contacts records a
 
 Anywhere a realm ships code that runs in the host's `code_mode` sandbox — a **handler** (`handlers/`), a **decoration** action, a skill recipe — it writes **CypherScript**: an ordinary TypeScript/JavaScript program that interleaves graph queries with procedural logic, integration calls, and inline LLM, all over the one typed `gateway.*` surface. It is not a separate language — it's TS/JS with first-class graph access:
 
-- **Cypher for the graph** — `await gateway.kg.query({ cypher, params })`. The query runs through **Virtual Cypher** (above): scope-rewritten to the acting user, read-only, and materializing on-demand virtual joins exactly as a chat query would — so one `MATCH` spans persisted **and** virtual (integration) data.
+- **Cypher for the graph** — `await gateway.kg.query({ cypher, params })`. The query runs through **Virtual Cypher** (above): rewritten to the host-bound world, context, and access policy, read-only, and materializing on-demand virtual joins exactly as a chat query would — so one `MATCH` spans persisted **and** virtual (integration) data.
 - **TypeScript/JavaScript** for what Cypher can't express — branching, aggregation, reshaping, loops.
-- **Integrations** — `gateway.<ns>.*` (the realm's own verbs + connected APIs), e.g. fetch the actual email body the graph only holds an edge for.
+- **Integrations** — `gateway.<ns>.*` (the Realm's own Functions + connected APIs), e.g. fetch the actual email body the graph only holds an edge for.
 - **Inline LLM** — `gateway.ai.classify` / `gateway.ai.*` for fuzzy predicates Cypher can't state.
 
 ```ts
@@ -911,9 +927,9 @@ Supported `spec.kind` values:
 | `fixed` | `key`, optional `params` | A host-registered fixed query. |
 | `anchor` | `ref` | A typed graph-node anchor. |
 
-A realm-shipped Lens is code, not mutable per-user state: its definition is refreshed when the
-realm is updated. One opening's arguments, focus, presentation, Watch snapshots and other user
-state remain in the world. An app should invoke a named Lens or view through the host's typed
+A realm-shipped Lens is code, not mutable per-world or per-principal state: its definition is
+refreshed when the realm is updated. One opening's arguments, focus, presentation, Watch snapshots
+and other scoped state remain in the world. An app should invoke a named Lens or view through the host's typed
 invocation surface; it should not accept or submit arbitrary Cypher or JavaScript from a browser.
 
 A CypherScript Lens may depend on a reusable **node view** by referencing the view name as a label
@@ -1041,10 +1057,15 @@ factory reset that deletes the register, or a schema projection that inlines it.
 
 Two hard rules:
 
-- **Only an ingestion job for a declared `visibility: public` source may write `Public` nodes.** No
-  user-facing path may create one, or the label becomes a cross-tenant write primitive.
-- **`Public` is opt-in per label and never inferred.** The rewriter's default stays fail-closed at
-  PRIVATE; an unregistered label is private, as it is today.
+- **Only a deployment-admin-approved ingestion job for a declared `visibility: public` source may
+  write `Public` nodes.** It must use a deployment-owned public/anonymous credential, never a
+  world-owned credential or private input. No realm installation or user-facing path may create a
+  public node or globally register a public label; either would be a cross-tenant widening primitive.
+- **`Public` is opt-in per label and never inferred.** The deployment reserves the label globally;
+  the rewriter's default stays fail-closed at PRIVATE and an unregistered label is private. If two
+  worlds can install different realm revisions, a public/reference identity must include the dataset
+  revision or the deployment must migrate that dataset atomically. World-local version skew must not
+  mutate a single unversioned public identity.
 
 ## `reference/`
 
@@ -1063,7 +1084,11 @@ A record is the **same `{type, data, relations}` shape as the `create_entry` too
 Semantics:
 
 - **Idempotent.** A record whose `type` declares an `identity` property is upserted on that key, so re-seeding on every boot is a no-op (or an in-place update). Types with no identity would duplicate — give reference types an identity.
-- **User-anchored reference is per-user.** If the `type` is `userAnchor`, each seeded record gets its `(:AssistantUser)-[:PREDICATE]->(record)` edge automatically — the way to seed a per-user preference (e.g. which services the user subscribes to). Global catalog data uses `userAnchor: false`.
+- **Principal-anchored reference is per principal.** The compatibility type name is `userAnchor`;
+  each seeded record gets its `(:AssistantUser)-[:PREDICATE]->(record)` edge automatically inside the
+  host-bound world and context — the way to seed a human principal's preference (e.g. which services
+  that person subscribes to). A service principal has no implicit `AssistantUser` anchor. Global
+  catalog data uses `userAnchor: false`.
 - **Relations resolve like `create_entry`.** An optional `relations: [{ predicate, to: { type, ...keyProps } }]` links a record to another entry that must already exist (seed it first / in another realm's `reference/`), else the record is refused.
 - **Merges with virtual data.** A reference type can also be a virtual-join *target* (e.g. `StreamingService` seeded here AND materialized on demand by a producer): both write paths MERGE on the shared identity, so a producer-fetched node picks up the catalog's stable fields.
 
@@ -1072,6 +1097,16 @@ This lets a realm own its reference data as *data*, not as a hardcoded list insi
 ## `apis/`
 
 API entries — each `.yml` file in `apis/` is a list of API definitions loaded on world init. Each entry compiles into a typed `gateway.<name>.*` namespace inside `execute_javascript` / `execute_python`.
+
+**Trust tiers are normative.** In a marketplace/untrusted realm, `file://`, process-environment
+fallback, `${VAR}`/raw-header credential interpolation, query/path/body credentials, and directly
+networked credential-bearing MCP are rejected at load. Marketplace network access must use a
+host-vetted typed credential slot and structured auth profile through the gateway; if the provider
+cannot meet the deployment's marketplace credential policy, that integration is unavailable in the
+marketplace tier. The `token-env`, custom-header interpolation, and credential-bearing MCP forms
+documented below are compatibility features for local or explicitly first-party/org-reviewed
+installations. Their trust tier is adoption-visible and they never become marketplace-safe merely
+because they run in Docker.
 
 ```yaml
 # apis/petstore.yml
@@ -1140,7 +1175,12 @@ Four auth modes plus the implicit headers-only path:
 # 5. OAuth2 — see next section
 ```
 
-Token-env and `${VAR}` values are resolved in this order: world credential store first (set via `set NAME = ...` in chat or via the admin UI), then process env var. Missing creds → the entry is skipped at world load with a logged warning; the API never appears in the gateway.
+Credential references resolve through a host binding keyed by world, context, principal, connection, and
+grant revision, with context access checked on every call. In the local/first-party compatibility
+tier, `token-env` and `${VAR}` may then resolve from that world's credential store (set via
+`set NAME = ...` in chat or via the admin UI), followed by the process environment. Process fallback
+is unavailable in shared multi-world or untrusted marketplace deployments. Missing credentials mean
+the entry is skipped at world load with a logged warning; the API never appears in the gateway.
 
 ### OAuth2
 
@@ -1288,7 +1328,7 @@ realm-name/
 
 ### Handler signature
 
-Every exported async function with a `(ctx, args)` signature is registered as a gateway method.
+Every exported async function with a `(ctx, args)` signature becomes a manifest entry at build time; the host registers from the manifest, never by introspecting the code.
 
 ```ts
 // src/api/docs-editor.ts
@@ -1415,20 +1455,20 @@ self-contained — you don't manage this.
 `realm-movie` is the worked example: a `Movie` class with `streaming`, `details`,
 and `rate` plus inherited `neighbors`.
 
-#### Verbs on virtual types — pure compute and effectful write-back
+#### Type methods on virtual types — pure compute and effectful write-back
 
 A type method works the same whether the instance is a persisted entity or one
 materialized on demand by a virtual join (a `GitHubIssue`, a `HubSpotContact`).
 So a virtual type's class gives its on-demand instances behaviour:
 
-- **pure** verbs compute over the instance's own fields, no I/O (`issue.ageDays()`,
+- **pure** methods compute over the instance's own fields, no I/O (`issue.ageDays()`,
   `issue.needsTriage()`, `pr.isReadyForReview()`);
-- **effectful** verbs write back to the source through `this.gateway.<ns>.*`
+- **effectful** methods write back to the source through `this.gateway.<ns>.*`
   (`issue.close()`, `issue.addLabels('stale')`, `pr.requestReviewers('alice')`),
   and may reuse the host `gateway.sql` / `gateway.cypher` ops the generated
   `GatewayContext` exposes.
 
-A read materialises transient nodes and rolls them back; an effectful verb commits
+A read materialises transient nodes and rolls them back; an effectful method commits
 to the real source (the rollback never touches that side-effect). A program reads,
 then acts: `const rows = await gateway.cypher.query({ cypher }); hydrateByType(rows,
 { GitHubIssue }, gateway).filter(i => i.needsTriage()).forEach(i => i.addLabels('stale'))`.
@@ -1436,7 +1476,7 @@ then acts: `const rows = await gateway.cypher.query({ cypher }); hydrateByType(r
 
 ### Manifest format
 
-Auto-generated by `embabel-build-manifest` (provided by `@embabel/runtime-types`), so realm authors never hand-author it. The host reads it at install time.
+For a TS realm, generated by `embabel-build-manifest` (provided by `@embabel/runtime-types`) — never hand-authored. A wasm realm with no TS build hand-authors the same format (see [Execution hosts](#execution-hosts)). The host reads it at install time.
 
 ```json
 {
@@ -1461,6 +1501,9 @@ Auto-generated by `embabel-build-manifest` (provided by `@embabel/runtime-types`
 | `description` | first JSDoc paragraph | LLM-visible documentation. |
 | `inputSchema` | TS type of `args` parameter | JSON Schema; drives the typed surface on the LLM side. |
 | `outputSchema` | TS type of the unwrapped `Promise<T>` | Same. |
+| `schedule` | manifest author | Optional cron expression (Spring 6-field); the host also runs the Realm Function on this cadence. See [Execution hosts](#execution-hosts). |
+| `onType` | `export class X extends Entity` methods (or manifest author) | The entry is a method on a declared type, surfaced as `<obj>.<name>(args)` rather than a bare gateway function. |
+| `className` | exported class name | Set for class-based type methods; the class to instantiate before invoking `name`. Absent for the function form. |
 
 ### Build and test cycle
 
@@ -1531,6 +1574,428 @@ embabel-realm sync                        # from inside any realm repo
 embabel-realm sync ~/dev/realm-hubspot     # or pass an explicit path
 ```
 
+## World execution and isolation boundary
+
+> **Forward-looking contract.** Current Me commonly derives `worldId` from `user.id` and accepts
+> legacy user/workspace scope alternatives. The guarantees below are release gates for multi-world
+> and shared-store deployment, not a description of current isolation.
+
+Canonical terminology is defined in the [Realm domain glossary](./CONTEXT.md).
+
+The portable rule is simple: **isolate by world and context; authorize every execution as exactly one
+principal.** A world may admit several human and service principals. Concurrent executions of the
+same Realm in the same world may therefore run as different principals without changing their data
+boundary.
+
+| Field | Contract role |
+|---|---|
+| `worldId` | Opaque, durable identity that partitions all private data, configuration, credentials, routes, receipts, caches, execution state, and canonical entities. |
+| `contextId` | Explicit confidentiality boundary within a world. It never replaces `worldId`. |
+| `principalId` | Human or service identity whose authority the execution uses. It authorizes and attributes the operation; it is not a data-partition substitute for `worldId`. |
+| `executionId` | Identity of one durably admitted logical execution, stable across recovery and worker attempts. |
+
+`userId` is not a portable Realm scope. A host may use it for a human account that is a principal or
+may map it to a `principalId`, but Realm manifests, guest inputs, persisted scope stamps, and cache
+keys never use `userId` as an alias for `worldId` or as the general runtime authority. Administration,
+billing, and ownership are host management-plane concerns, not portable execution identities.
+
+`principalId` is an opaque, stable identifier in the host security domain and is never recycled.
+For federated authentication the host derives it from a verified issuer and subject, not from an
+email address, display name, or unqualified provider-local id. Membership and access to each world
+and context are separate policy and are rechecked at admission and every privileged handoff.
+
+`worldId` is globally unique, persisted with the world, and independent of its administrative
+account, name, and filesystem or deployment location. Renaming, moving, restoring, or transferring the same world
+preserves its id. A copy intended to become an independent world receives a new id. Administrative
+transfer does not rewrite world data or silently transfer authority: existing adoptions and
+credentials pause until an explicit transfer policy revalidates them.
+
+A host may subdivide a world into named knowledge or memory contexts. Such a context is identified
+by `(worldId, contextId)` and is a confidentiality boundary with a versioned access policy. Every
+context-owned node, edge, vector record, materialization, and positive or negative cache entry
+includes `contextId` and the applicable access-policy revision. The default context is explicit; an
+absent context fails closed. A context may narrow which principals can read within a world; it never
+replaces `worldId` as the isolation boundary or authorizes a cross-world read.
+
+The host binds immutable `worldId`, `contextId`, `principalId`, and `executionId` on every execution.
+Realm code and request payloads cannot choose or override them. On-demand work uses the authenticated
+caller as `principalId`. Autonomous work uses the run-as human or service principal selected by its
+adoption. A signal, webhook sender, or channel author is input data, never the principal merely
+because it caused an execution.
+
+An adoption records who created or approved it for audit, separately from its run-as principal.
+Those audit identities grant no execution authority. A platform may record `workerId` for the
+process handling an attempt, but it is operational telemetry only: it grants no authority and enters
+no data, credential, cache, cursor, route, or receipt key. Credential resolution is keyed by world,
+context, principal, connection, and grant revision. Audit records include world, context, principal,
+adoption when present, execution, trigger or sender data, observed world epoch, and optionally the
+worker.
+
+Realms in one world intentionally compose over that world's typed graph and gateway surfaces. Realms
+in different worlds do not share data, credentials, routes, receipts, canonical entities, or mutable
+caches, even when the same person owns both. Deployment-approved `Public`/reference datasets are the
+only exception.
+
+A host may share immutable code only when the canonical full-package `realmDigest` addresses it.
+Sharing a worker never relaxes world scoping. Local and single-tenant deployments run the same path
+with one world; deployment topology is not an authorization control.
+
+The default identity of a world-visible persisted `Person`, `Organization`, mirror, bridge, or other
+canonical entity is consequently `(worldId, WORLD, type, merge key)`. Context-private identity is
+`(worldId, contextId, type, merge key)`: it cannot add properties or edges to a world-visible spine
+until an explicit, policy-checked promotion makes that information world-visible. Cross-world or
+organization-wide identity is a separate host capability: it needs an `orgId`, verified membership,
+an adoption-visible grant, and an organization-scoped merge key. A bare email or domain must never
+merge canonical data between contexts or worlds.
+
+### Restore, transfer, and fork
+
+At most one **world incarnation** may be active. Activation allocates a monotonically increasing
+`worldEpoch`; every lease, dispatch, gateway call, token, and delivery handoff proves the current
+epoch. Restore or migration preserves `worldId` only through an exclusive handoff that fences the
+old incarnation before the new one runs. Restoring a copy while the original remains active is
+rejected.
+
+Restore preserves effect receipts so their idempotency identity survives recovery. It invalidates
+leases, sessions, tokens, and captured routes. Any `IN_FLIGHT` or `OUTCOME_UNKNOWN` effect is
+reconciled or surfaced for a decision, never automatically replayed. `worldEpoch` is a fencing value,
+not part of an effect receipt key; incrementing it must not make the same logical effect spend again.
+
+Administrative transfer is an atomic suspended state. Before the world resumes, host policy
+revalidates or revokes principal membership, context ACLs, service principals, grants/adoptions,
+credentials, sessions, tokens, routes, and queued work. Data, receipts, and audit retain `worldId`;
+authority does not silently transfer with them. The world resumes under a new `worldEpoch`.
+
+A fork is a new world, not a second incarnation. It receives a new `worldId`, new context ids, and
+rekeys every private/context/canonical identity. It copies no adoptions, credentials, service
+principals, routes, sessions, tokens, leases, queued work, or effect receipts. Those capabilities
+require adoption in the fork.
+
+## Execution hosts
+
+> **Forward-looking contract.** The portable Docker capability boundary, fail-closed unknown-host
+> behavior, and atomic artifact-set publication below require host changes. Until implemented and
+> tested, current Docker/source-validation behavior is not a marketplace security boundary.
+
+A realm ships logic and declarations. The platform supplies the sandbox, identity binding, resource
+limits, triggers, and observability. Data enters through declared surfaces and leaves through gateway
+calls. A portable realm never reaches around that boundary: no ambient credentials, direct
+infrastructure, or mutable runtime shared with another realm.
+
+Two consequences are normative:
+
+- **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world, context, principal, or execution. Realms deliberately share declared types inside a world; graph data is readable only through the current context/access policy or an explicit policy-authorized bridge. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world-, context-, and where principal-dependent, principal-scoped.
+- **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
+
+The host is placement, not the Realm Function contract. Types, producers, lenses, APIs, events, and prompts load
+the same way everywhere. Artifacts do not: each host runs a different artifact, and a function must fit
+that host's capability set. A handler that needs npm does not become a wasm function by relabeling it.
+Two hosts exist:
+
+| Host | What runs | Choose it when |
+|---|---|---|
+| `docker` | the compiled `dist/` JS modules, in the host's Node code sandbox | Default. Handlers need npm dependencies or the full TS project layout. Portable realm code still has no raw network or ambient credential access. |
+| `wasm` | `dist/handlers.wasm`, in-process inside the host runtime | Functions are small and dependency-free, per-dispatch latency matters, or the deployment has no container runtime. |
+
+The portable contract is capability-based on both hosts: no sockets, DNS, arbitrary `fetch`, process
+environment, inherited file descriptors, or ambient credentials. External access goes through the
+host gateway, which applies world/context scope, policy, receipts, quotas, and audit. A deployment may define
+a privileged container extension with raw network access, but that is organization-reviewed host
+code outside the portable/marketplace realm contract and must not be selected merely by declaring
+`host: docker`.
+
+Adding a host that consumes an existing artifact class changes nothing for a Realm author except the `host:` value. Functions keep their names and schemas, signals keep their identity, gateway calls keep their envelope, and the audit format stays the same. A candidate host that needs more than that from authors is not a host.
+
+### Placement
+
+`host:` in `realm.yml` is optional. The platform reconciles the declared value with what is on disk:
+
+| declared | on disk | placement |
+|---|---|---|
+| absent | `dist/handlers.wasm` present | wasm |
+| absent | no wasm bundle | docker |
+| `docker` | no wasm bundle | docker |
+| `docker` | wasm bundle present | **conflict** |
+| `wasm` | bundle present | wasm |
+| `wasm` | no bundle, `wasm/handlers.js` present | wasm — bundle built on load |
+| `wasm` | neither | **conflict** |
+
+A conflict surfaces as a world-loading problem with a one-sentence reason and a suggested `host:` fix; the realm's declarative content still loads. `docker` with a bundle present is a conflict deliberately: a stale bundle must never sit silently beside a host that isn't running it.
+
+An unrecognized `host:` value fails the executable surface closed: the host records a problem and
+loads the realm's declarative content, but registers no functions and never infers an executable host.
+
+Three consequences of the table worth stating:
+
+- With no `host:` declared, wasm artifacts decide placement by themselves: `wasm/handlers.js` beside a docker-style `src/` project places the realm on wasm, and the docker handler modules are not used for dispatch. Declare `host: docker` to keep a mixed-source realm on docker (the wasm bundle then surfaces as the conflict above).
+- When both `wasm/handlers.js` and a bundle exist, the source is the truth: the host rebuilds the bundle whenever the source fingerprint changes ([build on load](#build-on-load)).
+- The wasm kill switch is a dispatch-time control, not a placement input: with wasm disabled the realm still loads its declarative content, but its functions are unavailable and attempted dispatches produce a recorded refusal.
+
+### Authoring a wasm realm
+
+The minimum is three files — the realm, the handlers, and the manifest that registers them:
+
+```yaml
+# realm.yml
+name: ping
+host: wasm
+```
+
+```js
+// wasm/handlers.js
+export async function ping(input, ctx) {
+  return "pong";
+}
+```
+
+```json
+// dist/manifest.json
+{
+  "version": 1,
+  "entries": [
+    {
+      "namespace": "ping",
+      "name": "ping",
+      "description": "Answers pong.",
+      "inputSchema": { "type": "object", "properties": {} },
+      "outputSchema": { "type": "string" }
+    }
+  ]
+}
+```
+
+A handler file **contributes named handler functions**, and the manifest binds each declared function to one by its `name` (the `namespace` is manifest-side and never encoded in the code). A handler is `async (input, ctx)`: it **returns its result value directly** — the value described by the manifest's `outputSchema` — or **throws** to fail. The host wraps the return into the `{ result }` / `{ error }` wire envelope; authors never write the envelope. A return value must be JSON-serializable; `undefined` serializes to a null result. Three forms are supported:
+
+```js
+// Named export — one handler per Realm Function (the default). input-first, ctx second.
+export async function ping(input, ctx) {
+  return "pong";
+}
+
+// Default-export object — group a file's functions.
+export default {
+  async ping(input, ctx) {
+    return "pong";
+  },
+};
+
+// Register by name — for a file that cannot use export syntax (e.g. generated).
+defineHandler("ping", async (input, ctx) => "pong");
+```
+
+The name a form contributes is the export identifier, the property key, or the `defineHandler` string. **Resolution is deterministic:** for each manifest function the host looks up its `name` among the contributed functions; a name contributed more than once, or by more than one form, is a load-time problem — a name is defined exactly once. **Discovery is the manifest's; the module supplies implementations.** The host reads the manifest for what functions exist — it never executes guest code to *discover* functions — then evaluates the module to *resolve* each entry's implementation (collecting the exports and any `defineHandler` registrations) and binds them. A function with no manifest entry is unreachable; a manifest function with no contributed function is a recorded load problem and is unavailable for calls or triggers; a realm with no manifest registers no functions at all.
+
+`input` is the dispatch input, described by the manifest's `inputSchema`: the call arguments for an on-demand call, or the trigger-discriminated event for a signal- or cron-bound dispatch (see [trigger bindings](#trigger-bindings-and-dispatch-scoped-replies--forward-looking)). An on-demand call passes the arguments verbatim, with no `trigger` key; a handler that is also bound distinguishes the cases by the presence of `trigger`. `ctx` carries:
+
+| Member | Contract |
+|---|---|
+| `ctx.gateway.<namespace>.<method>(args)` | Calls back into the host's gateway surface — the same namespaces and schemas a TS handler or LLM-generated script sees. The host binds the world, context, access-policy revision, execution, and principal. On-demand calls run as the authenticated caller; autonomous calls run as the adoption's pinned principal. The guest never holds or presents a credential or scope key. |
+| `ctx.log(message)` | Guest logging, surfaced in the host's logs against the dispatch. |
+| `ctx.reply({ text, idempotencyKey })` | Dispatch-scoped reply to the triggering channel thread ([trigger bindings](#trigger-bindings-and-dispatch-scoped-replies--forward-looking)). Returns `{ status }` (one of the reply results listed there). Always present; on a dispatch with no live route it returns `{ status: "NOT_REPLYABLE" }` rather than being absent. |
+
+**Statelessness applies to every form.** Every dispatch runs in a fresh instance, so nothing in the file survives between dispatches — a module-level variable and a value closed over by a default-export object both reset each dispatch. Durable state lives in the graph, through the gateway. `wasm/handlers.js` is compiled as a module; `defineHandler` is a host-provided global available both in that module and in a file with no `export` syntax — reach for it when generating a file that cannot use export syntax.
+
+A realistic Realm Function — an activity digest over signals the realm's own event source ingests:
+
+```js
+// wasm/handlers.js — manifest namespace "chatops", name "digest" binds to export `digest`
+export async function digest(input, ctx) {
+  const limit = Number(input && input.limit) > 0 ? Number(input.limit) : 5;
+  const messages = await ctx.gateway.signals.recent({
+    type: "chatops.message",
+    hours: 24 * 7,
+    limit: 200,
+  });
+  const byChannel = {};
+  for (const m of messages) {
+    const channel = (m.properties || {}).channel_name || "unknown";
+    byChannel[channel] = (byChannel[channel] || 0) + 1;
+  }
+  ctx.log("digest over " + messages.length + " message(s)");
+  // Return the value directly — the host wraps it into the wire envelope.
+  // Throw to fail; the host turns the thrown error into { error }.
+  return {
+    totalMessages: messages.length,
+    channels: Object.entries(byChannel)
+      .map(([name, n]) => ({ name, messages: n }))
+      .sort((a, b) => b.messages - a.messages),
+    recent: messages.slice(0, limit).map((m) => ({
+      subject: m.subject,
+      at: m.occurredAt,
+    })),
+  };
+}
+```
+
+What the guest has, and what it does not:
+
+| Available | Absent |
+|---|---|
+| `ctx.gateway.*`, `ctx.log`, plain JavaScript, JSON | Node (`require`, `process`, `fs`), npm packages |
+| The function's `input`, described by the manifest's `inputSchema` | Network sockets, filesystem, environment variables |
+| | Any credential or scope key. World and principal are bound host-side; there is no key to read, leak, replay, or substitute. |
+
+The absences are the point: a wasm function is pure logic over gateway calls. A handler that needs an npm library, streaming I/O, or the filesystem belongs on the docker host. The engine is an embedded modern-ECMAScript interpreter, not Node: the language and its built-ins (`JSON`, `Promise`, `Math`) are there; host-shaped globals (`require`, timers, `fetch`) are not.
+
+### Single file, or a typed project
+
+Two authoring shapes carry the same function contract:
+
+- **`wasm/handlers.js` — the zero-toolchain single file.** Plain JavaScript, no `package.json`, no npm. Compiled to `dist/handlers.wasm` on load. The whole realm is `realm.yml` + this file + a hand-authored `dist/manifest.json`. This is the floor.
+
+- **`src/` — a TypeScript project.** When a realm outgrows one file — multiple handlers, shared helpers, real types — it authors a normal TypeScript project: many `.ts` files under `src/`, ordinary `import` semantics between them, a `package.json`, and a typed view of the gateway. The build type-checks, bundles the reachable module graph into one module, **extracts `dist/manifest.json` from the typed exports** (function names, `inputSchema`/`outputSchema` from the handlers' parameter and return types — the same schema-from-types generation TS handlers already use), and compiles the bundle to `dist/handlers.wasm`. The author runs the build; the shipped artifacts are the bundle and the generated manifest. Extraction sees exports only: `defineHandler` is a single-file form, so a `defineHandler` call in a `src/` project contributes no manifest entry and the build warns.
+
+Types come from two places, both already in the ecosystem: `@embabel/runtime-types` supplies the `Ctx`, event, and envelope types, and a generated `.embabel/gateway.d.ts` (via `embabel-realm sync`) types `ctx.gateway.<namespace>.<method>` against the world's actual tool surface. So `ctx.gateway.signals.recent({ … })` autocompletes and type-checks, and a handler's declared `input`/return types drive the manifest schemas rather than being hand-copied into JSON.
+
+```ts
+// src/api/chatops.ts — typed, multi-file project
+import { digestByChannel } from "../lib/aggregate";
+import type { Ctx } from "@embabel/runtime-types";
+
+export async function digest(input: { limit?: number }, ctx: Ctx): Promise<Digest> {
+  const messages = await ctx.gateway.signals.recent({ type: "chatops.message", hours: 168, limit: 200 });
+  return digestByChannel(messages, input.limit ?? 5);
+}
+```
+
+The project layout and toolchain are the docker `src/` project's: source under `src/api/<namespace>.ts` (the filename is the namespace), each exported handler a function in that namespace, helpers under `src/lib/` excluded from extraction. Functions resolve by `(namespace, name)`, so `a.get` and `b.get` are distinct. The build bundles the reachable module graph from those entrypoints into one module and compiles it to the artifact its placement runs — docker JS modules, or a wasm bundle. `wasm/handlers.js` stays the no-build escape hatch; `src/` is the path when you want types, imports, and tests.
+
+A wasm-targeted `src/` project ships its built `dist/handlers.wasm` and generated manifest as one
+`artifactDigest`-bound set; the host does not build `src/` on load (build-on-load covers
+`wasm/handlers.js` only). A marketplace accepts that set only when the platform built it from the
+reviewed source or can verify a reproducible-build attestation. A local or organization-reviewed
+installation may choose a weaker provenance policy, but still verifies the artifact-set digest.
+
+`artifactDigest` covers the executable and manifest correspondence. The broader canonical
+`realmDigest` covers **all author-controlled package content**: the artifact set plus handlers,
+events/mappings, channels, types, producers, APIs, MCP/webhook declarations, prompts, and other realm
+surfaces. Adoption and dispatch pin `realmDigest`; changing a non-code declaration can change
+behavior just as surely as changing code.
+
+Two points of this are _forward-looking_ convergence, not shipped today:
+
+- **One signature across hosts.** The canonical handler signature is `(input, ctx)` with the gateway under `ctx.gateway` (as shown throughout). The docker `src/` handler today is `(ctx, args)` with the gateway passed directly as the first argument. The invocation convention is selected by a top-level manifest field `handlerAbi` — one of `"input-ctx"` (the default when absent) or `"ctx-args-legacy"` — applying to the whole artifact, never inferred from parameter names or arity (both are arity-two). Unifying on `(input, ctx)` so one `src/` serves both hosts is the convergence; the `(ctx, args)` form persists only under an explicit `handlerAbi: "ctx-args-legacy"`.
+- **Manifest from types.** The single-file JS path hand-authors `dist/manifest.json`; the TS build extracting it from the typed exports is the same generation the docker `src/` build already points at.
+
+### The manifest, schedules, and type methods
+
+A wasm realm ships `dist/manifest.json` in the same [manifest format](#manifest-format) as TS handlers — hand-authored for the single-file JS path, generated by the build for a `src/` TypeScript project. The schemas drive the typed LLM surface exactly as for docker-hosted functions and are enforced by the host at invocation. `outputSchema` describes the unwrapped payload — the value the handler returns, before the host wraps it in the wire envelope — never the envelope itself. Two entry fields matter here:
+
+| Field | Meaning |
+|---|---|
+| `schedule` | A cron expression (Spring 6-field, evaluated in the host's timezone). Installation makes the schedule available but **does not activate it**. It starts only after adoption under the same digest-bound grant as a Trigger Binding, and a realm update pauses it until that grant is valid again. A **Manifest Schedule** passes empty args (`{}`), so every `inputSchema` field must be optional. (A scheduled Trigger Binding in `handlers/` instead passes `{trigger: "cron", firedAt}` under a different input contract; see [trigger bindings](#trigger-bindings-and-dispatch-scoped-replies--forward-looking).) |
+| `onType` | The function is a method on a declared type — callable as `<obj>.<name>(args)` on an in-scope object, not as a bare gateway function. The handler receives the object as `input.self` and the caller's arguments as `input.args`. `schedule` does not combine with `onType`: a scheduled invocation has no receiver. |
+
+A Trigger Registration has one discriminated identity everywhere it appears in adoption, dispatch,
+receipts, and audit: `binding:<binding id, binding revision>` for a `handlers/` binding, or
+`manifest-schedule:<namespace, name, schedule revision>` for a manifest entry. The schedule revision
+is a canonical digest of the entry's schedule and invocation schema; `realmDigest` still pins the
+rest of the package.
+
+```json
+{
+  "version": 1,
+  "generatedAt": "2026-08-01T00:00:00Z",
+  "entries": [
+    {
+      "namespace": "chatops",
+      "name": "digest",
+      "description": "Summarize ingested channel activity — counts per channel and the most recent messages.",
+      "schedule": "0 30 * * * *",
+      "inputSchema": {
+        "type": "object",
+        "properties": { "limit": { "type": "number" } },
+        "required": []
+      },
+      "outputSchema": {
+        "type": "object",
+        "properties": {
+          "totalMessages": { "type": "number" },
+          "channels": { "type": "array" },
+          "recent": { "type": "array" }
+        }
+      }
+    }
+  ]
+}
+```
+
+### Build on load
+
+A realm that ships `wasm/handlers.js` is compiled to `dist/handlers.wasm` by the host when the realm loads:
+
+- A content fingerprint over the handler source, manifest, and host build-toolchain identity decides whether to rebuild — a change to any member rebuilds, timestamp games don't.
+- The build writes a candidate and atomically replaces the published bundle only on success. A failed build — bad JavaScript, a hung compiler, a missing toolchain — leaves the previous good bundle (or no bundle) in place and the realm's declarative content loaded, with a warning.
+- The host publishes the bundle and manifest atomically as one artifact set. A failed rebuild keeps the previous complete set; a new manifest can never pair with a stale bundle.
+- Bundles are build output. Don't commit them from a `wasm/handlers.js` realm — the host rebuilds on load. A `src/` project is different: the host does not build `src/` on load, so the project ships its built `dist/handlers.wasm` (and generated manifest), and that bundle is the truth if it disagrees with the source.
+
+A realm may instead ship a prebuilt `dist/handlers.wasm` and no source — a **self-contained** realm. The host loads the bundle as-is. This is the right shape when the module is compiled from a language the host has no toolchain for.
+
+### Limits
+
+Normative for every host: dispatch time, guest memory, and payload sizes are bounded, and crossing a bound is an error the caller sees — never a truncation, never a hang. The concrete values are host operations, not something a realm can declare or rely on. The reference host's defaults:
+
+| Setting | Default | Behaviour at the limit |
+|---|---|---|
+| `assistant.wasm.enabled` | `true` | `false` rejects every dispatch with a clear error — the kill switch. Declarative content is unaffected. |
+| `assistant.wasm.dispatch-timeout` | 30s | The dispatch is interrupted and returns an error. Work longer than the budget cannot run on this host. |
+| `assistant.wasm.max-memory-pages` | 1024 (64 MiB) | A module declaring more is rejected with a clear message. |
+| guest I/O | 1 MiB per payload | Each of the function's args, its result, and every host-call request/response is bounded — at 1 MiB or the module's memory cap, whichever is smaller. Oversized payloads error rather than truncate. |
+
+In the reference host, every dispatch is observable: it records the bundle, function, elapsed time, error if any, and how many gateway calls the guest made.
+
+### Shipping a compiled module
+
+`wasm/handlers.js` is a convenience, not the contract. The contract is the module's ABI, and any language that can target it — Rust, TinyGo, AssemblyScript, Zig, hand-written WAT — can ship a self-contained realm. Two conventions are accepted, and the host tells them apart by export probe: a module exporting `embabel_dispatch` is a reactor; anything else runs as a WASI command. Reactor wins if a module fits both.
+
+**Reactor.** The module exports `memory`, `embabel_alloc(len: i32) -> i32`, and `embabel_dispatch(functionPtr: i32, functionLen: i32, argsPtr: i32, argsLen: i32) -> i64`, plus optional WASI `_initialize` (invoked before dispatch when present; `_start` is not called). All strings are UTF-8. The returned i64 packs a pointer to the response in its high 32 bits and the response length in its low 32; each half is read as a non-negative 32-bit value (so bounded by 2³¹−1) and must lie inside the module's memory, or the dispatch fails. Allocation is one-way: the host writes the function and args into guest memory through `embabel_alloc`; the guest allocates its own response buffer; nothing is ever freed, because every dispatch runs in a fresh instance discarded afterwards — which is also what enforces statelessness. The response must be exactly one JSON envelope, `{"result": ...}` or `{"error": "..."}`: anything else fails the dispatch, an `error` envelope fails it with that message, and a guest trap fails it with the trap's.
+
+Reactor host imports live under module `"embabel"`: `call(reqPtr: i32, reqLen: i32) -> i64` invokes a gateway tool — request `{"tool": "<gateway name>", "args": {...}}`, reply an envelope the host writes into guest memory through `embabel_alloc` and returns with the same pointer/length packing — and `log(level: i32, ptr: i32, len: i32)` logs UTF-8 text (level 0 = debug, 1 = info, 2 = warn, anything else = error).
+
+**WASI command stdio.** For interpreter-in-wasm bundles. The host writes exactly one request line to stdin — `{"function": "<namespace>.<name>", "args": {...}}` plus a newline — and runs `_start`. Stdout is line-oriented: a line whose first byte is NUL is a protocol frame; every other line is guest logging. A frame is a NUL-delimited marker — `\0embabel:call\0` or `\0embabel:result\0` — followed on the same line by the frame's JSON. A call frame carries `{"tool": ..., "args": ...}`; the host invokes the gateway and appends the reply envelope to stdin as a new line before the guest's write returns, so the guest reads the reply by blocking on stdin. There is no correlation id — calls are strictly one at a time, request then reply, in order. The result frame carries the dispatch's response envelope and must appear exactly once: no result frame, a second result frame, or a nonzero exit status each fail the dispatch. A NUL-prefixed line matching neither marker is treated as logging.
+
+Both conventions speak the same `{ result }` / `{ error }` envelope at every hop. The guest gets byte-array stdio only — no inherited descriptors, no preopened filesystem.
+
+### Three realms, three hosts
+
+The same authored form runs on different hosts by changing one line. A pure-logic Realm with no dependencies and millisecond Functions uses the in-process host:
+
+```yaml
+# realm-levies/realm.yml
+name: levies
+host: wasm
+description: "Computes council levies from the rates types it ships."
+```
+
+A dependency-heavy realm — renders invoice PDFs with an npm library, needs real Node — takes the sandbox:
+
+```yaml
+# realm-invoices/realm.yml
+name: invoices
+host: docker
+description: "Renders and files invoice PDFs from billing signals."
+```
+
+And a host that does not exist — _forward-looking_, an illustration rather than a value you can write. Suppose a managed isolate pool: the platform ships the built bundle to a remote pool and fans dispatches out a thousand wide for burst work. The bundle is the same wasm artifact; nothing about the realm changes shape — a new `host:` value, and the platform grows an adapter:
+
+```yaml
+# realm-translations/realm.yml — HYPOTHETICAL: no host implements `isolate`;
+# a conforming host records a metadata problem and leaves the executable surface unavailable
+name: translations
+host: isolate
+description: "Translates document batches on demand."
+```
+
+`isolate` is not part of this spec. It is here to state the test every proposed host must pass: if supporting it forces a realm author to change anything beyond `host:`, the design is wrong.
+
+### What placement never changes
+
+- Function names, namespaces, schemas, and the manifest format.
+- The `{ result }` / `{ error }` envelope, at the function boundary and on every gateway call.
+- Signal identity: a signal dispatched by a wasm-hosted function is indistinguishable downstream from the same signal dispatched by a docker-hosted one.
+- The identity model: execution is bound independently to a world and acting principal by the host; no host puts a credential or scope key inside the unit.
+- Declarative content: types, producers, lenses, APIs, events, and prompts load whether or not the executable surface can.
+
 ## `mcp/`
 
 MCP server configurations — each file lists Model Context Protocol servers to connect.
@@ -1554,7 +2019,13 @@ brings their own MCP server.
     EXAMPLE_API_KEY: "${EXAMPLE_API_KEY}"
 ```
 
-MCP servers are lazy-loaded — the Docker container starts on first tool use, not on world init. Multiple users with the same MCP config share a single container via the host's MCP client cache.
+MCP servers are lazy-loaded — the Docker container starts on first tool use, not on world init. A
+mutable or credential-bearing MCP instance is keyed by `(worldId, contextId, realmDigest,
+principalId, access-policy revision, grant/credential revision)` and is never shared across
+contexts, principals, or worlds. A `worldEpoch` change destroys the instance or fences it from
+all later calls. Only an immutable, credential-free server proven to hold no caller-derived state
+may use a deployment-wide cache. Existing credential-fingerprint or config-only sharing is not a
+shared-tenancy boundary.
 
 ## `commands/`
 
@@ -1570,6 +2041,13 @@ description: "Fix a GitHub issue"
 ## `webhooks/`
 
 Webhook registrations — declare webhooks the realm wants to receive. When the realm is installed and the host has a public URL, these are registered with the external service.
+
+Registration runs under the same trust tier as `apis/`: marketplace realms cannot interpolate a
+credential into `register.args` or call a directly networked tool holding a durable secret. The host
+binds registration and callback authentication to the world, context, access-policy revision, full
+`realmDigest`, source-registration generation, run-as principal, and grant revision. Callback routing
+also verifies the current `worldEpoch`. The templated form below is local/first-party compatibility
+syntax.
 
 ```yaml
 # webhooks/github-issues.yml
@@ -1608,11 +2086,11 @@ Template variables in `register.args` are resolved from:
 
 The bare-webhook flow — payload arrives, gets wrapped in a `WebhookEvent`, the named action fires — stays as documented above. For richer integration that emits **typed signals** into the host's consequence engine, use `events/` (next section).
 
-## `events/` — event ingestion (forward-looking)
+## `events/` — event ingestion
 
 Unifies push (webhook) and pull (polling) sources behind a single contract: **emit typed `Signal`s into the host's consequence engine.** A signal type is a `DomainType` declared in `types/` whose `parents` includes `Signal`.
 
-This section is **forward-looking** — the spec is settled but specific hosts may still be implementing it. Existing webhook receivers in `webhooks/` continue to work in parallel.
+The reference host implements both delivery modes — the poll sweep with signal-id dedup, and webhook delivery. Existing webhook receivers in `webhooks/` continue to work in parallel.
 
 ### Webhook event source
 
@@ -1637,7 +2115,9 @@ This section is **forward-looking** — the spec is settled but specific hosts m
       TIMELY:       "{{ payload.type == 'invoice.upcoming' }}"
 ```
 
-The host receives the webhook, verifies the signature, resolves the tenant, projects the payload through the `mapping` into a `StripeEvent` instance, and emits it as a `Signal` into the consequence engine.
+The host receives the webhook, verifies the signature, resolves its registered world and context,
+projects the payload through the `mapping` into a `StripeEvent` instance, and emits it as a `Signal`
+into the consequence engine. The payload cannot select or override that route.
 
 | Field | Required | Meaning |
 |---|---|---|
@@ -1650,7 +2130,15 @@ The host receives the webhook, verifies the signature, resolves the tenant, proj
 
 ### Polling event source
 
-For services without webhook support — or where polling is preferable — declare a `poll` block instead of (or in addition to) `webhook`. Polling reuses the host's task scheduler and persists a per-`(user, type)` cursor so each run only sees what's new.
+For services without webhook support — or where polling is preferable — declare a `poll` block
+instead of (or in addition to) `webhook`. Polling reuses the host's task scheduler. Like a handler,
+the source must be adopted before it can run. Its cursor identity is `(worldId, contextId,
+adoptionId, sourceRegistrationId, type)`; the cursor record also carries the current principal,
+realm, access-policy, grant, and credential revisions as fences. A principal, credential, or revision
+change pauses polling. The host may resume the existing cursor only after proving it addresses the
+same source stream; otherwise an operator must explicitly reset it. A reset is audited, and events
+already persisted under the source's stable event identity remain deduplicated. No change silently
+starts a fresh cursor and replays the source.
 
 ```yaml
 # events/linear.yml
@@ -1659,8 +2147,6 @@ For services without webhook support — or where polling is preferable — decl
     every: 10m
     api: linear                # the realm's already-learned API (apis/linear.yml)
     method: list_my_issues     # method name on that API
-    args:
-      assignee: "{{ user.email }}"
     cursor:
       param: updated_after     # the API parameter that takes the cursor value
       from: $.updatedAt        # how to extract the next cursor from each result
@@ -1679,7 +2165,7 @@ For services without webhook support — or where polling is preferable — decl
 | `poll.every` | yes | Cadence (e.g. `5m`, `1h`). |
 | `poll.api` | yes | Name of an API declared in `apis/` (this or another realm). |
 | `poll.method` | yes | Method name on that API. |
-| `poll.args` | no | Arguments to the call. Jinja-templated against `{ user, cursor }`. |
+| `poll.args` | no | Arguments to the call. Jinja-templated against `{ cursor }` only. World, context, principal, and credentials are host-bound and unavailable to the template. Methods such as `list_my_issues` derive the subject from the bound credential. |
 | `poll.cursor.param` | no | API parameter the host populates with the persisted cursor. |
 | `poll.cursor.from` | no | JSONPath into each returned result, used to compute the next cursor (the maximum value across the batch becomes the new cursor). |
 | `poll.mapping` | yes | Same shape as the webhook `mapping` block. |
@@ -1692,13 +2178,56 @@ Both sources produce `Signal`s of the realm-declared type. From there, the conse
 
 No JVM bytecode is shipped — realms that need behaviour beyond mapping should expose it via `actions/` (LLM-driven) or `mcp/` (sandboxed servers).
 
-## `handlers/` — event handlers (TypeScript reactions to signals & cron)
+## `channels/` — realm-shipped channel connectors
 
-Where `events/` *produces* signals, `handlers/` *reacts* to them. A realm can ship ready-made **event handlers** the user activates — TypeScript programs that run when a matching signal arrives (from `events/`, a webhook, or any source) or on a cron schedule.
+Where `events/` is stateless ingestion — call an API, map results to signals, done — a **channel** is a live conversational surface with a lifecycle: a persistent connection the host holds open, an inbound half that ingests messages as signals, and an outbound half the assistant replies through. Use `events/` when data only flows in; use `channels/` when the assistant also talks back on the same surface.
 
-> Not to be confused with the `src/` **TypeScript handlers** that implement a realm type's gateway methods. Those are gateway *code*; these are *reactions*. (Same substrate — sandboxed TS — different job.)
+A realm configures a connector the host implements — host-extension via FQN, the same dispatch pattern as `PolicyActionSpec`:
 
-A handler is the event-side mirror of a lens: a lens *queries → declares focus*; a handler *is handed a signal → queries/judges → takes an effect*. It's authored as TypeScript run through the host's per-user code-mode runtime — the same vibe-codeable substrate, so a handler can be generated or hand-written.
+```yaml
+# channels/discord.yml
+type: com.embabel.world.event.channel.discord.DiscordChannelConfig
+name: discord
+token-env: DISCORD_BOT_TOKEN
+auto-start: true
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `type` | yes | FQN of a host-provided channel connector configuration. The host documents which connectors it ships; a realm cannot ship connector code. |
+| `name` | yes | The channel's name on this world. |
+| `token-env` | connector-specific | Environment variable holding the connector's credential, resolved host-side. The credential itself never appears in the realm. |
+| `auto-start` | no | Start the connection on world load. Default `true`. |
+
+`auto-start` controls the connector lifecycle only; it does not adopt or activate any handler or
+manifest schedule. A credential-backed live connector registration is owned by exactly one world in
+the portable v1 contract. If another world attempts to use the same provider credential, the host
+must reject the second registration rather than instantiate another session or silently attribute
+both worlds to the first owner. Organization-owned shared connectors require a later explicit
+`orgId` membership and route-attribution contract.
+
+Within that world, every inbound and reply route is bound to one explicit context, access-policy
+revision, and run-as principal. A connector session may multiplex such routes only when it keeps those
+bindings separate; it never broadcasts an event or reply route into every context by default.
+
+The inbound half emits ordinary `Signal`s of a type the realm declares in `types/` — a channel message is downstream-indistinguishable from any other signal, so triage rules, attention, persistence, and handler reactions all apply unchanged. The realm typically ships the message type, its identity projections, and any functions over the stream (a digest, a search) alongside the connector config.
+
+What this spec pins down is the envelope, not the connector. The file format, the common fields above, and the signals-in / replies-out shape are portable. Everything connector-specific — how platform messages map onto the declared signal type, conversation and thread identity, how an outbound reply is addressed — is defined by the connector `type` and documented by the host that ships it. Additional keys in the file pass through to the connector, which validates them. A channel realm is therefore host-extension territory, like an FQN `stepType`: it runs where the named connector exists.
+
+An unknown `type` is reported against the file and that channel is skipped; the realm's other content loads.
+
+## `handlers/` — Trigger Bindings
+
+Where `events/` produces signals, `handlers/` declares **Trigger Bindings** that react to them or
+to a cron schedule. A Realm can ship ready-made bindings that remain inactive until adopted.
+
+> The directory name is historical. A Trigger Binding is the declaration; a Handler is code that
+> implements it. A binding may embed a TypeScript Handler or target a manifest-declared Realm Function.
+
+A TypeScript Trigger Binding is the event-side mirror of a lens: a lens queries and declares focus;
+the binding receives a signal, queries or judges, and may take an effect. Its embedded Handler runs
+through the host's per-dispatch, world/context-scoped code-mode runtime and may be generated or
+hand-written.
 
 ```yaml
 # handlers/pr-review.yml
@@ -1714,20 +2243,20 @@ A handler is the event-side mirror of a lens: a lens *queries → declares focus
     module: pr-review.handler.ts      # sibling file, inlined at load (or inline `source: |`)
 ```
 
-A handler may declare `match` (signal-triggered), `schedule` (cron-triggered), or both.
+A Trigger Binding may declare `match` (signal-triggered), `schedule` (cron-triggered), or both.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | yes | Stable id; the world shadows a realm handler of the same id. |
+| `id` | yes | Stable id; the world shadows a Realm Trigger Binding of the same id. |
 | `name` | yes | Display name. |
-| `description` | no | One line shown in the "available handlers" list. |
+| `description` | no | One line shown in the available Trigger Bindings list. |
 | `match.signalType` | no | Signal type that fires it — a JVM signal (`EmailSignal`) or a realm signal (`github.pr_review_request`). `*`/omitted = any signal. |
-| `schedule` | no | 6-field cron expression. A scheduled handler is registered on the host's normal cron path (it *is* a cron job). |
+| `schedule` | no | 6-field cron expression. A scheduled Trigger Binding is registered on the host's normal cron path (it *is* a cron job). |
 | `autonomous` | no | `false` (default) = observe-only: it reads, judges, and logs what it *would* do, mutating nothing external. `true` lets it apply write effects. |
 | `spec.kind` | yes | `typescript`. |
 | `spec.source` / `spec.module` | yes | Inline TS, or a sibling file inlined at load. |
 
-### What the handler sees
+### What the inline Handler sees
 
 The triggering event is bound in scope as one normalised shape, whatever the signal type:
 
@@ -1741,7 +2270,7 @@ now                         // ISO-8601 timestamp of this run
 dryRun                      // true when being tested — GUARD every external effect with if (!dryRun)
 ```
 
-It reacts through the typed `gateway.*` surface — read with `gateway.kg.query`, judge with `gateway.ai.classify`, act with realm verbs or `gateway.notifications.createNotification`. Reads and `gateway.ai.*` are always safe; **guard writes with `if (!dryRun)`**.
+It reacts through the typed `gateway.*` surface — read with `gateway.kg.query`, judge with `gateway.ai.classify`, act with Realm Functions or `gateway.notifications.createNotification`. Reads and `gateway.ai.*` are always safe; **guard writes with `if (!dryRun)`**.
 
 ```ts
 // pr-review.handler.ts
@@ -1757,9 +2286,94 @@ if (isNew) {
 }
 ```
 
-### Activation
+### Activation — _forward-looking_
 
-A realm handler is **available, not firing**, until the user activates it (adopts it into their own handlers). The host surfaces every realm handler in its "which handlers are active" UX and over MCP; activating one respects the realm's `autonomous` default. A scheduled handler, once activated, is registered as an ordinary cron job — there's no separate handler scheduler. World handlers (`config/handlers/`) and realm handlers merge, the world shadowing a realm on id collision.
+Installation makes a Realm Trigger Binding **available, not runnable**. Adoption makes it runnable and pins
+the full-package `realmDigest`, Trigger Registration identity, compiled capability-grant digest and
+revision, `worldId`, `contextId`, access-policy revision, and one run-as **`principalId`**. The
+principal may be the adopting human or a service principal they are allowed to delegate to. The
+adoption retains its `adoptionId` across reapproval and records its creator and approvers for audit;
+those records confer no runtime authority. A signal sender is data, never authority. Cron and signal
+triggers run as the adoption's principal; an on-demand call runs as its authenticated caller.
+
+Changing Realm content, the Trigger Registration, compiled grant, run-as principal, context, or its
+access-policy revision increments the adoption revision and pauses new dispatches. Reapproval keeps
+the same `adoptionId`; deleting and recreating an adoption creates a new one. Disabling or removing a
+principal pauses every adoption that runs as it and invalidates its credentials and mutable caches.
+Removing an approver triggers host-policy revalidation of adoptions they approved, but does not
+silently revoke or inherit an independently authorized service principal's authority.
+An organization may auto-approve a compatible change only under an explicit reviewed rule; the host
+never silently carries approval forward or expands
+an adoption's authority. The host surfaces available Trigger Bindings in its activation UX and over MCP.
+Activation respects the Realm's `autonomous` default. A scheduled Trigger Binding uses the normal cron path;
+there is no second scheduler. World Trigger Bindings (`config/handlers/`) shadow Realm Trigger Bindings on
+id collision.
+
+Observe-only preview is a legibility aid, not a proof of future behaviour: realm code can branch on
+inputs or time after adoption. Security comes from the host-bound grant and method classification.
+Only host-vetted gateway metadata may classify a method as `READ`; realm, MCP, or tool-authored
+claims are `UNKNOWN` until reviewed. Observe-only dispatches deny both `EFFECT` and `UNKNOWN`,
+including nested gateway calls.
+
+### Trigger bindings and dispatch-scoped replies — _forward-looking_
+
+A Trigger Binding may target a Realm Function instead of embedding inline TypeScript. The same binding surface dispatches a manifest-declared function on either execution host:
+
+```yaml
+# handlers/discord-autoreply.yml
+- id: discord-autoreply
+  name: Reply to questions in the support channel
+  match:
+    signalType: discord.message
+  autonomous: true
+  spec:
+    kind: function
+    function:
+      namespace: discord
+      name: onMessage
+```
+
+Rules:
+
+- `function` resolves against the owning realm's manifest. A missing target, or a target carrying `schedule` or `onType`, rejects the binding at load with a recorded problem.
+- The binding is declarative content: it loads (inactive) even when the manifest or executable surface is unavailable, and cannot dispatch in that state.
+- One execution per (signal, binding); two bindings targeting the same function create two executions.
+  Before fan-out, the host durably admits autonomous work by atomically inserting its deterministic
+  `executionId`, derived from `(adoptionId, trigger-registration generation, concrete trigger
+  occurrence)`. The same occurrence therefore retains one id across crash recovery and worker
+  attempts. An on-demand call receives an `executionId` at durable admission. Its request
+  idempotency mapping is keyed by `(worldId, contextId, principalId, target function, request
+  idempotency key)`, so transport retries reach the same execution without deduplicating or exposing
+  another principal's work. The mapping stores a canonical request digest and rejects reuse of the
+  same key with different arguments. A call without a request idempotency key is a new execution. An
+  explicit operator replay creates a new `executionId` linked to the original in
+  audit. A crash after signal deduplication but before queueing must leave a recoverable `QUEUED` or
+  `ABANDONED` record, never only an in-memory gap. Multi-instance hosts put the lease epoch/fencing
+  token in host-only dispatch context; every gateway, effect, and delivery handoff atomically
+  verifies current `RUNNING` ownership, world epoch, principal authority, and adoption, refusing a
+  partitioned stale worker. A host without those controls must declare itself single-instance. v1
+  is at-most-once after admission and does not retry guest execution.
+- Trigger Bindings are **inactive until adopted**, regardless of `autonomous`. `autonomous: false` runs the adopted function against a read-only gateway: mutating calls return a coded refusal (`channels.reply` returns `NOT_PERMITTED`). Enforcement is host-side; there is no flag the function is trusted to honor.
+- The dispatch input is trigger-discriminated: `{trigger: "signal", signal: {id, typeName, subject, occurredAt, source, properties}}` for a signal firing; `{trigger: "cron", firedAt: <ISO-8601>}` — no `signal` key — for a scheduled one. A binding may declare both `match` and `schedule`. At load the host validates the target and schema and rejects any trigger shape it can prove incompatible. Immediately before every concrete signal or cron dispatch, it validates the complete input against `inputSchema`; invalid input records a failed dispatch and guest code does not run. Transport, thread, connector, `worldId`, and principal details never appear in either variant.
+
+A Realm Function dispatched by a channel signal may reply to the originating thread. The handler receives the trigger-discriminated event as its first argument and `ctx` as its second:
+
+```js
+// wasm/handlers.js — bound to discord.message by a handlers/ Trigger Binding
+export async function onMessage(event, ctx) {
+  if (event.trigger !== "signal") return null;                // no reply route off a cron firing
+  if (!event.signal.properties.content.includes("?")) return null;
+  const r = await ctx.reply({
+    text: "Looking into it.",
+    idempotencyKey: "autoreply-" + event.signal.id,
+  });
+  return { replied: r.status };
+}
+```
+
+`ctx.reply({ text, idempotencyKey })` is the dispatch-scoped reply — sugar over `ctx.gateway.channels.reply`, which takes **no destination and no signal id**: the reply can only reach the thread that triggered the current dispatch, and only while that route is live (connector-configured expiry). It returns `{ status }`, where `status` is one of `SENT` (provider-acknowledged) | `OUTCOME_UNKNOWN` (handoff without acknowledgement) | `NOT_REPLYABLE` (no channel route: cron trigger, non-channel signal) | `NOT_PERMITTED` | `EXPIRED` | `CONNECTOR_UNAVAILABLE` | `REJECTED`. Multiple replies in one execution are serialized by host acceptance order and bounded by a host-configured per-binding and per-route reply budget; exhausting the budget returns `REJECTED`. The receipt key is `(worldId, contextId, executionId, surface, operation, idempotencyKey)`, so the same author key in independent executions never collides. `principalId`, `adoptionId`, `realmDigest`, policy/grant revisions, and `worldEpoch` remain immutable audit or fencing fields on the execution and receipt, not key fields; changing one cannot make the same logical execution spend again. An omitted key is derived from the durably recorded execution-local acceptance sequence. The outbound envelope is `{text}` only. A connector's own outbound messages never fire bindings; the reply budget bounds loops involving other bots that self-echo suppression cannot identify.
+
+Proactive sends to a channel with no triggering signal are a different authority and not part of this contract.
 
 ## `decorations/` — scheduled KG node enrichment
 
@@ -1784,7 +2398,9 @@ A file may carry a single manifest or a YAML list of them (`- name: ...` per ent
 
 ### The action contract
 
-The referenced action receives one node's identity + a world user binding and returns a structured `DecorationResult` describing what to write. The host owns persistence; the action stays pure.
+The referenced action receives one node snapshot and returns a structured `DecorationResult`
+describing what to write. The host owns persistence and binds world, context, principal, and
+execution out of band; none is serialized into the action input. The action stays pure.
 
 **Input bindings** (the action's `inputs:` block in `actions/<name>.yml` must accept these):
 
@@ -1793,10 +2409,9 @@ The referenced action receives one node's identity + a world user binding and re
 | `nodeId` | string | The candidate node's stable id |
 | `nodeName` | string | The node's display name |
 | `nodeLabels` | list&lt;string&gt; | Every Neo4j label on the node |
-| `nodeProperties` | object | Map of every property currently on the node |
-| `userId` | string | The owning world user |
+| `nodeProperties` | object | Map of realm-visible properties on the node. Reserved host metadata is redacted. |
 
-**Output type**: `DecorationResult` (a host-provided domain type). Action declarations set `outputType: com.embabel.assistant.kg.decoration.DecorationResult`.
+**Output type**: `DecorationResult` (a host-provided domain type). Action declarations set `outputType: com.embabel.world.kg.decoration.DecorationResult`.
 
 ```ts
 interface DecorationResult {
@@ -1815,6 +2430,12 @@ interface DecorationResult {
   }>
 }
 ```
+
+Reserved host metadata includes scope, identity, policy, lease, provenance-control, and credential
+fields such as `worldId`, `contextId`, `principalId`, `executionId`, and `worldEpoch`. Retired or
+legacy host identity fields remain reserved so old data cannot be forged. Reserved metadata is never
+included in `nodeProperties`. The host rejects `propsToSet`, relationship targets, or any other guest
+result that attempts to set, remove, or substitute a reserved field.
 
 Empty result is fine — the scheduler stamps the row regardless, so the decorator doesn't re-run before its `refreshAfter` (or never, if one-shot). Return empty when the action surveyed the row and decided there was nothing to add (e.g. "no signature in this email", "no Wikipedia article for this person").
 
@@ -2104,12 +2725,15 @@ Realms are discoverable via the host's directory system:
 
 ## What's intentionally not in a realm
 
-- **JVM bytecode**, native libraries, scripts to be executed in-process.
-- **Spring beans, classpath contributions, host configuration changes.**
-- **User credentials.** Realms reference secrets by env-var name; the user supplies the secret out-of-band (host UI, env, etc.).
-- **Per-user state.** A realm ships templates and types; the *world* holds the per-user instances.
+- **Code that runs with host privileges.** No JVM bytecode, no native libraries, no classpath contributions. Realm code executes only inside a host-managed sandbox — the code sandbox for `dist/` JS handlers, the capability-scoped wasm runtime for `dist/handlers.wasm` (see [Execution hosts](#execution-hosts)) — never as the host itself.
+- **Spring beans, host configuration changes.**
+- **User credentials.** Realms carry credential references, never values. Marketplace realms use
+  host-vetted typed slots and auth profiles. Environment-variable references are local or explicitly
+  first-party/org-reviewed compatibility syntax only.
+- **World, context, or principal-owned state.** A realm ships templates and types; host-owned scopes
+  hold mutable instances and their access policy.
 
-If a capability needs real code, ship it via `actions/` (LLM in the loop), `mcp/` (sandboxed server, arbitrary code), or as a host-level extension out of band.
+If a capability needs real code, ship it as sandboxed handler code (`src/` or `wasm/`, run on an [execution host](#execution-hosts)), via `actions/` (LLM in the loop), via `mcp/` (sandboxed server, arbitrary code), or as a host-level extension out of band.
 
 ## Conventions
 

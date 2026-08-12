@@ -1,6 +1,6 @@
 name: spec
-description: "The Embabel Realm specification (README.md is the contract) plus a `realm-authoring` Agent Skill that guides an assistant through creating and extending realms — directory layout, declarative-vs-handlers, types, APIs, virtual-join producers (RemoteRepositories) with predicate pushdown and pagination, verbs, events, skills, and the hard rules. Install this realm to get realm-authoring help in chat."
-version: 0.1.0
+description: "The Embabel Realm specification (README.md is the contract) plus a `realm-authoring` Agent Skill that guides an assistant through creating and extending realms — directory layout, declarative-vs-handlers, types, APIs, virtual-join producers (RemoteRepositories) with predicate pushdown and pagination, functions, events, skills, and the hard rules. Install this realm to get realm-authoring help in chat."
+version: 0.2.0
 author: Embabel
 url: https://github.com/embabel/realm-spec
 tags:
