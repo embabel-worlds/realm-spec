@@ -32,6 +32,7 @@ Each entry exposes the realms whose name matches `realm-*` from the given GitHub
 ```
 realm-name/
 ├── realm.yml              # Required: realm metadata
+├── icon.svg               # Realm icon (optional) — any path, named by realm.yml `icon`
 ├── actions/              # Action specifications (YAML) — framework + host-extension stepTypes
 │   └── my-action.yml
 ├── goals/                # Goal specifications (YAML)
@@ -157,6 +158,7 @@ description: "GitHub integration — analyze and fix issues"
 version: 0.1.0
 author: Embabel
 url: https://github.com/embabel/realm-github
+icon: icon.svg
 tags:
   - integrations
   - developer-tools
@@ -169,8 +171,48 @@ tags:
 | `version` | No | Semver version (default: `0.0.0`) |
 | `author` | No | Author or organization name |
 | `url` | No | Source repository or documentation URL |
+| `icon` | No | An image the realm ships, as a path **relative to the realm root**. See [Icons](#icons). |
 | `tags` | No | Categorization tags |
 | `host` | No | Execution host for the Realm's Functions: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
+
+### Icons
+
+A realm may ship an image for hosts that draw a realm list — a launcher, a
+directory, a settings pane:
+
+```yaml
+icon: icon.svg          # or assets/movie.png, or anything under the realm root
+```
+
+**Optional in every sense.** A realm without one is not diminished; hosts that
+drew a letter tile before keep drawing it. Nothing else in the manifest depends
+on it, and a host that ignores the field entirely is still conformant.
+
+**It must be a file the realm ships**, addressed relative to the realm root.
+Hosts are required to refuse anything else — an absolute path, a `..` that
+climbs out of the realm, or a URL:
+
+| Declared | Result |
+|---|---|
+| `icon.svg` | Served, if the file is there |
+| `assets/movie.png` | Served, if the file is there |
+| `../../elsewhere.svg` | Refused |
+| `/etc/passwd` | Refused |
+| `https://example.com/pixel.gif` | Refused |
+
+The URL case is the one worth stating plainly, because it looks convenient. A
+remote icon makes every host that renders a realm list fetch a third party on
+the user's behalf — telling whoever serves the image which user is browsing
+which realms, from what address, and handing the realm author a hit counter on
+someone else's UI. A realm's icon travels with the realm, like the rest of it.
+
+SVG is the sensible default (small, sharp at any tile size). Raster formats —
+PNG, JPEG, WebP, AVIF, GIF, ICO — are also fine. Keep it square and legible at
+about 40px: this is a tile, not an illustration.
+
+**Apps declare their own**, separately and by the web's usual means — a
+`<link rel="icon" href="…">` in the app's `<head>`, pointing at a file beside
+it in `apps/`. Same principle, existing convention, no new field.
 
 ## `actions/`
 
@@ -2517,8 +2559,17 @@ A user can shadow a realm-bundled app by vibe-coding one with the same filename.
 ```
 apps/
 ├── github-dashboard.html
+├── github-dashboard.svg     # its icon (optional)
 └── pr-review-board.html
 ```
+
+**An app may declare its own icon**, by the means the web already has — a
+`<link rel="icon" href="…">` in its `<head>`. The `href` must be a plain
+filename beside the app in this directory (no `/`, no `..`, no URL); a host
+serves it from the same `/apps/{name}` resolution as the app itself and draws
+it wherever the app is listed. An app that declares none is listed as before.
+This is per-app and separate from the realm's own [`icon`](#icons): a realm
+shipping three apps can give each its own.
 
 Realm apps must use the same architecture as vibe-coded apps: tool-gateway calls via `fetch('/api/v1/tools/{name}')`, no direct external fetches. They have access to all the user's tools (MCP, learned APIs, etc.) because they run in the user's authenticated session.
 
