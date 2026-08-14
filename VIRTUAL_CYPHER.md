@@ -218,6 +218,7 @@ is on GitHub" doesn't re-storm the source.
 | `extract` | gathers the anchor's neighborhood and **extracts a LIST of typed records** from it — lazy ENTITIES, committed with real containment on first traversal (§5.6) | the anchor key (per-anchor collect); many records per anchor |
 | `tabular` | a published **CSV / TSV / XLSX / XML file** (optionally a zip of XML parts), downloaded lazily, cached deployment-wide, and joined on one of its COLUMNS (§5.8) | the value of `keyColumn`, compared to the anchor key under `keyMatch` |
 | `feed` | an RSS/Atom **search feed** — one search per anchor key, each item a record; optionally FOLLOWING each item's page for phrase-anchored excerpts (§5.10) | the anchor key, substituted into the feed URL |
+| `sparql` | a **SPARQL 1.1 endpoint** (Wikidata, UniProt, an enterprise triplestore) queried with an authored SELECT template; the whole key batch lands in one `VALUES` clause (§5.14) | the anchor key, serialized into the query's `{{keys}}` token; rows echo it under `keyVar` |
 
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
 `cache:` policy (`none` / `ttl` / `session` / `immutable`, plus `graph` for aggregates and
@@ -880,6 +881,61 @@ a `freshness` array alongside `rows` and `warnings`: one entry per source read,
 two (a live anchor layer joined to TTL-served enrichment); each layer reports its own observation.
 Failed reads never appear in `freshness` — they are reported in `warnings`. Purely graph-resident
 answers omit the block.
+
+### 5.14 `sparql` — a SPARQL endpoint as a keyed source
+
+A `sparql` producer joins any endpoint speaking the SPARQL 1.1 Protocol — a public knowledge
+graph (Wikidata, UniProt, EU Cellar) or an organization's own triplestore. The realm authors the
+SELECT query ONCE; consumers only ever see the virtual join, and no query author writes SPARQL.
+
+```yaml
+- name: orgByRegistryId
+  kind: sparql
+  endpoint: "https://query.example.org/sparql"
+  query: |
+    SELECT ?registryId ?org ?orgLabel ?parentLabel WHERE {
+      VALUES ?registryId { {{keys}} }
+      ?org <http://example.org/prop/registryId> ?registryId .
+      OPTIONAL { ?org <http://example.org/prop/parent> ?parent . }
+    }
+  keyVar: registryId
+  keyForm: literal          # literal (default) | iri | number
+  fetch:
+    maxKeysPerCall: 100     # keys per request; larger batches are split
+    timeoutSeconds: 60
+    maxRows: 10000
+    userAgent: "MyRealm/1.0 (contact url)"   # public endpoints often require one
+    bearerTokenEnv: MY_TRIPLESTORE_TOKEN     # env var; never a credential in YAML
+  cache: { kind: ttl, seconds: 86400 }
+```
+
+**The contract:**
+
+- **One batch, one query.** The whole key batch is serialized into the query at the `{{keys}}`
+  token — the natural spot is a `VALUES` clause — so a key set is one request (chunked only by
+  `fetch.maxKeysPerCall`). A query without the token is rejected at fetch time with a loud error,
+  never an empty result.
+- **Keys are serialized safely, never spliced raw.** `keyForm: literal` emits escaped quoted
+  strings; `iri` emits `<key>` and rejects keys that cannot be an IRI; `number` admits only
+  numerics. A key the form cannot represent is SKIPPED and reported in `warnings` — it can never
+  inject query text, and it can never silently read as "no such record".
+- **Rows are the SELECT bindings.** Each solution becomes one record, result variable → value.
+  Common XSD numerics and booleans arrive as numbers/booleans; IRIs arrive as their full string;
+  a variable absent from a solution (an unmatched `OPTIONAL`) is absent from the record.
+- **`keyVar` is the identity echo.** The declared variable must be selected and must carry the
+  anchor key back on every row — that is what links a row to its anchor. A `keyVar` the query
+  does not select is reported as a warning (the join would otherwise silently never form).
+- **Honesty.** A failed fetch (network, HTTP error, unparseable response) is a `warnings` entry
+  plus an empty result — never a silent 0. Exceeding `fetch.maxRows` truncates and reports a
+  TRUNCATED warning. When the endpoint answers 429/503 with `Retry-After`, the fetch waits once,
+  bounded, and retries before giving up.
+- **Credentials stay out of YAML.** An authenticated endpoint names an environment variable
+  (`fetch.bearerTokenEnv`); public endpoints need nothing.
+
+Cost every consumer should know: each key batch is one live query against an endpoint the realm
+does not control. Public endpoints enforce their own timeouts and rate limits; a realm should
+bound its batches, declare a TTL cache, and expect the occasional refused query at peak — which
+surfaces as a reported fetch failure, not as missing data.
 
 ## 6. Vector edges — semantic joins in depth
 
