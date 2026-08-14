@@ -1318,10 +1318,39 @@ evidence ("may be present", "high risk of") never supports TRUE. A verdict of `f
 evidence that addresses the claim and answers no; material that does not bear on the claim cannot
 veto such a grounded no, and if NOTHING bears on it the verdict is `null`, never a confident no.
 
-**Terminal means terminal.** An aggregation is finalized AFTER Neo4j has executed and ordered the
-query, so its cell can be RETURNED but can never feed the same query's `WHERE`, `ORDER BY`, `UNWIND`,
-a later `WITH`/`MATCH`, or another aggregation. `ORDER BY score(...)` orders by the lists Neo4j saw
-before finalize — silently wrong, never write it.
+**An aggregation's result can be filtered, ordered and grouped by.** Write it as you would any other
+value:
+
+```cypher
+MATCH (e:Electorate)
+WITH e, classify(e.member, 'female,male,unknown') AS gender
+WHERE gender = 'female'
+RETURN count(e) AS count, gender
+```
+
+The count is the database's, over real labels. The same holds for `ORDER BY score(...)`, for grouping
+by an aggregated label in a later `WITH`, and for every aggregation in §5 — each reduces a group to one
+cell, and a cell can be filtered on.
+
+What this costs, and the one rule it imposes:
+
+- The value is computed BEFORE the query runs, so a query that filters on an aggregation pays for it
+  whether or not the filter keeps anything. Narrow the rows FIRST — a `WHERE` before the aggregating
+  `WITH` — and only groups that survive are computed. A query whose filter would need more than a few
+  hundred model calls is REFUSED with the count, rather than sampled quietly.
+- **The clause must carry the node the value belongs to.** `WITH e, classify(e.member, …) AS gender`
+  works; `WITH e.name AS name, classify(e.member, …) AS gender` is refused, because an aggregate value
+  belongs to a group and a group needs an identity to attach it to. The refusal says so and names the
+  fix. Project the node itself and read its properties later.
+- The value is attached to the group for the duration of the query only. It is never written to the
+  graph: ask twice and it is computed twice, and nothing in the graph carries a stale label from a model
+  run last week. To keep a classification, write it deliberately (§9 annotation writes) rather than
+  relying on a query having filtered on it.
+- Merely RETURNING an aggregation is unchanged and stays cheaper — `RETURN t.name, summarize(…) AS digest`
+  reduces after the read, with no pre-pass.
+
+Grouping follows Cypher's own rules: the non-aggregated keys of the clause define the groups, so
+`WITH t, summarize(n.description, …)` is one digest per `t` over all its `n`s — not one per `n`.
 
 #### What the arguments mean
 
