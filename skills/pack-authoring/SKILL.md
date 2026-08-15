@@ -113,10 +113,23 @@ python3 scripts/load-<source>.py     # …and loads it
 python3 scripts/test-views.py 8046   # every view, real params, non-zero rows required
 ```
 
-Drive each view the way the host's own `ViewRunner` does — the view body with its params
-substituted as escaped Cypher literals, executed through `POST /api/v1/admin/kg/execute` — so what
-you test is what a caller gets. **Every view needs a case; a view with no case is untested.** Fail
-the run if any view returns zero rows.
+Call the host's own endpoints — never re-implement them. Re-implementing argument merging,
+defaults, coercion or literal substitution in your script produces a copy of platform logic that
+can pass while the platform's own is broken, which is the opposite of what a harness is for:
+
+| Want | Endpoint |
+|---|---|
+| discover views + their declared params/defaults | `GET /api/v1/admin/kg/views` |
+| run one view with args (rows + warnings) | `POST /api/v1/admin/kg/views/{name}/run` |
+| see the Cypher a view would run (debugging) | `POST /api/v1/admin/kg/views/{name}/invocation` |
+| run verbatim Cypher through the engine | `POST /api/v1/admin/kg/execute` |
+| **reload your realm's YAML — NO app restart** | `POST /api/v1/realms/{name}/update` |
+
+That last one is the difference between a two-minute edit loop and a two-second one: a realm
+referenced by local path is reloaded in place, so edit YAML → update → re-run the harness.
+
+**Every view needs a case; a view with no case is untested.** Fail the run if any view returns
+zero rows.
 
 What that catches, every time, and static review does not:
 
