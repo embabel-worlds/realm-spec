@@ -1525,6 +1525,7 @@ RETURN summarize(n.description, 'what is newest and most important') AS digest
 | Function | Returns | Reduces a group to… |
 |---|---|---|
 | `summarize(text [, instruction])` | prose | a neutral overview |
+| `render(text [, instruction])` | prose | the same items as prose — all of them, in order, hedges kept |
 | `synthesize(text, goal)` | prose | a goal-directed answer (argues toward `goal`) |
 | `classify(text, labels)` | one label | exactly one label from the closed set `'a,b,c'` |
 | `extract(text, what)` | list | the distinct things asked for (deduped) |
@@ -1534,6 +1535,27 @@ RETURN summarize(n.description, 'what is newest and most important') AS digest
 | `holds(text, question)` | boolean or null | a three-valued verdict on a claim |
 | `relevant(text, criterion)` | list | only the items matching a subjective criterion |
 | `argmax(key, text, criterion)` | winner payload | the best candidate under a comparative rubric |
+
+**`render` keeps what `summarize` compresses.** Both write prose from a group; they differ in what
+they promise. `summarize` gives a neutral overview and will drop, merge and reword items to get
+there — right for a group of items nobody has read. `render` promises the opposite: every item
+appears, in the order given, with its figures as written and its qualifying clauses intact. It is
+for rows a realm has already composed for a reader — a sentence per row, a status, a caveat — where
+only the joins between them are missing.
+
+The distinction matters most where it is least visible. A row that ends "stated, not verified as
+current", "a name match to check", or "no record was found" is carrying the reader's warrant to
+doubt it; compressed out by a digest, the same row reads as established fact, with its figures
+still correct. Ask for `render` whenever losing such a clause would change what the prose means.
+
+Neither function may ADD. Both are held to what the items literally state — no description of what
+a subject is or does from outside the rows — and both report an honest miss rather than write from
+nothing. `render` additionally never sums or combines figures across items: a total it calculated
+would appear in none of them, and could not be checked against any row.
+
+`render` COSTS A MODEL CALL AND VARIES BETWEEN RUNS, like every prose reduction. Where the same
+words are required every time, build the sentence in Cypher from the row's own columns and return
+it; `render` buys prose that reads well, never reproducibility.
 
 **Ingested document content is aggregable.** When the accumulated row expression is an ingested
 document's `content` (or `text`) — `holds(d.content, '…')`, `summarize(d.text, '…')` on a matched
