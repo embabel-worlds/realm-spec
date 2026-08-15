@@ -207,7 +207,7 @@ is on GitHub" doesn't re-storm the source.
 | kind | fetch | keyed by |
 |---|---|---|
 | `remote` (alias `api`) | a gateway op — realm handler or learned REST API | the anchor's id/email/login (list, string-template, or path-param mode) |
-| `sql` | a `SELECT … IN (:keys)` against a realm datasource | the anchor key, expanded into the `IN` clause |
+| `sql` | a relational TABLE joined by a column — the SELECT is **generated**, never authored, so the `governance:` grammar (§5.15) is enforceable by construction: governed exposure compiles into the column list, row-level `where:` predicates (`:userId` binds the acting user) inject into every statement | the anchor key batch, bound into `WHERE <keyColumn> IN (…)`; rows echo the key column |
 | `compute` | an in-process function over the keys (scores, rollups, synthesis) | the anchor key; no external I/O |
 | `vector` | top-k semantic relevance to the anchor's **text** — a fused semantic + lexical retrieval, ranked as one list (§6.6) | nothing — *relevance is the join* (§6) |
 | `keyword` | top-k **lexical** (fulltext, exact-token) match to the anchor's text — the honest fit for "MENTIONS \<term\>" | nothing — same relevance contract as `vector`, only the mode differs (§6.6) |
@@ -219,6 +219,8 @@ is on GitHub" doesn't re-storm the source.
 | `tabular` | a published **CSV / TSV / XLSX / XML file** (optionally a zip of XML parts), downloaded lazily, cached deployment-wide, and joined on one of its COLUMNS (§5.8) | the value of `keyColumn`, compared to the anchor key under `keyMatch` |
 | `feed` | an RSS/Atom **search feed** — one search per anchor key, each item a record; optionally FOLLOWING each item's page for phrase-anchored excerpts (§5.10) | the anchor key, substituted into the feed URL |
 | `sparql` | a **SPARQL 1.1 endpoint** (Wikidata, UniProt, an enterprise triplestore) queried with an authored SELECT template; the whole key batch lands in one `VALUES` clause (§5.14) | the anchor key, serialized into the query's `{{keys}}` token; rows echo it under `keyVar` |
+| `cypher` | a **remote openCypher graph** (Neo4j, Memgraph, Neptune — any engine speaking Bolt or openCypher-over-HTTP) queried with an authored read query; structurally read-only, governed by the shared `governance:` grammar (§5.15) | the anchor key batch, bound to `$keys`; rows echo it via the query's own RETURN |
+| `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
 
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
 `cache:` policy (`none` / `ttl` / `session` / `immutable`, plus `graph` for aggregates and
@@ -936,6 +938,192 @@ Cost every consumer should know: each key batch is one live query against an end
 does not control. Public endpoints enforce their own timeouts and rate limits; a realm should
 bound its batches, declare a TTL cache, and expect the occasional refused query at peak — which
 surfaces as a reported fetch failure, not as missing data.
+
+### 5.15 `cypher` — a remote graph as a keyed source, and the `governance:` grammar
+
+A `cypher` producer joins a FOREIGN property graph — another Neo4j, Memgraph, Amazon Neptune,
+or any engine speaking Bolt or openCypher-over-HTTP — using an authored read query. It is the
+property-graph sibling of `sparql`, in the same language the rest of the system speaks.
+
+```yaml
+- name: officersByName
+  kind: cypher
+  uri: "bolt://graph.example.org:7687"        # or https://…:8182/openCypher with protocol: http
+  query: |
+    UNWIND $keys AS key
+    MATCH (o:Officer) WHERE o.name = key
+    RETURN key AS name, o.countries AS countries
+  connection:
+    protocol: bolt            # bolt (default) | http
+    username: reader
+    passwordEnv: GRAPH_PASSWORD   # env var; never a credential in YAML
+  governance:
+    mode: governed
+    expose:
+      Officer: { properties: [name, countries] }
+    mask: { countries: hash }
+    caps: { maxRows: 5000 }
+```
+
+**The contract:**
+
+- **One batch, one query per chunk.** The whole key batch is bound to `$keys` (rename via
+  `keysParam`); the natural shape is `UNWIND $keys AS key MATCH … RETURN key AS <echo>, …`.
+  Rows must echo the key through the query's own RETURN (declare `recordKeyField` on the join).
+- **Structurally read-only.** A query containing any write clause — or `CALL` — is rejected
+  before anything is sent, regardless of engine. Server-side read modes, where the engine has
+  them, are a second layer, never the guarantee.
+- **Rows are the returned columns.** A returned node or relationship value flattens to a map of
+  its properties plus `_labels` / `_type`; a returned PATH is rejected (return the columns you
+  need instead).
+
+**The `governance:` grammar** — shared by every source of this family (a remote SQL database
+navigated as a graph is next), one vocabulary regardless of what sits behind the source:
+
+- `mode: open` (default) — everything the query returns is visible. Two rules hold even here:
+  execution is read-only, and the **secret reflex** — fields whose names look like credentials
+  (password, token, api-key, private-key, ssn, …) are never returned, in any mode.
+- `mode: governed` — the default inverts: a label or field not listed under `expose:` does not
+  exist. A governed query that names an unexposed label is rejected loudly. Flipping a working
+  open configuration to governed changes no query that only touched exposed data. (Note: the
+  key-echo alias must be listed among the exposed properties, or the join cannot form.)
+- `mask:` — per-field strategies in both modes: `hash` (deterministic digest — joinable, not
+  readable), `last4`, `drop`.
+- `caps.maxRows` — exceeding it truncates AND reports truncation.
+- **Withheld is said, never silent.** Every field governance removes is reported in `warnings`
+  as withheld-by-policy, so an absent field can never read as "no data". And a governance rule
+  the source cannot enforce (row-level `where:` on an authored template) is a loud error,
+  never silently ignored — that rule is reserved for sources that generate their own queries.
+
+Cost every consumer should know: each key chunk is one live query against an engine the realm
+does not control; declare a TTL cache and bound `maxKeysPerCall` accordingly.
+
+#### 5.15.1 `sql` — governance by construction, the schema miner, and stored procedures
+
+The `sql` kind (see §5.3) is the first source where every governance rule is enforceable:
+the statement is generated, so `expose` decides what is SELECTed (an unexposed column never
+leaves the database), `where:` predicates are part of every query, and the caps are a limit
+clause. The key column is implicitly exposed — it is the identity echo, and the caller
+already holds every key value.
+
+```yaml
+- name: ordersByCustomerEmail
+  kind: sql
+  datasource: warehouse          # declared in <realm>/sql/datasources.yml
+  table: orders
+  keyColumn: customer_email
+  governance:
+    mode: governed
+    expose:
+      orders:
+        properties: [id, total, placed_at]
+        where: "tenant_id = :userId"    # enforceable HERE — the template kinds must reject it
+    caps: { maxRows: 2000 }
+```
+
+**Mining a database into a realm.** A relational schema already IS a graph — tables are
+labels, primary keys identities, foreign keys edges. The host can mine a datasource's
+metadata into a realm scaffold: one type per table, one `sql` producer + virtual join per
+foreign key, with the full column list pre-written into an open-mode `expose:` block. The
+scaffold is ordinary realm YAML: inspect it, prune the exposure, flip `mode: governed`,
+and no query that touched only exposed data changes.
+
+**Stored procedures.** A realm may publish stored procedures as TYPED verbs in
+`<realm>/sql/procedures.yml` — the declaration IS the allowlist (a procedure the realm does
+not name does not exist; nothing is ever exposed by introspection), mirroring the GraphQL
+`mutations:` gate. Declared args become the verb's typed signature on the code-mode surface
+(`gateway.<datasource>.<name>`); result rows never include credential-shaped columns.
+Procedures are VERBS, not joins: they are never reachable from virtual cypher.
+
+```yaml
+- name: repriceOrder
+  datasource: warehouse
+  procedure: reprice
+  description: "Reprice an order to a new total."
+  args: { orderId: string, amount: number }
+```
+
+**Datasources are read-only by default.** A datasource declaration that does not say
+`readOnly: false` can only ever be SELECTed: every write path — `update` statements and
+stored-procedure calls, including DECLARED procedures — is refused, and no procedure verb is
+even published against it. Whether anything can mutate a database is answered by the
+declaration file alone, never by auditing call sites: grep the realm for `readOnly: false`.
+
+### 5.16 `elasticsearch` — a search index as a relevance source
+
+An `elasticsearch` producer joins an Elasticsearch index or alias — self-managed or hosted —
+by RELEVANCE: the anchor's text is the query, each hit becomes a virtual node linked to the
+anchor it was found for, and the retrieval provenance rides on the edge. It is the relevance
+sibling of `sparql`/`cypher`: the realm declares WHICH cluster, index and retrieval; no query
+author writes a search body.
+
+```yaml
+- name: contractSearch
+  kind: elasticsearch          # alias: elastic
+  index: contracts             # an index or alias; wildcards allowed (docs-*)
+  connection:
+    endpoint: "https://cluster.example.org:443"
+    apiKeyEnv: ACME_ES_API_KEY # env var; never a credential in YAML. Omit for an open cluster
+    timeoutSeconds: 30
+  retrieval:
+    mode: hybrid               # hybrid (default) | bm25 | semantic | knn
+    fields: [title, body]      # the lexical leg
+    semanticField: body_semantic   # a self-embedding field; required by every mode but bm25
+    rankWindowSize: 50
+    rankConstant: 60
+    rerankInferenceId: my-reranker   # optional; needs rerankField
+    rerankField: body
+  hits:
+    k: 5
+    minScore: 0.0
+    idField: contractNumber    # optional: a business key as identity, instead of the document id
+    project: { counterparty: "party.name" }
+  cache: { kind: ttl, seconds: 300 }
+```
+
+Query it like any relevance edge, selecting it with `via` where a target is reachable more than
+one way:
+
+```cypher
+MATCH (me:AssistantUser)-[:TRACKS]->(t:ResearchTopic)
+MATCH (t)-[rel:RELEVANT_TO {via: 'elasticsearch'}]->(d:IndexedDocument)
+RETURN d.title, rel.score, rel.docId, rel.index
+ORDER BY rel.score DESC
+```
+
+**The contract:**
+
+- **One search per anchor, composed cluster-side.** Hybrid retrieval is a single request the
+  cluster plans and fuses — not several searches merged afterwards — so a fused ranking is the
+  cluster's, and `k` is what comes back per anchor.
+- **`hybrid` is the default and fuses lexical with semantic by reciprocal rank.** `bm25` is
+  purely lexical and needs no semantic field, no inference and no model access — the mode that
+  runs against any cluster. `semantic` and `knn` query a self-embedding field by TEXT: the
+  index owns the embedding, so nothing is vectorized outside the cluster.
+- **Every hit is citable.** Each match carries `score`, `docId`, `index`, `mode` and `rank` on
+  the EDGE, not on the node. So a document relevant to two anchors keeps a distinct score and
+  rank for each — and an answer built on retrieved documents can cite the exact document in the
+  exact index it came from.
+- **Identity is the document id, or a business key you name.** With `hits.idField` declared,
+  that field IS the identity and a hit lacking it is DROPPED and reported — never silently
+  keyed by the document id instead, which would split one document across two identities. The
+  document id remains available as `docId` provenance either way.
+- **`minScore` filters at the source.** Fused (RRF) scores are small and not comparable to
+  BM25 scores; leave the floor at 0 for `hybrid` unless you have measured the distribution.
+- **Reranking is opt-in.** A declared reranker re-scores the retrieval it wraps. It is the one
+  stage that requires a deployed model, which is why it is off by default.
+- **Honesty.** A failed search — network, HTTP error, unparseable or non-search response — is a
+  `warnings` entry plus an empty result, never a silent 0 that reads as "you have no such
+  documents". A rejected key (HTTP 401) is reported as an authentication problem, distinct from
+  a generic failure. A declared `apiKeyEnv` that is unset is reported BEFORE the cluster is
+  called, because an unset variable and a refused key have different fixes. A retrieval that
+  cannot be composed as declared — a semantic mode with no `semanticField`, a reranker with no
+  field — is reported by name as an authoring error rather than degraded to a weaker search
+  that would return plausible, quietly worse results.
+
+Cost every consumer should know: one live search per anchor, against a cluster the realm does
+not control. A fan-out over many anchors is many searches — bound it with a narrowing match
+before the hop, and declare a TTL cache for repeated questions.
 
 ## 6. Vector edges — semantic joins in depth
 

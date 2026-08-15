@@ -30,6 +30,7 @@ the right section and flags the easy mistakes.
 | a domain / signal / mirror type | `types/` | "`types/`" |
 | call an external REST/GraphQL API | `apis/` (+ vendored spec) | "`apis/`" (auth, OAuth2) |
 | fetch a type **on demand** by traversal | `types/` `virtualJoins:` + `producers/` | "Joining types on demand" (Virtual Cypher) |
+| a named, parameterized ANSWER a caller runs by name | `views/` | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
 | query the graph from realm code (TS+Cypher) | `gateway.kg.query` in a handler/skill | "CypherScript" |
 | hand-authored gateway methods / **verbs** | `src/api/*.ts` + `tests/` | "`src/` and `tests/`" |
 | an MCP server (last resort — prefer `apis/` for anything API-backed) | `mcp/` | "`mcp/`" |
@@ -95,6 +96,50 @@ npm install && npm run typecheck && npm test && npm run build   # only if the re
 - The host runs `npm install && npm run build` at install; `dist/` (incl. a vendored
   runtime-types) is the shippable bundle. `embabel-realm sync` regenerates `.embabel/gateway.d.ts`.
 
+### The declarative half has no unit tests — run it against a live host
+
+`npm test` covers `src/` handlers. It says **nothing** about the part of a realm that usually
+breaks: producers, virtual joins and views are only exercised by a running host against the real
+source. A realm whose YAML parses, whose types load, and whose every query silently returns
+nothing is the normal failure — and it looks identical to "the source has no data".
+
+**Before you call a realm done, run every view against a live host and require rows.** Ship that
+as a script in the realm (`scripts/test-views.py`), so it is repeatable by whoever inherits it:
+
+```bash
+docker compose up -d --wait          # if the realm provisions its own store
+python3 scripts/load-<source>.py     # …and loads it
+# start the host with this realm installed, then:
+python3 scripts/test-views.py 8046   # every view, real params, non-zero rows required
+```
+
+Drive each view the way the host's own `ViewRunner` does — the view body with its params
+substituted as escaped Cypher literals, executed through `POST /api/v1/admin/kg/execute` — so what
+you test is what a caller gets. **Every view needs a case; a view with no case is untested.** Fail
+the run if any view returns zero rows.
+
+What that catches, every time, and static review does not:
+
+- a join whose keys never match (0 rows, no error) — the single most common realm bug;
+- a fetch that never happens because the planner refused the hop as too wide;
+- a property that vanishes between the source and the graph (an unstorable type);
+- a view whose Cypher is valid but whose shape resolves names for thousands of rows to show ten.
+
+Read the WARNINGS in every response, not just the rows. A `PRODUCER_ERROR` / `FIELDS_WITHHELD` /
+`INCOMPLETE_TRAVERSAL` note is the host telling you the answer is not what it appears to be — a
+0-row result with a warning is a broken realm, not an empty source.
+
+### Cost declarations: `maxAnchors` is about the SOURCE, not the number
+
+`maxAnchors` bounds how many nodes may drive one fetch. Its default assumes a **per-anchor**
+source, where every anchor is another API call. A source that answers the whole key set in one
+statement (a database, a triplestore, a file) is nearly free per anchor, and the host now defaults
+those far higher — so declare `maxAnchors` only when you know something the kind does not imply: a
+metered API to protect (go lower), or a batch op behind a `remote` producer (go higher).
+
+And shape the view so the cap rarely matters: **narrow before an enrichment hop.** Sort and `LIMIT`
+the rows you will show, *then* resolve their names — not the other way round.
+
 ## Hard rules (don't get these wrong)
 
 - **No secrets in the realm.** Reference them by env-var/credential-store name; OAuth client
@@ -105,3 +150,5 @@ npm install && npm run typecheck && npm test && npm run build   # only if the re
 - **`prompts/` is a tax on every turn** — keep it a one-line pointer; put real workflow
   guidance in a `skills/` SKILL.md (paid only when activated).
 - **Naming**: lowercase-hyphenated ids, UpperCamelCase type names.
+- **An untested view is an unshipped view.** Declarative capabilities are only proven by a live
+  run against the real source — see "The declarative half has no unit tests".
