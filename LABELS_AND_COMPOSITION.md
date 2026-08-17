@@ -38,7 +38,9 @@ A type declares its parents:
 ```
 
 **Guarantee — ancestors are physically present.** A node created as a `Trust` carries
-`:Trust`, `:Organisation` and `:Party`. This is observable:
+`:Trust`, `:Organisation` and `:Party`. This holds however the node came to exist — persisted by an
+ingest, or materialized on demand by a traversal that fetched it — so a realm whose population is
+entirely virtual gets the same behaviour as one that stores its rows. This is observable:
 
 ```cypher
 MATCH (t:Trust) RETURN labels(t)      // includes Organisation and Party
