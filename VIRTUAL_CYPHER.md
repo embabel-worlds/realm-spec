@@ -207,7 +207,7 @@ is on GitHub" doesn't re-storm the source.
 | kind | fetch | keyed by |
 |---|---|---|
 | `remote` (alias `api`) | a gateway op — realm handler or learned REST API | the anchor's id/email/login (list, string-template, or path-param mode) |
-| `sql` | a relational TABLE joined by a column — the SELECT is **generated**, never authored, so the `governance:` grammar (§5.15) is enforceable by construction: governed exposure compiles into the column list, row-level `where:` predicates (`:userId` binds the acting user) inject into every statement | the anchor key batch, bound into `WHERE <keyColumn> IN (…)`; rows echo the key column |
+| `sql` | a relational TABLE joined by a column, or SCANNED (`scan:`) ordered and bounded — the SELECT is **generated**, never authored, so the `governance:` grammar (§5.15) is enforceable by construction: governed exposure compiles into the column list, row-level `where:` predicates (`:userId` binds the acting user) inject into every statement | the anchor key batch, bound into `WHERE <keyColumn> IN (…)`; rows echo the key column. A `scan:` producer takes no keys: the pinned value chooses the ordering column and is echoed under `echoKeyAs` |
 | `compute` | an in-process function over the keys (scores, rollups, synthesis) | the anchor key; no external I/O |
 | `vector` | top-k semantic relevance to the anchor's **text** — a fused semantic + lexical retrieval, ranked as one list (§6.6) | nothing — *relevance is the join* (§6) |
 | `keyword` | top-k **lexical** (fulltext, exact-token) match to the anchor's text — the honest fit for "MENTIONS \<term\>" | nothing — same relevance contract as `vector`, only the mode differs (§6.6) |
@@ -1020,6 +1020,83 @@ already holds every key value.
         where: "tenant_id = :userId"    # enforceable HERE — the template kinds must reject it
     caps: { maxRows: 2000 }
 ```
+
+**Scanning a table: `scan:` instead of `keyColumn:`.** A keyed fetch answers *"the rows for
+these anchors"*, which is the right shape for a source that charges per key. A relational
+table is not that source, and a realm whose every producer needs keys cannot ask the table's
+OWN question — *the largest donations ever disclosed*, *the most recent returns* — because
+there is no anchor to name. A `sql` producer may instead declare `scan:`, which reads the
+table ordered and bounded in ONE statement:
+
+```yaml
+- name: donationsRanked
+  kind: sql
+  datasource: au_donations
+  table: donations_made
+  echoKeyAs: by                  # every row comes back carrying the pinned value
+  scan:
+    orderBy: value               # the DEFAULT ordering column
+    descending: true
+    limit: 200                   # the most rows this door will ever return
+  governance:
+    mode: governed
+    expose:
+      donations_made:
+        properties: [id, donor_id, recipient_id, value, made_on]
+```
+
+Reached through a virtual join whose anchor is PINNED rather than matched:
+
+```cypher
+MATCH (:DonationsTop {by:'value'})-[:TOP_DONATION]->(d:Donation)
+RETURN d.value, d.made_on ORDER BY d.value DESC
+```
+
+Guarantees:
+
+- **`keyColumn` and `scan` are mutually exclusive.** A producer answers one question or the
+  other; one that declared both would silently drop a contract. Declaring neither is
+  rejected at load.
+- **The pinned value chooses the ordering column**, so one door answers more than one
+  superlative (`{by:'value'}` and `{by:'made_on'}` on the same producer). A pin that does
+  not name an EXPOSED column falls back to `orderBy` — ordering by a column the caller
+  cannot read would make it an oracle over hidden values.
+- **A scan is bounded by declaration.** `limit` is required and capped again by
+  `governance.caps.maxRows`, whichever is lower. There is no unbounded scan: a door that
+  returns the table is an import, not a question.
+- **`echoKeyAs` is required**, and is what makes a keyless read joinable — every returned row
+  carries the pinned value under that property, which is the join's `recordKeyField`.
+- Exposure, `where:` predicates and masks apply exactly as they do to a keyed fetch.
+
+**A join may declare a POLICY instead of one key.** `keyField` says "match this column"; a policy
+says how to try, in order, and what to do when the rules disagree:
+
+```yaml
+- anchorLabel: Order
+  relationship: PLACED_BY
+  keyField: id
+  producer: customersById
+  policy:
+    rules:
+      - key: { on: customer_id, to: id }                          # the declared key
+      - key: { on: customer_email, to: email, ci: true, confidence: medium }
+      - ask: "Which customer placed this order?"                  # a person, when rules disagree
+      - none                                                      # no link is a legitimate answer
+```
+
+Guarantees:
+
+- **Rules are tried IN ORDER and the first that yields wins.** A rule that yields nothing does not
+  end the chain — that is what a fallback is for.
+- **More than one match is not a match.** The rows become the candidates offered to a later `ask`,
+  and resolution continues rather than picking one.
+- **`ask` never runs before the rules that could answer without a person**, and where nobody can be
+  asked — a scheduled run, an expired question — the chain falls through to the next rule rather
+  than blocking.
+- **Every resolved edge records HOW it was found**: the rule that matched and that rule's
+  `confidence`, with an `ask` answer recorded as `asserted` — a person's word, not a probability.
+- **`none` ends the chain with no link**, which is an answer and not a failure.
+- A join with no `policy:` behaves exactly as before: key on `keyField`, once.
 
 **Mining a database into a realm.** A relational schema already IS a graph — tables are
 labels, primary keys identities, foreign keys edges. The host can mine a datasource's
