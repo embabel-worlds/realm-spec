@@ -419,6 +419,66 @@ list-valued property.
 
 ---
 
+### 3.15 Attributed reporting — prose that arrives with its receipts
+
+A realm that resolves a name against outside sources eventually wants to *say* what it found, in
+prose. The moment it does, it inherits a problem no query has: a fluent sentence about who someone is
+looks the same whether a source said it or the model did.
+
+The shape that survives that is one call returning both:
+
+```cypher
+MATCH (f:PartyFamilyQuery {name: $familyName})-[:HAS_BACKER]->(b:FamilyBacker)
+WITH b ORDER BY b.total DESC LIMIT $limit
+OPTIONAL MATCH (c:CoverageQuery {phrase: b.donor_name})-[:HAS_READ_RESULT]->(h:SourceHit)
+WITH b, collect({kind: …, title: h.title, url: h.url, text: left(h.excerpt, 700)})[0..3] AS srcs
+WITH b.donor_name AS subject, srcs,
+     b.donor_name + ' disclosed $' + toString(b.total) + '.' +
+     reduce(acc = '', s IN srcs |
+       acc + ' SOURCE, ' + s.kind + ' — ' + s.title + ' <' + s.url + '>: ' + s.text) AS line
+RETURN subject,
+       render(line, 'Report the facts, then who this is according to its SOURCE lines, naming each
+                     source. Never assert a connection yourself; a source says it.') AS prose,
+       head(collect(srcs)) AS attributions
+```
+
+Four things in that query are doing work, and each was learned by getting it wrong first.
+
+**The evidence travels in the same row as the prose.** `render(...)` and `collect(...)` are two
+aggregations over one group, so a caller cannot quote the sentence without the citations that support
+it. Fetching citations in a second query looks equivalent and is not: the two can be separated, and
+then every subjective statement in the prose is unsupported by construction.
+
+**One composition per subject, not one per report.** Returning `subject` beside the aggregation makes
+the reduction run once per subject. That is a correctness choice. Composing eight subjects in one
+pass drifts — a synonym here, a connection there — and a single bad sentence condemns the whole
+output; composing one subject at a time keeps each paragraph's world small, and a paragraph that
+fails can be composed again while the others stand. It also makes coverage structural: N subjects in,
+N rows out, and a missing subject is a missing row rather than a silently shorter paragraph.
+
+**The quote is bounded.** A page excerpt can be thousands of characters; three of those per subject
+exceeds what one composition call holds, and the reduction then folds its own partials and quietly
+drops subjects. Cut the quote to the sentence that identifies the subject.
+
+**The source's KIND is a value, not a footnote.** A substantial-holder notice lodged under law, a
+government register and a masthead are different grades of evidence, and a reader must be able to
+tell which they are being shown without opening anything. Rank by that grade before slicing, so what
+survives is the strongest evidence rather than whatever the search engine ranked first.
+
+#### Checking it
+
+Return the same joined rows *unaggregated* from a sibling view. An aggregation consumes its input, so
+that sibling is the only way to see what the composer actually read — and with it, every word of the
+prose can be held against the sources for that subject: a word appearing in none of them is how a
+fabrication reads. Judging per subject is stricter than judging a whole report, because a sentence
+about one subject cannot then be "supported" by a page fetched for another.
+
+What to do with a word that traces to nothing is a publishing decision, not a query one. Reporting it
+beside the paragraph is honest; quietly smoothing it away is the failure the whole pattern exists to
+prevent.
+
+---
+
 ## Where to go next
 
 - Something you wrote was rejected? [§4 of the spec](VIRTUAL_CYPHER.md#4-what-is-not-possible--and-why)
