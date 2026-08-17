@@ -652,6 +652,18 @@ Semantics (both generators):
   heavily-filtered view (most rows knocked out by a genre or availability filter) still fills up.
 - **Constraints pushdown.** Target-node predicates in the query (e.g. `WHERE m.genre CONTAINS 'Noir'`) reach
   the generator as `constraints`, so it only proposes matching answers, and they count toward survival.
+- **Rejection feedback.** Constraints alone are not enough when the filtered property is one the generator
+  cannot know precisely from memory — an exact runtime, a release year, a page count. So after each round the
+  host feeds the REJECTED candidates back to the generator **with the real values they were rejected on**
+  (`The Kid (runtimeMinutes=68)`), taken from the resolved record. The generator re-aims from evidence
+  instead of guessing again, and a narrow range (`runtimeMinutes >= 80 AND <= 90`) stops starving. This is
+  automatic for an `llm` generator: the host appends the correction itself, so a realm prompt needs no new
+  variable and cannot forget to opt in. A `function` generator gets the typed `constraints` and evaluates
+  them itself, so it is not sent the feedback. Coverage only — the query's `WHERE` is still the filter of record.
+- **Starvation is reported, never silent.** If a round produces real candidates and the query's filters reject
+  every one, the result carries a `FILTER_STARVED` warning naming the steer, the filters, and a sample of the
+  near-misses with their values — enough for the answer to say "18 films matched your taste, but the shortest
+  ran 94 minutes" rather than a bare "no results". Read the `warnings`, always.
 - **Fill the whole type.** A producer materialising a typed node fills that type's FULL property surface
   (via `resolveVia.project`), not just its identity.
 - **Provenance.** Each record is stamped `_source` (the generator kind — `llm`/`function`), `_confidence`,
