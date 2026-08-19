@@ -215,7 +215,7 @@ is on GitHub" doesn't re-storm the source.
 | `remote-search` | top-k **lexical** match via the REMOTE store's OWN search API (a gateway op with `{query}` substituted per anchor — e.g. Drive `fullText contains`); live, nothing ingested | nothing — same relevance contract as `keyword`, but the source searches itself; per-match `mode:'keyword'`/`rank` on the edge, score is a neutral 1.0 (matched, not similarity) |
 | `generative` | an LLM **invents** plausible records ("suggest things like X"), each resolved onto the spine via `resolveVia`; demand-driven (re-probes with a growing exclusion until enough survive) | the anchor's name/text, batched into ONE prompt |
 | `aggregate` | gathers the anchor's connected neighborhood and LLM-**reduces** it to ONE record (a taste summary, a digest) | the anchor's identity; one record per anchor |
-| `extract` | gathers the anchor's neighborhood and **extracts a LIST of typed records** from it — lazy ENTITIES, committed with real containment on first traversal (§5.6) | the anchor key (per-anchor collect); many records per anchor |
+| `extract` | gathers the anchor's neighborhood and **extracts typed records** from it — lazy ENTITIES, committed with real containment on first traversal (§5.6). `cardinality:` chooses fan-out (many records) or reshape (ONE record per anchor — §5.6.1) | the anchor key (per-anchor collect); many records per anchor, or exactly one |
 | `tabular` | a published **CSV / TSV / XLSX / XML file** (optionally a zip of XML parts), downloaded lazily, cached deployment-wide, and joined on one of its COLUMNS (§5.8) | the value of `keyColumn`, compared to the anchor key under `keyMatch` |
 | `feed` | an RSS/Atom **search feed** — one search per anchor key, each item a record; optionally FOLLOWING each item's page for phrase-anchored excerpts (§5.10) | the anchor key, substituted into the feed URL |
 | `sparql` | a **SPARQL 1.1 endpoint** (Wikidata, UniProt, an enterprise triplestore) queried with an authored SELECT template; the whole key batch lands in one `VALUES` clause (§5.14) | the anchor key, serialized into the query's `{{keys}}` token; rows echo it under `keyVar` |
@@ -489,6 +489,84 @@ The aggregate rules carry over with extraction-specific twists:
 
 Because the containment edge is real, `RETURN c` returns the entity itself — prefer it over scalar
 projections when the caller wants the records rather than a report about them.
+
+#### 5.6.1 `cardinality:` — reshaping a document into ONE record
+
+Not every extraction fans out. A filing, a certificate, a form or a statement is **one** record of a
+declared type, and declaring that is not cosmetic: it changes what the engine guarantees.
+
+```yaml
+- name: registrationReshape
+  kind: extract
+  cardinality: one            # one | optional | many (default: many)
+  edgeType: HAS_REGISTRATION
+  collect: { … }              # unchanged
+  extract:
+    fromType: true            # the field list comes from the target type (§5.6.2)
+    prompt: |
+      The excerpts below come from a company registration filing. Prefer the registrar's own spellings.
+  cache: { kind: graph }
+```
+
+```cypher
+MATCH (d:Document)-[:HAS_REGISTRATION]->(r:CompanyRegistration)
+RETURN d.title, r.companyNumber, r.incorporationDate, r.status
+```
+
+| Value | One anchor yields | Zero records means |
+|---|---|---|
+| `many` (default) | 0..N records — today's fan-out | honest-empty, retried |
+| `one` | exactly one record | the declaration was wrong or the source is unreadable — honest-empty, and reported |
+| `optional` | 0..1 records | an ordinary answer (not every document is a filing) |
+
+What `one`/`optional` guarantee, beyond the count:
+
+- **One row per anchor, always.** The record's identity is the anchor's, so a re-read **replaces** it.
+  A document can never accumulate two registrations, and "the registration" is never a coin toss
+  between generations.
+- **Fields scattered through the document assemble into one record.** A long source is read in parts;
+  each part reports only what it shows, and the parts are combined. Where two parts state the same
+  field differently, the earlier statement wins and the disagreement is reported rather than silently
+  resolved. A list-valued field (a filing's officers) **unions** across parts instead of stopping at
+  the first.
+- **All-or-nothing.** If any part of the source could not be read, nothing is written and nothing is
+  returned: half a form is wrong, not incomplete. The next ask re-reads it. For the same reason, a
+  `LIMIT` never truncates a single record mid-way — it stops between anchors, never inside one.
+- **Freshness is whole-document.** A single record spans the whole source, so no part of it is fresh
+  on its own: any change re-reads the form. (The `many` regime's part-by-part incrementality does not
+  apply, and would have nothing to serve until the whole form had been read anyway.)
+- **Declared types hold on the stored record.** A property declared `int`/`number`/`boolean` is stored as
+  that type, not as the wording the source used: `1,240` is a number you can compare with `>`, and
+  `$120,000.50` does not become 120. This holds for the record as later read by ORDINARY Cypher, not only
+  through the join — which is the point, since the record becomes plain graph after first materialization.
+  (This applies to every `kind: extract` producer, not only the single regime; it simply matters most here,
+  where a form's fields are dates, counts and amounts rather than prose.)
+- **A "not stated" answer is silence, not a value.** A source that states nothing for a field leaves
+  it absent; the record never carries `N/A`, `unknown` or a placeholder as though it were data, and a
+  source that states nothing at all yields no record rather than an empty shell.
+
+Everything else in §5.6 is unchanged: records are entities, the containment edge is real, declared
+vocabularies are enforced, steering stays transient.
+
+#### 5.6.2 `fromType:` — the type states the shape, the prompt states the domain
+
+With `fromType: true` the record's field contract — names, types, which are lists, and any declared
+`oneOf` vocabulary — is taken from the **target type's own declaration** rather than restated in the
+prompt. The prompt is then free to say only what the type cannot: what the document is, and what to
+prefer when it is ambiguous.
+
+This closes a gap that is otherwise silent. A typed extraction that spells its fields out in prose
+states its shape twice — once for the model to read, once as `properties:`/`validation:` for the
+engine to enforce — and the enforcing copy always wins. A vocabulary that has drifted out of the
+prompt is one the model is never told about, whose records are dropped on arrival, and the symptom is
+an empty result with no error. Derived, the two cannot disagree.
+
+Default is off, so existing extractions are unaffected. Turning it on changes the extraction and
+re-reads each anchor once, exactly as a prompt edit does.
+
+The excerpts themselves are supplied whether or not the prompt renders them, so a prompt that carries
+only domain guidance is a complete prompt. (A field list with no text to read is the one input that
+reliably makes a model invent a plausible record.)
 
 ---
 
