@@ -104,7 +104,8 @@ source. A realm whose YAML parses, whose types load, and whose every query silen
 nothing is the normal failure — and it looks identical to "the source has no data".
 
 **Before you call a realm done, run every view against a live host and require rows.** Ship that
-as a script in the realm (`scripts/test-views.py`), so it is repeatable by whoever inherits it:
+as a test-views script under your own realm's `scripts/` directory, so it is repeatable by whoever
+inherits it:
 
 ```bash
 docker compose up -d --wait          # if the realm provisions its own store
