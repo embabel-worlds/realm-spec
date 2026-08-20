@@ -129,7 +129,7 @@
 </head>
 <body>
 <header>
-  <h1>Virtual Cypher <small>cheat sheet · the spec is the authority</small></h1>
+  <h1>Virtual Cypher <small>federated graph queries with the model inside · the spec is the authority</small></h1>
   <label class="search">
     <input id="q" type="search" placeholder="Filter — try &quot;reject&quot;, &quot;cluster&quot;, &quot;cache&quot;" aria-label="Filter the cheat sheet">
     <kbd>/</kbd>
@@ -138,6 +138,63 @@
 </header>
 
 <main>
+  <details class="theme" open data-theme-tags="ai federation live novel time">
+    <summary class="theme-head">
+      <span class="theme-name">What is new here</span>
+      <span class="theme-lede">Three things ordinary Cypher does not do. Everything below is detail.</span>
+      <span class="theme-count"></span>
+    </summary>
+    <div class="theme-body">
+      <div class="grid">
+    <section data-tags="novel federation live basics">
+      <h2>One MATCH spans stored and live</h2>
+      <p class="lede">A virtual label is not in the database. It is fetched the moment the query reaches it, spliced in for the life of that query, and rolled back. You do not know which labels are which.</p>
+      <pre><code>MATCH (me:AssistantUser)
+      -[:EMAILED]-&gt;(p:Person)
+      -[:HAS_GITHUB]-&gt;(g:GitHubIdentity)
+      -[:RAISED]-&gt;(i:GitHubIssue)
+RETURN p.name, i.title</code></pre>
+      <p class="lede">Your graph, your CRM and a REST API in one pattern — no export, no sync, no mirror to go stale. Federation is the point; the rest of this page is how it is declared and paid for.</p>
+      <div class="rule must"><b>once</b><span>Each producer is called ONCE with every anchor key at a time — batched, never N+1.</span></div>
+      <div class="rule must"><b>gone</b><span>Materialization runs in a transaction that always rolls back. Nothing fetched persists.</span></div>
+    </section>
+
+    <section data-tags="novel ai llm rows query">
+      <h2>The model is inside the query</h2>
+      <p class="lede">Not a step before it or after it. A judgement no property and no embedding captures is written where the predicate goes, and the query keeps its shape.</p>
+      <pre><code>MATCH (c:Concept {value:'Acme'})
+      -[:RELEVANT_TO]-&gt;(d:Document)
+WHERE ai.relevant(d, 'our funding round')
+RETURN d.title, ai.classify(d, 'sentiment')
+ORDER BY ai.score(d, 'renewal risk') DESC</code></pre>
+      <table>
+        <tr><th>Position</th><th>Reads as</th></tr>
+        <tr><td><code>WHERE</code></td><td>filter — is this row actually about it?</td></tr>
+        <tr><td><code>ORDER BY</code></td><td>rerank — which fits best?</td></tr>
+        <tr><td><code>RETURN</code></td><td>label — where does it sit on this dimension?</td></tr>
+      </table>
+      <div class="rule must"><b>edge</b><span>Retrieval mode is chosen AT the edge: no <code>via</code> is vector, <code>via:'keyword'</code> lexical, <code>via:'agentic-rag'</code> a bounded judging loop. Three questions, one shape.</span></div>
+      <div class="rule never"><b>never</b><span><code>ai</code> is a reserved engine primitive, never data. A realm cannot ship a property called <code>ai</code>.</span></div>
+    </section>
+
+    <section data-tags="novel time cost cache reject">
+      <h2>A query can run for minutes</h2>
+      <p class="lede">It is a fetch, not a scan. A cold join waits on somebody else's API, and an <code>agentic-rag</code> edge waits on a model loop. Tens of seconds is ordinary, and not a fault.</p>
+      <p class="lede">So it is bounded on every axis, and a bound that bites is always surfaced — never a silently short answer.</p>
+      <table>
+        <tr><th>Bound</th><th>Default</th><th>What it protects</th></tr>
+        <tr><td><code>maxAnchors</code></td><td>200</td><td>fan-out from an unpinned anchor</td></tr>
+        <tr><td><code>maxFanoutTotal</code></td><td>5 000</td><td>materializing more than you meant</td></tr>
+        <tr><td><code>cost:</code></td><td>per bucket</td><td>somebody else's rate limit</td></tr>
+      </table>
+      <div class="rule must"><b>before</b><span>Refusals happen BEFORE anything runs, and carry advice — pin the anchor, push a predicate, add a <code>LIMIT</code>.</span></div>
+      <div class="rule care"><b>cache</b><span><code>cache:</code> is the lever that makes the second ask fast. Declare freshness per producer; it is the difference between a live source and a slow one.</span></div>
+      <div class="rule never"><b>never</b><span>A zero-row result that meant "the source failed" — every producer failure is classified and returned as a warning.</span></div>
+    </section>
+      </div>
+    </div>
+  </details>
+
   <details class="theme" open data-theme-tags="basics errors query reject">
     <summary class="theme-head">
       <span class="theme-name">Writing a query</span>
