@@ -11,7 +11,34 @@ credentials**. The host clones it into a world and wires its contents in. The
 authoritative contract is `README.md` (the spec) in this repo; this skill routes you to
 the right section and flags the easy mistakes.
 
-## First decision: declarative or handlers?
+## First decision: WHICH AUTHORING PATH ARE YOU ON?
+
+Answer this before anything else, because the two paths use different tools and only one
+of them is available to you. Everything else in this skill — `npm install`, `npm test`,
+`docker compose`, the harness scripts — assumes the first.
+
+**On a checkout.** The realm is a git repo on disk that the operator has mounted. You edit
+files with your own tools and it stays their repo, pushed by them. Loop:
+
+    edit files -> realm_validate_path -> realm_refresh -> kg_query
+
+**Through MCP, with no checkout mounted.** You have no filesystem; you have tools. You
+write into an invisible draft and publish it:
+
+    realm_write (one file per call) -> realm_validate -> realm_install
+
+Two things about this path that nothing else tells you:
+- `wasm/handlers.ts` is where TypeScript goes. Not `handlers/` (that is YAML trigger
+  bindings), not `src/api/*.ts` (that is the checkout build, which this path does not run).
+- **`realm_install` consumes the draft.** After a successful install the next
+  `realm_write` starts a NEW empty draft — so a follow-up write, on its own, produces
+  "realm.yml is missing" for a file you wrote minutes ago. Re-write the whole realm, or
+  edit on a checkout instead.
+
+`realm_brief` tells you which path this appliance is on; it says so explicitly when no
+checkout is mounted.
+
+## Second decision: declarative or handlers?
 
 - **Start declarative.** If a YAML capability (an `actions/` step, a `types/` type, an
   `apis/` OpenAPI entry, a `producers/` virtual join) expresses it, use that — no build
@@ -36,7 +63,8 @@ the right section and flags the easy mistakes.
 | an MCP server (last resort — prefer `apis/` for anything API-backed) | `mcp/` | "`mcp/`" |
 | a slash command | `commands/` | "`commands/`" |
 | inbound events → typed `Signal`s | `events/` (webhook + poll) | "`events/`" |
-| a TS reaction to a signal/cron the user activates | `handlers/` | "`handlers/`" |
+| WHICH signal/cron invokes a verb (declarative YAML) | `handlers/` | "`handlers/`" |
+| the TypeScript a wasm-host realm actually runs | `wasm/handlers.ts` (ONE file) | "`wasm/`" |
 | scheduled KG enrichment | `decorations/` | "`decorations/`" |
 | an HTML app | `apps/` | "`apps/`" |
 | on-demand LLM guidance | `skills/<name>/SKILL.md` | "`skills/`" |
