@@ -58,7 +58,8 @@ checkout is mounted.
 | call an external REST/GraphQL API | `apis/` (+ vendored spec) | "`apis/`" (auth, OAuth2) |
 | fetch a type **on demand** by traversal | `types/` `virtualJoins:` + `producers/` | "Joining types on demand" (Virtual Cypher) |
 | a named, parameterized ANSWER a caller runs by name | `views/` | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
-| query the graph from realm code (TS+Cypher) | `gateway.kg.query` in a handler/skill | "CypherScript" |
+| query the graph from a code_mode script or skill | `gateway.kg.query` | "CypherScript" |
+| query the graph from a WASM HANDLER | `ctx.cypher.query` — see the warning under CypherScript | "CypherScript" |
 | hand-authored gateway methods / **verbs** | `src/api/*.ts` + `tests/` | "`src/` and `tests/`" |
 | an MCP server (last resort — prefer `apis/` for anything API-backed) | `mcp/` | "`mcp/`" |
 | a slash command | `commands/` | "`commands/`" |
@@ -99,6 +100,19 @@ back is **Virtual Cypher** — see "Virtual Cypher — the engine" under "Joinin
   stored property or producer field `ai` or `ai_*`. See "LLM query primitives" in the Virtual Cypher spec.
 
 ## CypherScript (querying the graph from realm code)
+
+> **A WASM handler is not a `code_mode` script, and this section's `gateway.*` examples do not
+> run there.** A handler in `wasm/handlers.ts` is `export function name(args, ctx)` — args
+> FIRST, and the surface is `ctx.gateway`. There is no global `gateway`: writing the code below
+> verbatim inside a handler fails at the first call with `gateway is not defined`. The host tools
+> granted inside wasm are `cypher_query`, `sql_query` and `sql_update` — `gateway.kg.query` is
+> NOT one of them, so a handler reads the graph with `ctx.gateway.cypher.query`. An evaluation
+> followed this section literally, got `gateway is not defined`, and recovered the real signature
+> only by disassembling the sandbox shim.
+>
+> Note the sharp edge while it lasts: `cypher_query` takes no `params`, so a handler cannot yet
+> bind a user-supplied value into a graph read. Filter in JS over a bounded read rather than
+> concatenating a value into the Cypher string.
 
 A handler / decoration / skill runs **CypherScript** in `code_mode`: TS/JS that interleaves
 `await gateway.kg.query({cypher, params})` (graph reads through Virtual Cypher — scoped,
