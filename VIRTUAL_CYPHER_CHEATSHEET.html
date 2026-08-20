@@ -91,13 +91,22 @@
     transition:transform .12s ease}
   details[open] > summary .theme-name::before{transform:rotate(90deg)}
   .theme-body{padding:0 15px 15px}
+  /* THE LEAD PANE GETS WIDER CARDS. Its samples are whole federated patterns — the longest on
+     the page — and a three-across grid forces them to wrap mid-pattern, which is where Cypher
+     stops being readable. Two across at the same total width fits them. */
+  details.lead .grid{grid-template-columns:repeat(auto-fit,minmax(460px,1fr))}
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(330px,1fr));gap:14px;align-items:start}
 
   section{background:var(--card);border:1px solid var(--line);border-radius:11px;padding:15px 17px}
   section h2{font-size:13px;margin:0 0 4px;text-transform:uppercase;letter-spacing:.07em;color:var(--signal-ink)}
   section p.lede{margin:0 0 11px;color:var(--muted);font-size:12.5px}
+  /* Samples are hand-wrapped to fit a card. This is the net: a line that still runs long
+     WRAPS rather than hiding to the right, because a cheat sheet you have to scroll sideways
+     is one you retype from memory instead. */
   pre{background:var(--code);border:1px solid var(--line);border-radius:9px;padding:11px 12px;
     overflow-x:auto;font-size:12.5px;margin:9px 0;position:relative}
+  pre code{white-space:pre-wrap;overflow-wrap:anywhere;display:block;
+    padding-left:2ch;text-indent:-2ch}
   .copy{position:absolute;top:6px;right:6px;border:1px solid var(--line);background:var(--card);
     color:var(--muted);border-radius:6px;font-size:10.5px;padding:2px 7px;cursor:pointer;opacity:0;transition:opacity .12s}
   pre:hover .copy,.copy:focus{opacity:1}
@@ -138,7 +147,7 @@
 </header>
 
 <main>
-  <details class="theme" open data-theme-tags="ai federation live novel time">
+  <details class="theme lead" open data-theme-tags="ai federation live novel time">
     <summary class="theme-head">
       <span class="theme-name">What is new here</span>
       <span class="theme-lede">Three things ordinary Cypher does not do. Everything below is detail.</span>
@@ -149,10 +158,9 @@
     <section data-tags="novel federation live basics">
       <h2>One MATCH spans stored and live</h2>
       <p class="lede">A virtual label is not in the database. It is fetched the moment the query reaches it, spliced in for the life of that query, and rolled back. You do not know which labels are which.</p>
-      <pre><code>MATCH (me:AssistantUser)
-      -[:EMAILED]-&gt;(p:Person)
-      -[:HAS_GITHUB]-&gt;(g:GitHubIdentity)
-      -[:RAISED]-&gt;(i:GitHubIssue)
+      <pre><code>MATCH (me:AssistantUser)-[:EMAILED]-&gt;(p:Person)
+MATCH (p)-[:HAS_GITHUB]-&gt;(g:GitHubIdentity)
+MATCH (g)-[:RAISED]-&gt;(i:GitHubIssue)
 RETURN p.name, i.title</code></pre>
       <p class="lede">Your graph, your CRM and a REST API in one pattern — no export, no sync, no mirror to go stale. Federation is the point; the rest of this page is how it is declared and paid for.</p>
       <div class="rule must"><b>once</b><span>Each producer is called ONCE with every anchor key at a time — batched, never N+1.</span></div>
@@ -162,11 +170,10 @@ RETURN p.name, i.title</code></pre>
     <section data-tags="novel ai llm rows query">
       <h2>The model is inside the query</h2>
       <p class="lede">Not a step before it or after it. A judgement no property and no embedding captures is written where the predicate goes, and the query keeps its shape.</p>
-      <pre><code>MATCH (c:Concept {value:'Acme'})
-      -[:RELEVANT_TO]-&gt;(d:Document)
-WHERE ai.relevant(d, 'our funding round')
+      <pre><code>MATCH (c:Concept {value:'Acme'})-[:RELEVANT_TO]-&gt;(d:Document)
+WHERE ai.relevant(d, 'our funding round, not the sector')
 RETURN d.title, ai.classify(d, 'sentiment')
-ORDER BY ai.score(d, 'renewal risk') DESC</code></pre>
+ORDER BY ai.score(d, 'bears on renewal risk') DESC</code></pre>
       <table>
         <tr><th>Position</th><th>Reads as</th></tr>
         <tr><td><code>WHERE</code></td><td>filter — is this row actually about it?</td></tr>
@@ -206,7 +213,8 @@ ORDER BY ai.score(d, 'renewal risk') DESC</code></pre>
     <section data-tags="basics query">
       <h2>The shape of a query</h2>
       <p class="lede">Ordinary Cypher. A virtual label is reached by traversing to it from something already bound.</p>
-      <pre><code>MATCH (me:AssistantUser)-[:HAS_GITHUB]-&gt;(g:GitHubIdentity)
+      <pre><code>MATCH (me:AssistantUser)
+      -[:HAS_GITHUB]-&gt;(g:GitHubIdentity)
 MATCH (g)-[:RAISED]-&gt;(i:GitHubIssue)
 WHERE i.state = 'open'
 RETURN i.title, i.repository
@@ -239,7 +247,12 @@ LIMIT 20</code></pre>
       <div class="grid">
     <section data-tags="aggregations llm cluster">
       <h2>Aggregations — a group → one cell</h2>
-      <p class="lede">Neo4j's grouping supplies the group; the function reduces it.</p>
+      <p class="lede">Neo4j's grouping supplies the group for free; the function reduces it. The model sibling of <code>count()</code>.</p>
+      <pre><code>MATCH (t:ResearchTopic {name:'RAG'})
+      -[:HAS_NEWS]-&gt;(n:NewsItem)
+RETURN t.name,
+       summarize(n.description,
+                 'what is newest') AS digest</code></pre>
       <table>
         <tr><th>Function</th><th>Returns</th></tr>
         <tr><td><code>summarize(text[, instruction])</code></td><td>prose overview</td></tr>
@@ -258,7 +271,8 @@ LIMIT 20</code></pre>
     <section data-tags="cluster aggregations llm">
       <h2>cluster — groups you can count</h2>
       <p class="lede">Returns <code>{label, size, share, examples}</code> per group. Its cost does not grow per batch the way the other reductions do, so it suits large groups.</p>
-      <pre><code>MATCH (s:DiseaseScope {registryQuery:'insomnia'})-[:HAS_TRIAL_SEARCH]-&gt;(r:TrialSearchRun)
+      <pre><code>MATCH (s:DiseaseScope {registryQuery:'sleep'})
+      -[:HAS_TRIAL_SEARCH]-&gt;(r:TrialSearchRun)
 MATCH (r)-[:RETURNED]-&gt;(t:ClinicalTrial)
 RETURN cluster(t.title, 6) AS clusters</code></pre>
       <div class="rule must"><b>true</b><span><code>size</code> is a count of the rows, not a model's estimate.</span></div>
@@ -268,6 +282,9 @@ RETURN cluster(t.title, 6) AS clusters</code></pre>
     <section data-tags="llm rows ai">
       <h2>Per-row judgement — the <code>ai</code> namespace</h2>
       <p class="lede">Judges rows the query already fetched. Reserved: never a stored property.</p>
+      <pre><code>MATCH (p:Person)-[:AUTHORED]-&gt;(d:Document)
+WHERE ai.relevant(d, 'a decision, not a status')
+RETURN d.title, ai.classify(d, 'urgency')</code></pre>
       <table>
         <tr><th>Position</th><th>Call</th></tr>
         <tr><td>filter</td><td><code>WHERE ai.relevant(n, '…')</code></td></tr>
@@ -280,83 +297,39 @@ RETURN cluster(t.title, 6) AS clusters</code></pre>
       </div>
     </div>
   </details>
-  <details class="theme" open data-theme-tags="declare keys keytransform lists producers yaml">
-    <summary class="theme-head">
-      <span class="theme-name">Declaring a join</span>
-      <span class="theme-lede">The producer behind a virtual label, and its keys.</span>
-      <span class="theme-count"></span>
-    </summary>
-    <div class="theme-body">
-      <div class="grid">
-    <section data-tags="declare producers yaml">
-      <h2>Declaring a join</h2>
-      <p class="lede">The type says where its rows come from; the producer says how to fetch them.</p>
-      <pre><code>virtualJoins:
-  - anchorLabel: Person
-    relationship: HAS_HUBSPOT_CONTACT
-    keyField: email          # on the anchor
-    recordKeyField: email    # on the fetched record
-    producer: hubspotContacts
-    maxAnchors: 50
-    maxFanoutTotal: 500</code></pre>
-      <div class="rule must"><b>must</b><span>The record's key must equal the anchor's <code>keyField</code>, or no edge forms and every row vanishes.</span></div>
-    </section>
-    <section data-tags="declare producers keytransform">
-      <h2>keyTransform — the source's query language</h2>
-      <p class="lede">Rewrites the key before the fetch, when the source speaks a dialect a user won't type.</p>
-      <pre><code>keyArg: queries
-echoKeyAs: matchedFor      # REQUIRED alongside keyTransform
-keyTransform:
-  kind: ai
-  instruction: "Rewrite as an Essie expression; AND/OR/NOT uppercase."
-  examples:
-    - input: "parkinsons and anxiety"
-      output: '(Parkinson Disease) AND (Anxiety)'</code></pre>
-      <div class="rule must"><b>must</b><span>Declare <code>echoKeyAs</code> too — identity stays the caller's phrase, only the outgoing call is rewritten.</span></div>
-      <div class="rule must"><b>true</b><span>Cached per phrase, echoed so it can be shown, and falls back verbatim on failure.</span></div>
-    </section>
-    <section data-tags="declare producers keys lists">
-      <h2>List-valued join keys</h2>
-      <p class="lede">A <code>keyField</code> holding several values is several keys — one lookup each.</p>
-      <pre><code>keyField: collaborators   # ["Acme", "Beta Institute"]
-recordKeyField: name      # → two fetches, two edges</code></pre>
-      <div class="rule must"><b>true</b><span>Blanks and duplicates are dropped, so the same value is fetched once however many anchors name it.</span></div>
-      <div class="rule must"><b>must</b><span>The target needs an <code>identity</code> property, or convergent paths won't dedupe and every count is inflated.</span></div>
-    </section>
-      </div>
-    </div>
-  </details>
   <details class="theme" open data-theme-tags="cache cost filters pushdown">
     <summary class="theme-head">
-      <span class="theme-name">Cost and freshness</span>
-      <span class="theme-lede">What the source is asked for, and how often.</span>
+      <span class="theme-name">Narrowing and cost</span>
+      <span class="theme-lede">Asking the source for less, and asking it less often.</span>
       <span class="theme-count"></span>
     </summary>
     <div class="theme-body">
       <div class="grid">
-    <section data-tags="pushdown filters cost">
-      <h2>Pushdown — narrowing at the source</h2>
-      <p class="lede">Declared rules turn a <code>WHERE</code> into the source's own query language.</p>
-      <pre><code>pushdown:
-  - property: overallStatus
-    op: EQUALS
-    qualifier: "AREA[OverallStatus]{value}"
-    valuePattern: "^([A-Z_]+)$"
-  - property: ageGroups        # 'OLDER_ADULT' IN t.ageGroups
-    op: HAS_MEMBER
-    qualifier: "AREA[StdAge]{value}"</code></pre>
-      <div class="rule must"><b>true</b><span>Pushdown changes <b>cost, never rows</b> — anything unpushed is still filtered graph-side.</span></div>
-      <div class="rule care"><b>care</b><span><code>'X' IN n.list</code> tests the record's list; <code>n.prop IN [...]</code> tests against a list you wrote. Different questions.</span></div>
+    <section data-tags="pushdown filters cost query">
+      <h2>Your WHERE reaches the source</h2>
+      <p class="lede">Write the filter you mean. Where the source can answer it, the fetch is narrowed there instead of after — so a filtered query costs less, not the same.</p>
+      <pre><code>MATCH (s:DiseaseScope {registryQuery:'sleep'})
+      -[:RETURNED]-&gt;(t:ClinicalTrial)
+WHERE t.overallStatus = 'RECRUITING'
+  AND 'OLDER_ADULT' IN t.ageGroups
+RETURN t.title, t.phase</code></pre>
+      <div class="rule must"><b>true</b><span>Pushdown changes <b>cost, never rows</b>. Anything the source cannot answer is still filtered here, so the same query returns the same answer either way.</span></div>
+      <div class="rule care"><b>care</b><span><code>'X' IN n.list</code> asks whether the record's list holds X. <code>n.prop IN [...]</code> asks whether its value is in a list you wrote. Different questions.</span></div>
+      <div class="rule never"><b>never</b><span>Fetch everything and filter in your client. That is the one shape this engine is built to avoid.</span></div>
     </section>
-    <section data-tags="cache">
-      <h2>Caching</h2>
+    <section data-tags="cache time cost query">
+      <h2>Asking twice, and asking fresh</h2>
+      <p class="lede">A realm declares how long an answer stays good. The second identical ask is usually free — which is why a slow first query is not a slow surface.</p>
+      <pre><code>MATCH (c:Concept {value:'Acme'})
+      -[:RELEVANT_TO {ai: {fresh: true}}]-&gt;(d:Doc)
+RETURN d.title</code></pre>
       <table>
-        <tr><th>Kind</th><th>Meaning</th></tr>
-        <tr><td><code>ttl</code></td><td>Reuse a fetch for N seconds.</td></tr>
-        <tr><td><code>graph</code></td><td>Persist the materialized result for later queries.</td></tr>
-        <tr><td><code>extract</code></td><td>Lazily derive typed entities from fetched text.</td></tr>
+        <tr><th>You get</th><th>Because the realm declared</th></tr>
+        <tr><td>a reused fetch</td><td><code>cache: ttl</code> — an answer up to N seconds old is fine</td></tr>
+        <tr><td>rows already in the graph</td><td><code>cache: graph</code> — the fetch was kept</td></tr>
+        <tr><td>a re-fetch</td><td>nothing, or your <code>fresh: true</code></td></tr>
       </table>
-      <div class="rule care"><b>note</b><span>Without a cache, every query re-fetches — correct, but it costs a call.</span></div>
+      <div class="rule care"><b>care</b><span><code>fresh</code> costs a real call every time. Reach for it when staleness would be wrong, not by habit.</span></div>
     </section>
       </div>
     </div>
@@ -372,8 +345,10 @@ recordKeyField: name      # → two fetches, two edges</code></pre>
     <section data-tags="vector similarity">
       <h2>Vector edges — similarity IS the join</h2>
       <p class="lede">The key is embeddable text rather than an id; the score rides on the edge.</p>
-      <pre><code>MATCH (p:Person {name:'Ada Lovelace'})-[r:RELEVANT_TO]-&gt;(t:EmailThread)
-RETURN t.subject, r.score ORDER BY r.score DESC</code></pre>
+      <pre><code>MATCH (p:Person {name:'Ada Lovelace'})
+      -[r:RELEVANT_TO]-&gt;(t:EmailThread)
+RETURN t.subject, r.score
+ORDER BY r.score DESC</code></pre>
       <div class="rule care"><b>care</b><span>A <code>minScore</code> floor can return nothing when the anchor text is short. Prefer top-k + <code>ORDER BY r.score</code>.</span></div>
     </section>
       </div>
@@ -393,6 +368,33 @@ RETURN t.subject, r.score ORDER BY r.score DESC</code></pre>
       <div class="rule must"><b>true</b><span>A refusal happens before any source is called, and names the alias.</span></div>
       <div class="rule must"><b>true</b><span>A capped or partial result says so — it is never silently truncated.</span></div>
       <div class="rule care"><b>note</b><span>Anything model-backed (<code>ai.*</code>, reductions, <code>keyTransform</code>) is not bit-identical run to run, except <code>cluster</code>, which is.</span></div>
+    </section>
+      </div>
+    </div>
+  </details>
+
+  <details class="theme" data-theme-tags="declare producers yaml">
+    <summary class="theme-head">
+      <span class="theme-name">Where these labels come from</span>
+      <span class="theme-lede">Not written in a query — declared in a realm. Shut by default; open it if you are authoring one.</span>
+      <span class="theme-count"></span>
+    </summary>
+    <div class="theme-body">
+      <div class="grid">
+    <section data-tags="declare producers yaml">
+      <h2>A realm declares it; you traverse it</h2>
+      <p class="lede">Nothing on this page needed you to know how <code>GitHubIssue</code> becomes reachable. That is the design: a realm author writes the declaration once, in YAML, and every query after it is ordinary Cypher.</p>
+      <pre><code>MATCH (p:Person)
+      -[:HAS_HUBSPOT_CONTACT]-&gt;(c:Contact)
+RETURN c.company</code></pre>
+      <p class="lede">That traversal works because a realm declared a <b>virtual join</b> — which anchor it hangs off, which field is the key on each side, and which producer fetches it — plus the producer's own paging, pushdown rules and cache.</p>
+      <table>
+        <tr><th>If you are…</th><th>Read</th></tr>
+        <tr><td>writing queries</td><td>this page, then <a href="VIRTUAL_CYPHER_GUIDE.md">the guide</a></td></tr>
+        <tr><td>authoring a realm</td><td><a href="README.md">README.md</a> — the declarative surface</td></tr>
+        <tr><td>settling an argument</td><td><a href="VIRTUAL_CYPHER.md">the spec</a></td></tr>
+      </table>
+      <div class="rule must"><b>one</b><span>The record's key must equal the anchor's <code>keyField</code>, or no edge forms and every row vanishes. The commonest realm bug, and it looks like an empty source.</span></div>
     </section>
       </div>
     </div>
