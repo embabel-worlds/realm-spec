@@ -2802,6 +2802,53 @@ directly where reachable, invoke every view with every parameter, replay the bat
 exit nonzero on any drift. Run it after every change to producers, views or types; run money
 questions more than once. A harness that lives in the author's head re-verifies nothing.
 
+## `seed/`
+
+Demo data for the SOURCE system, declared where anyone can read it before it runs. A realm
+demonstrated against an empty or fictional dataset proves plumbing and nothing else — the
+joins that make a realm worth having need entities that actually resolve on the other side.
+Two files, both optional:
+
+### `seed/records.yml` — what would be created
+
+The records, declaratively, so the person approving the seed reads exactly what will exist
+afterwards. The house pattern for demo data is **fictional relationship, real entity**: the
+customer "Qantas" does not owe you $40,000, but qantas.com is a real domain, so every
+enrichment join lights up — while a name-matched fake would attach someone else's company to
+your record, which is worse than an empty table. Keep the shipped fictional records in place
+untouched; they are the honest contrast (a placeholder domain resolves to nothing, and the
+demo should say so).
+
+```yaml
+# seed/records.yml — applied by seed.sh, through the source's own API.
+customers:
+  - name: Qantas
+    website: https://www.qantas.com
+    invoices:
+      - { ref: SEED-QF-1, amount: 40000, description: "Advisory services" }
+```
+
+### `seed/seed.sh` — how it gets there
+
+Applies `records.yml` **through the same door the producers use** — the source's public API,
+authenticated as a normal user. Never its database: a seed that writes to tables bypasses
+every rule the application enforces and produces records the application itself could not
+have made.
+
+Three properties are not optional:
+
+- **It refuses to run blind.** The target URL must be stated and a confirmation flag passed
+  (`--yes`, or an env var the script names). A seed script that runs on a bare invocation
+  will eventually run against a production system.
+- **It is idempotent.** Look each record up by a natural key before creating it; a second run
+  changes nothing and says so.
+- **Its records are recognizable.** Mark what you create (a `SEED-` reference prefix, a tag —
+  whatever the source offers), so seeded records can be listed and, where the source permits,
+  removed (`seed.sh --remove`).
+
+The engine never runs seeds. Like `verify.sh`, this is an authoring and demo artifact — a
+person runs it, on a system they have decided is disposable.
+
 ## Installation
 
 Realms are installed as git repos cloned into the world's `config/realms/` directory:
