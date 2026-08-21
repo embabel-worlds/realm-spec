@@ -2754,6 +2754,54 @@ World-authored focuses live at `config/focuses/<name>.yml`; realm-shipped focuse
 
 ---
 
+## `tests/`
+
+The realm's regression guard — and the artifact that keeps the answer surface honest after the
+author has moved on. Two files, both optional, both plain enough for a USER to edit:
+
+### `tests/questions.yml` — the natural-language battery
+
+The questions a person will actually type at this realm, with what a correct answer must
+satisfy. These exist because the first thing a user does with a realm is ask it something in
+their own words — and a realm whose hand-written queries work while its natural-language
+questions return zero is not done. Generate the initial set mechanically from the realm's own
+shape (per type: the count and list forms; per numeric field: the superlative in both
+phrasings; per status/stage value: the filtered ask; per date field: absolute AND relative
+windows; plus synonym-heavy free forms), then let users add every question that ever
+disappointed them — each becomes a permanent regression test.
+
+```yaml
+# tests/questions.yml — run each through the ask surface; assert the expectation.
+- question: "Which customers owe us most money"
+  expect:
+    # The NL answer's figure must EQUAL the named view's — reconciliation without
+    # hardcoded literals, so the test survives data changes. This is the assertion
+    # for MONEY: an answer that drifts from the curated view is wrong, whatever it is.
+    matchesView: { name: OdooReceivablesByCustomer, column: totalOwed }
+- question: "How many customers do we have"
+  expect:
+    matchesView: { name: OdooCustomerCount, column: customers }
+- question: "what was our biggest win last quarter"
+  expect:
+    nonEmpty: true          # weaker assertion where a windowed figure has no stable reference
+- question: "show me open opportunities"
+  expect:
+    nonEmpty: true
+```
+
+Expectation kinds: `nonEmpty: true` (rows must come back — the floor); `minRows: n`;
+`matchesView: { name, column, args? }` — the top row's figure from the ask must equal the top
+row's figure from invoking the named view (the realm reconciling against itself). Money and
+count questions should always use `matchesView`; generation is stochastic, and "nonzero" once
+passed a 3x-inflated sum.
+
+### `tests/verify.sh` — the executable harness
+
+Ground truth to answer surface in one command: reconcile figures against the SOURCE system
+directly where reachable, invoke every view with every parameter, replay the battery above,
+exit nonzero on any drift. Run it after every change to producers, views or types; run money
+questions more than once. A harness that lives in the author's head re-verifies nothing.
+
 ## Installation
 
 Realms are installed as git repos cloned into the world's `config/realms/` directory:
