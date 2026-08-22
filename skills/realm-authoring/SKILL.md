@@ -68,6 +68,7 @@ checkout is mounted.
 | the TypeScript a wasm-host realm actually runs | `wasm/handlers.ts` (ONE file) | "`wasm/`" |
 | scheduled KG enrichment | `decorations/` | "`decorations/`" |
 | an HTML app | `apps/` | "`apps/`" |
+| tips the host UIs show this realm's users | `hints/` | "`hints/`" — hand-authored; teach the answer surface you shipped |
 | on-demand LLM guidance | `skills/<name>/SKILL.md` | "`skills/`" |
 | a voice/persona | `personalities/` | "`personalities/`" |
 | a scoped chat surface | `focuses/` | "`focuses/`" |

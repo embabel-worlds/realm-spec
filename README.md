@@ -72,6 +72,8 @@ realm-name/
 │   └── my-decoration.yml
 ├── apps/                 # Bundled HTML apps served at /apps/{name}
 │   └── my-dashboard.html
+├── hints/                # Tips the host UIs show users of this realm (YAML, optional)
+│   └── tips.yml
 ├── artifacts.yml         # Custom artifact type registrations (optional)
 ├── prompts/              # Prompt contributions
 │   └── examples.md
@@ -2848,6 +2850,33 @@ Three properties are not optional:
 
 The engine never runs seeds. Like `verify.sh`, this is an authoring and demo artifact — a
 person runs it, on a system they have decided is disposable.
+
+## `hints/`
+
+Tips the realm ships for the humans using the world it is installed in — shown by the host's
+UIs (the chat surfaces, the worlds console) as tip-of-the-day cards. Content follows
+capability: a realm that adds an answer surface ships the tips that teach it, and they arrive
+and leave with the realm. Hand-authored, deliberately: a derived tip (restating a view
+description at the user) is the machine talking to itself.
+
+```yaml
+# hints/tips.yml — a list; every field but title/body optional
+- category: hint            # hint | did-you-know | fun-fact
+  surface: all              # me | console | all (default all) — which UI shows it
+  title: Ask about risk
+  body: "Ask **which deals are at risk** — every open deal judged from its own chatter."
+  action:
+    label: Ask it
+    chatInput: "which deals are at risk"
+```
+
+`body` is markdown. `action.chatInput` lands in the asking surface's input box when clicked —
+pre-typed, not pre-sent, so the question stays the user's to edit. `surface` keeps a chat tip
+("try /research") out of the console and a console tip ("open Handler Studio") out of chat.
+
+Resolution order is the same as `views/`: world config tiers (`config/hints/`) first, then
+each installed realm's `hints/`, one parse failure costing that file — recorded against
+`realms/<name>` where its author will look — never the rest.
 
 ## Installation
 
