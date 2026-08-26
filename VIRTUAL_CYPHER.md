@@ -1202,6 +1202,57 @@ Cost every consumer should know: one live search per anchor, against a cluster t
 not control. A fan-out over many anchors is many searches — bound it with a narrowing match
 before the hop, and declare a TTL cache for repeated questions.
 
+### 5.17 Calendar history — `periods:` on a `remote` producer
+
+A DATE-ADDRESSABLE source — one whose operation takes a calendar period as an argument
+(a street-crime API's `date=YYYY-MM`, a daily feed's `day=`) — holds its own history, so history
+is a KEY dimension, not something to accumulate. `periods:` declares it:
+
+```yaml
+- name: crimeMonths
+  kind: remote
+  operation: streetCrimes
+  keyArgs: [lat, lng]
+  echoKeyAs: key                    # REQUIRED with periods (records stamp back to the caller's key)
+  cost: { rate: "1/second" }        # the fan-out respects the source's declared pace
+  periods: { param: date, unit: month, count: 12, lag: 2, stampAs: month }
+```
+
+Each join key fans out into one call per period — `count` consecutive `unit`s (`month` | `day`),
+newest first, stepping `lag` periods back from now for sources that publish in arrears. Every
+record is stamped with its period under `stampAs` — **declare that property on the target type**,
+because it is how queries see time:
+
+```cypher
+MATCH (p:Place)-[:HAS_CRIME_MONTH]->(m:CrimeMonth)
+WITH p, m ORDER BY m.month
+WITH p, collect(m) AS months
+RETURN p.name, months[-1].total AS now,
+       round(100.0 * (months[-1].total - months[0].total) / months[0].total, 1) AS changePct
+ORDER BY changePct DESC
+```
+
+**Guarantees**
+
+- **The past is free after the first read.** A CLOSED period is immutable — June's recorded rows
+  do not change in September — so its result caches effectively forever (per key, per period).
+  Only the period containing now refreshes on the producer's ordinary `cache:` TTL. A cold read
+  pays `keys x count` calls, paced by `cost.rate`; every later read pays only the open period.
+- **A quiet closed period is an answer, and it is kept.** An empty result for a closed period
+  caches as long as a full one; the open period's empty follows the ordinary negative-TTL rules.
+- **A failure caches nothing.** "Could not ask" never becomes "asked, nothing there" — the next
+  read retries exactly the failed (key, period) pairs.
+- **History does not backfill past the window.** `count` bounds what exists; nothing about a
+  query widens it. Deepening the window is a spec change, and only the ADDED periods are new
+  cost — everything already cached stays paid.
+- `periods` requires `echoKeyAs`, and is mutually exclusive with `partition:` (one fans out
+  calendar periods; the other splits a range-shaped key).
+
+Cost every consumer should know: the fan-out multiplies the anchor set by `count`. Bound the
+anchors as usual (`maxAnchors` declares the join's appetite), and for a deep window over many
+anchors, drive the cold fill with a **fill** (§9.1) instead of one long query.
+
+
 ## 6. Vector edges — semantic joins in depth
 
 A `vector` producer is fundamentally different from the keyed kinds, and the difference is worth
@@ -2019,6 +2070,37 @@ A caller that offers no budget is unaffected: the query runs to completion or to
 ceiling, exactly as before.
 
 ---
+
+### 9.1 Fills — driving a large materialization slowly
+
+Some materializations are too big for one query's patience: a 12-month history over many anchors,
+an open catalog sweep. A **fill** drives one durably, slowly, and idempotently:
+
+```
+POST /api/v1/admin/kg/fills        { "cypher": "...", "budgetPerTick": 60, "label": "crime history" }
+GET  /api/v1/admin/kg/fills        → [{ id, state, ticks, liveCallsTotal, lastError, ... }]
+DELETE /api/v1/admin/kg/fills/{id} → cancelled (completed work stays cached; nothing rolls back)
+```
+
+The engine re-runs the fill's query on a schedule, each pass under a **call budget**: at most
+`budgetPerTick` producer calls, stopped CLEANLY when spent — everything fetched stands, nothing
+is recorded for the skipped remainder. Because finished work is cached (and closed periods never
+expire), each pass advances past everything already done and spends its whole budget on new
+ground. A pass that completes with ZERO live calls is the finish line: the fill turns `DONE`.
+
+**Guarantees**
+
+- **Idempotent and resumable by construction.** The fill's progress IS the caches. Restart the
+  process, cancel and restart the fill, run the same query by hand in between — nothing is done
+  twice and nothing is lost beyond the tick in flight.
+- **Rate-limited twice over.** The per-tick budget bounds each pass; within a pass, every
+  producer's own declared `cost.rate` paces its calls.
+- **An error never finishes a fill.** A failing pass records its error and stays `RUNNING` —
+  transient source trouble is retried on the next tick, and the error is visible on the fill.
+- **A budget-exhausted ordinary query says so.** Outside fills, the same budgeted stop surfaces
+  as a warning naming what was not fetched — a partial result is announced, never passed off as
+  complete.
+
 
 ## 10. Steering the generator — type-level `examples:`
 
