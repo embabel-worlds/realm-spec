@@ -184,6 +184,14 @@ those joins converge on the owning realm's identity. Identical join declarations
 re-declared file never double-fetches; and the requirement that a type reachable by more than one
 join carry an identity property is judged over the merged type, not each declaration alone.
 
+
+**Identity-less rows.** A virtual type may declare NO identity property — the natural shape for
+rows unique only as a combination (a per-(petition, constituency) signature count, a
+per-(place, month) tally). Such rows materialize under an engine-minted deterministic id:
+identical rows still merge, distinct rows never collide, re-fetching is idempotent. A type that
+DOES declare an identity and ships a record without it keeps the old behaviour — the record is
+skipped, because that is a data error, not a modelling choice.
+
 ### 5.2 Identity bridges — `resolve:` chains
 
 A bridge links a canonical `Person`/`Organization` to an external identity for **any** person/org,
