@@ -774,7 +774,28 @@ So `WHERE i.html_url CONTAINS 'embabel/me'` turns `is:issue author:X {filters}` 
 
 Relatedly, **`project` does not coerce types**: values arrive as the source encodes them. A JSON feed that quotes its numbers yields strings, so `WHERE n.cost >= $min` compares a string to a number and quietly matches nothing. Coerce at the point of use (`toFloat(n.cost)`), and beware that a null-propagating comparison also *removes* rows with no value at all — which for something like a cost bound means records the user would have wanted to see silently vanish.
 
-**Composing a key the source needs from more than one record field is not expressible declaratively.** `project` maps flat paths to properties (`lat: "Location[*].Y"`); there is no template, concatenation or expression form, and `keyField` names a single anchor property. So a source keyed on a *composite* — a `"longitude,latitude"` point for a geospatial lookup, a `"owner/repo"` slug assembled from two fields — cannot have that key derived in YAML. The options are to have the upstream shape expose the composite as one field, to add a **TypeScript handler** (`src/api/*.ts`) that returns records with the composite already assembled, or to do the lookup procedurally in a Lens rather than as a virtual join. Prefer the handler when the join should compose into arbitrary Cypher; a Lens-side lookup works but is reachable only from that Lens.
+**Composite-key joins — when no single anchor property is the key.** A source keyed on a *pair* — a latitude/longitude point for a geospatial lookup, an owner/repo slug — declares the join with `producerKeyFields` and **omits `keyField`**:
+
+```yaml
+- anchorLabel: WeatherLocation
+  relationship: HAS_CURRENT
+  producerKeyFields: [latitude, longitude]   # composed, in this order, into ONE key per anchor
+  recordKeyField: key                        # the record field carrying that key back
+  producer: weather.current
+```
+
+The engine composes the named anchor properties, in order, into one opaque key per anchor and hands those to the producer. **The link is the whole composite**: each record must carry the exact key it was fetched for under `recordKeyField` — a `remote` producer gets this for free by declaring `echoKeyAs: key`; a TypeScript handler echoes the key it received. A record never links to an anchor that merely shares one component, and an anchor with any component absent contributes no key (the same null rule as a single `keyField`).
+
+A **remote producer** destructures the composite back into separate request arguments with `keyArgs`, naming one argument per component in the same order:
+
+```yaml
+keyArgs: [latitude, longitude]    # → latitude=…&longitude=… per call
+echoKeyAs: key
+```
+
+`keyArgs` implies one source call per key. The composite's own separator is reserved by the engine and always takes precedence over `keySplit`, so the same `keyArgs` mechanism keeps working for source-shaped keys like `"owner/repo"`.
+
+`project` itself still maps flat paths only — there is no template or concatenation form *inside* `project`; composition is the join declaration's job, as above. A TypeScript handler (`src/api/*.ts`) remains the escape hatch when the source needs more than destructured arguments.
 
 #### Pagination (`paging:`) — capture more than one page
 
