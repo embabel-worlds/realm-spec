@@ -1837,6 +1837,7 @@ has no voice and no word count:
 | `hint` | the PROSE reductions (`summarize`, `synthesize`) | a soft steer added alongside the instruction — never a filter, and never able to override grounding |
 | `voice` | the PROSE reductions | register/style ("second person, warm") |
 | `wordcount` | the PROSE reductions | a target length — a prompt-level target, never a mid-sentence cut |
+| `punctuation` | the PROSE reductions | `'plain'` (the only value): the result never contains a semicolon — the ban is enforced after the model writes, not merely requested, so it holds on every run |
 
 `confidence`, `fresh` and `materialize` are EDGE keys (a generative floor, a producer's cache) and an
 aggregation has neither, so they are rejected here rather than accepted and ignored. A prose key on a
