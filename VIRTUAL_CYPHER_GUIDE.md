@@ -495,13 +495,18 @@ RETURN correlate(toFloat(i.annualPay), toFloat(c.totalRate)) AS payVsCrime,
 than their income and population explain?"
 
 Unlike the prose reductions, these two are **arithmetic**: no model call, and the same rows always
-yield the same result. `correlate` answers "do X and Y move together" with `{r, n, dropped}`.
+yield the same result. `correlate` answers "do X and Y move together" with
+`{r, n, dropped, ci, detectable}` — and `detectable` is the field to honour: r = 0.23 on 8 rows
+and r = 0.42 on 138 print alike, but only one is a finding, and when `detectable` is false the
+honest sentence is "no detectable relationship on this sample", never the bare r.
 `regress` fits the outcome against a **list** of predictors and returns the whole statistical
 answer in one cell: fit quality (`r2`, `adjustedR2`), one **standardised beta per predictor** —
-named after the expression as written, ordered strongest first, so "which matters most" reads
-straight off the list — and the **outliers**: the rows furthest above or below their prediction,
-labelled by the third argument. The outliers are usually the story: a fit with r² = 0.09 says
-income barely explains crime, and the residual list names the places that break the pattern.
+named readably (`imdbRating`, not `toFloat(m.imdbRating)`), ordered strongest first, so "which
+matters most" reads straight off the list — and two residual lists, `abovePrediction` and
+`belowPrediction`: the rows furthest above and furthest below the fit, labelled by the third
+argument. The residual lists are usually the story: a fit with r² = 0.09 says income barely
+explains crime and the lists name the places that break the pattern — and when one side is empty,
+the divergence itself runs one way, which is a finding of its own.
 
 Three habits keep it honest:
 

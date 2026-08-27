@@ -266,8 +266,8 @@ RETURN t.name,
         <tr><td><code>relevant(text, criterion)</code></td><td>only the matching items</td></tr>
         <tr><td><code>argmax(key, text, criterion)</code></td><td>the winner</td></tr>
         <tr><td><code>render(text[, instruction])</code></td><td>prose keeping every item, in order, hedges intact</td></tr>
-        <tr><td><code>correlate(x, y)</code></td><td>Pearson r — <b>arithmetic, no model call</b></td></tr>
-        <tr><td><code>regress([x1, …], y, label)</code></td><td>OLS fit: r², named betas, labelled outliers — <b>deterministic</b></td></tr>
+        <tr><td><code>correlate(x, y)</code></td><td>Pearson r with CI + <code>detectable</code> — <b>arithmetic, no model call</b></td></tr>
+        <tr><td><code>regress([x1, …], y, label)</code></td><td>OLS fit: r², named betas, above/below-prediction rows — <b>deterministic</b></td></tr>
       </table>
       <div class="rule never"><b>never</b><span><code>ORDER BY score(...)</code> — an aggregation is finalized after ordering, so it cannot be ordered by.</span></div>
     </section>
