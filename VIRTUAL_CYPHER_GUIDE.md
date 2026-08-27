@@ -479,6 +479,43 @@ prevent.
 
 ---
 
+### 3.16 Statistics over a cross-section — `correlate` and `regress`
+
+```cypher
+MATCH (u:UkDistricts {set:'england-and-wales'})-[:LISTS_CRIME]->(c:DistrictCrime)
+WHERE c.districtCode =~ '^[EW]0.*'
+MATCH (u)-[:HAS_PAY]->(i:DistrictIncome)
+WHERE i.districtCode = c.districtCode
+RETURN correlate(toFloat(i.annualPay), toFloat(c.totalRate)) AS payVsCrime,
+       regress([toFloat(i.annualPay), toFloat(c.population)],
+               toFloat(c.totalRate), c.district) AS model
+```
+
+**Means:** "Does income track crime across every district — and which districts have more crime
+than their income and population explain?"
+
+Unlike the prose reductions, these two are **arithmetic**: no model call, and the same rows always
+yield the same result. `correlate` answers "do X and Y move together" with `{r, n, dropped}`.
+`regress` fits the outcome against a **list** of predictors and returns the whole statistical
+answer in one cell: fit quality (`r2`, `adjustedR2`), one **standardised beta per predictor** —
+named after the expression as written, ordered strongest first, so "which matters most" reads
+straight off the list — and the **outliers**: the rows furthest above or below their prediction,
+labelled by the third argument. The outliers are usually the story: a fit with r² = 0.09 says
+income barely explains crime, and the residual list names the places that break the pattern.
+
+Three habits keep it honest:
+
+- **Feed it rates, not raw counts**, wherever population varies across the group — a raw count
+  regression rediscovers "big places have more of everything".
+- **Group for free**: `RETURN d.region, regress(…)` fits one model per region, exactly as
+  `count()` would group. Small groups refuse with null rather than overfit — a fit needs
+  max(k+2, 5·k) usable rows for k predictors.
+- **Say "associates with", never "predicts causally"** — the fit is a description of the
+  cross-section, and rows with missing operands are dropped and counted in `dropped`, so a thin
+  join cannot masquerade as a strong signal.
+
+---
+
 ## Where to go next
 
 - Something you wrote was rejected? [§4 of the spec](VIRTUAL_CYPHER.md#4-what-is-not-possible--and-why)

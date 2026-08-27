@@ -1671,6 +1671,8 @@ RETURN summarize(n.description, 'what is newest and most important') AS digest
 | `holds(text, question)` | boolean or null | a three-valued verdict on a claim |
 | `relevant(text, criterion)` | list | only the items matching a subjective criterion |
 | `argmax(key, text, criterion)` | winner payload | the best candidate under a comparative rubric |
+| `correlate(x, y)` | map | the Pearson correlation of two numeric expressions: `{r, n, dropped}` |
+| `regress([x1, …], y, label)` | map | a least-squares fit of `y` on the predictors: fit quality, per-predictor strengths, and the rows most above or below their prediction |
 
 **`render` keeps what `summarize` compresses.** Both write prose from a group; they differ in what
 they promise. `summarize` gives a neutral overview and will drop, merge and reword items to get
@@ -1692,6 +1694,33 @@ would appear in none of them, and could not be checked against any row.
 `render` COSTS A MODEL CALL AND VARIES BETWEEN RUNS, like every prose reduction. Where the same
 words are required every time, build the sentence in Cypher from the row's own columns and return
 it; `render` buys prose that reads well, never reproducibility.
+
+**`correlate` and `regress` are arithmetic: no model call, and the same rows always yield the same
+result.** They reduce a group's NUMERIC columns, not its text, and both report ASSOCIATION across
+the group — never causation, and never a claim about any individual row.
+
+```cypher
+MATCH (d:District)
+RETURN regress([d.medianPay, d.avgPrice, d.density], d.crimeRatePer1000, d.name) AS model
+```
+
+- `correlate(x, y)` returns `{r, n, dropped}` — Pearson's r over the rows where BOTH operands were
+  numeric, `n` counting those rows and `dropped` the rows that were not. It returns null rather
+  than a number when fewer than three usable pairs remain or when either operand never varies.
+- `regress([x1, x2, …], y, label)` fits `y` against the predictor LIST by ordinary least squares.
+  The first argument is a Cypher list of numeric expressions (any number of them), the second the
+  numeric outcome, the third an expression naming each row. It returns
+  `{n, dropped, r2, adjustedR2, coefficients, outliers}`: `coefficients` carries one entry per
+  predictor, named as written in the query, with a STANDARDISED beta — magnitudes are comparable
+  across predictors of different units, and the list is ordered strongest first; `outliers` names
+  the rows (by the label expression) whose actual outcome sits furthest above or below the fit's
+  prediction, in the outcome's own units. It returns null rather than an unreliable fit when the
+  group is too small for its predictor count, when a predictor is constant or a copy of another,
+  or when the outcome never varies.
+- Rows where any needed operand is null or non-numeric are dropped from the fit and counted in
+  `dropped` — a thin join cannot masquerade as a strong signal.
+- Grouping is the ordinary implicit GROUP-BY: `RETURN d.region, regress(…)` fits one model per
+  region; drop the key for one fit over the whole group.
 
 **Ingested document content is aggregable.** When the accumulated row expression is an ingested
 document's `content` (or `text`) — `holds(d.content, '…')`, `summarize(d.text, '…')` on a matched
