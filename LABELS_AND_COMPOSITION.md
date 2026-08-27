@@ -129,14 +129,46 @@ or declare an ancestor relationship so specificity decides deliberately.
 
 ---
 
-## 5. Labels are a single global namespace
+## 5. Labels are a single global namespace — and the realm label qualifies it
 
 Graph labels are global. Two realms declaring `Watchable` produce **one** label, and a node
 carrying it answers to both realms' methods — which neither author intended.
 
-This is reported at load, naming both realms. Until a namespacing mechanism exists, treat a
-capability label name as a claim on shared vocabulary: prefer a specific name
-(`ChangeWatchable`) over a generic one, and check what is already installed.
+This is reported at load, naming both realms. Treat a capability label name as a claim on
+shared vocabulary: prefer a specific name (`ChangeWatchable`) over a generic one, and check
+what is already installed.
+
+For ENTITY types, the namespacing mechanism is the **realm provenance label**: every node of
+a type a realm OWNS carries the realm's label beside its own.
+
+**Guarantee — the realm label is physically present.** A `Constituency` declared by
+`realm-gov-uk` carries `:Constituency:GovUk`, however the node came to exist — persisted or
+materialized on demand. Observable:
+
+```cypher
+MATCH (c:GovUk:Constituency) RETURN c    // the QUALIFIED name — this realm's constituencies only
+MATCH (c:Constituency) RETURN c          // the bare name still works, and still converges
+MATCH (n:GovUk) RETURN labels(n)         // the realm's whole graph contribution, one label
+```
+
+**Guarantee — derivation is predictable, and overridable.** The label derives from the realm
+name (`realm-gov-uk` → `GovUk`: strip the `realm-`/`pack-` prefix, capitalise each word). A
+realm may override it wholesale with `realmLabel:` in `realm.yml`.
+
+**Guarantee — a realm label never collides with a type.** A derived or declared realm label
+that equals any declared type name is REFUSED at load, reported naming the realm, and that
+realm stamps nothing — a realm named `realm-person` can never stamp `:Person`.
+
+**Guarantee — the stamp means "owned by", never "touched by".** Only types the realm itself
+declares carry its label. A shared or host type a realm merely enriches through a convergent
+join (`Person`, `Organisation`) is never stamped, so the qualified form cannot silently mean
+"the subset this realm happened to mint".
+
+The realm label is inert unless used: bare-label queries, hierarchies (§2) and capability
+composition (§3) behave identically with or without it. Vocabulary conventions still apply —
+prefer a qualified specific type name (`UkPlace`) with a shared parent (`Place`) over coining
+a generic name two realms will fight over; the realm label is the disambiguator of last
+resort, not a licence to collide.
 
 ---
 
