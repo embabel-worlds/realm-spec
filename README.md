@@ -2965,9 +2965,14 @@ The specification **text** is licensed under
 YAML and Cypher **samples** remain under the [Apache License 2.0](LICENSE-SAMPLES-APACHE-2.0), so
 you can copy and adapt them freely.
 
-**You may implement this specification freely**, in any product, commercial or otherwise, without
-permission or royalty — an implementation is not a derivative work of this document, and realms you
-author are yours. No patent licence is granted or implied. "Embabel" and "Virtual Cypher" are
-trademarks; nominative use to state that your product implements this specification is permitted.
+**Authoring realms, and building software that uses them, is free** — publicly, privately or
+commercially, without permission, notification or royalty. Realms you author are yours and are not
+derivative works of this document.
+
+**Implementing these specifications in a competing engine or platform is a different matter** — that
+is not licensed here and requires a separate written agreement with Embabel. All rights other than
+those in the specification text are reserved, no patent licence is granted or implied, and
+compatibility or conformance claims using the "Embabel" or "Virtual Cypher" marks require our
+written permission.
 
 See [NOTICE.md](NOTICE.md) for the full statement of rights.

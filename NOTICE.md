@@ -23,29 +23,55 @@ The code, YAML, JSON and Cypher **samples** embedded in these specifications rem
 implementations and adapt them freely. The no-derivatives term applies to the specification prose,
 never to the examples.
 
-## Implementation
+## Two audiences, and only one of them needs to read past this line
 
-**You may implement these specifications freely** — in any product, open source or proprietary,
-commercial or otherwise, without permission, notification or royalty.
+**If you are writing realms, or building software that uses them, you are golden.** Nothing in this
+document constrains you, you need no permission, and you can stop reading here.
 
-This licence governs the specification *text* only. Attribution is required when you redistribute
-the text; it is **not** required in order to implement. An implementation is not a derivative work
-of this document, and nothing in CC BY-ND restricts building software that conforms to what is
-described here.
+**If you are a vendor intending to implement these specifications in your own engine or platform,**
+see [Implementing this specification in a competing product](#implementing-this-specification-in-a-competing-product)
+below. That requires a separate agreement.
 
-Realms authored against this specification are yours. Nothing here places any licence requirement
-on realms, on implementations, or on anything either produces.
+## Building realms, apps and integrations — free, and we mean it
 
-## Reserved rights
+If you are **authoring realms**, building software that consumes them, or integrating with an
+Embabel appliance, this specification places no obligations on you at all:
 
-**Patents.** No patent licence is granted or implied by this licence or by publication of these
-specifications.
+- Author realms and ship them — publicly, privately, or as a commercial product.
+- Build applications, tools, agents or services that read realms or call an appliance.
+- Do all of it without permission, notification, royalty, or attribution.
 
-**Trademarks.** "Embabel" and "Virtual Cypher" are trademarks of Embabel. This licence grants no
-right to use them, with one deliberate exception: **nominative use is permitted** — you may state
-accurately that your product implements, conforms to, or is compatible with the Embabel realm
-specification or Virtual Cypher. You may not use the marks as the name of your product, as a brand,
-or in a way that suggests endorsement.
+**Realms and applications you author are yours.** They are not derivative works of this document,
+and nothing here places any licence condition on them or on anything they produce. Attribution is
+required only if you redistribute the specification *text* itself.
+
+If you are unsure whether what you are building falls here, it almost certainly does. Ask if you
+want it in writing.
+
+## Implementing this specification in a competing product
+
+Different audience, different answer.
+
+**Building an engine, database or platform that implements these specifications is not licensed
+here, and requires a separate written agreement with Embabel.** This document grants rights in the
+specification *text* only. No other right is granted, expressly or by implication, and Embabel
+reserves all of them.
+
+If you are a vendor considering an implementation, contact us first. We licence in appropriate
+cases, and we would rather have the conversation early than late.
+
+**Patents.** No patent licence is granted or implied — not by this licence, not by publication of
+these specifications, and not by anything elsewhere in this document. Embabel reserves all patent
+rights in the systems described here.
+
+**Trademarks.** "Embabel" and "Virtual Cypher" are trademarks of Embabel. No right to use them is
+granted. In particular, **compatibility and conformance claims require our written permission** —
+you may not describe a product as implementing, conforming to, compatible with, or supporting the
+Embabel realm specification or Virtual Cypher without it, and you may not use the marks in a product
+name, brand, documentation or marketing.
+
+Realm authors and integrators are unaffected by this section. It is about products that reimplement
+what these specifications describe.
 
 ## Contributions
 
