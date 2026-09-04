@@ -2960,4 +2960,14 @@ The spec itself is versioned by this repository's git history. Hosts target a sp
 
 ## License
 
-This specification is released under the Apache License, Version 2.0. See [LICENSE](LICENSE).
+The specification **text** is licensed under
+[Creative Commons Attribution-NoDerivatives 4.0 International](LICENSE) (CC BY-ND 4.0). The code,
+YAML and Cypher **samples** remain under the [Apache License 2.0](LICENSE-SAMPLES-APACHE-2.0), so
+you can copy and adapt them freely.
+
+**You may implement this specification freely**, in any product, commercial or otherwise, without
+permission or royalty — an implementation is not a derivative work of this document, and realms you
+author are yours. No patent licence is granted or implied. "Embabel" and "Virtual Cypher" are
+trademarks; nominative use to state that your product implements this specification is permitted.
+
+See [NOTICE.md](NOTICE.md) for the full statement of rights.
