@@ -309,7 +309,9 @@ The `relationship`'s **merge key is the spine's key, not the field text** — `c
 only the display name; the `Organization` is keyed by the contact's email **domain**. So two contacts
 on `@acme.com` share one `Organization` however they spelled "Acme", and a freemail/no-domain contact
 yields **no** `Organization` (a name alone never invents a spine — fuzzy name resolution is a
-separate, async, confidence-scored layer, never in the query path). The result is a durable
+**separate tier, never in the query path**; it runs on the eager/offline population path, not on the
+on-demand hop, because a per-entity model call over thousands of fetched records would be one LLM
+call each and defeat the point of a deterministic hot path). The result is a durable
 `(p:Person)-[:WORKS_FOR]->(o:Organization)` edge onto the current visibility-scope spine — read the contact's company
 through its canonical Person, no source-specific company walk.
 
@@ -1076,7 +1078,8 @@ Guarantees:
   carries the pinned value under that property, which is the join's `recordKeyField`.
 - Exposure, `where:` predicates and masks apply exactly as they do to a keyed fetch.
 
-**A join may declare a POLICY instead of one key.** `keyField` says "match this column"; a policy
+**A join may declare a POLICY instead of one key.** _Forward-looking — see the implementation-status
+note at the end of this section before relying on it._ `keyField` says "match this column"; a policy
 says how to try, in order, and what to do when the rules disagree:
 
 ```yaml
@@ -1104,7 +1107,33 @@ Guarantees:
 - **Every resolved edge records HOW it was found**: the rule that matched and that rule's
   `confidence`, with an `ask` answer recorded as `asserted` — a person's word, not a probability.
 - **`none` ends the chain with no link**, which is an answer and not a failure.
+- **A question outlives the session.** Where the run can park, an `ask` becomes a durable question
+  against that run — answerable minutes later, from another device, by someone who was not the
+  asker. It is not a modal dialog and it does not hold a transaction open.
+- **An answered `ask` is not asked again.** The resolved edge is written with its `asserted`
+  confidence and the identity it settled, so the next query keys on it directly. A person is asked
+  once per ambiguity, not once per query.
+- **A declined or vetoed identity stays declined.** An `ask` answered "not the same" records a
+  negative assertion, and no later automatic rule may re-link what a person has separated.
 - A join with no `policy:` behaves exactly as before: key on `keyField`, once.
+
+**Implementation status, and what a host must do about it.** `policy:` is **specified and not yet
+implemented** in the reference host: the rule chain, its ordering and its confidence semantics are
+settled, and the evaluator exists, but the join path does not yet consult it.
+
+That makes the following normative, because the failure it prevents is the worst one available:
+
+> **A host that cannot honour a declared `policy:` MUST reject the realm at validate/install time,
+> naming the join.** It MUST NOT accept the declaration and silently key on `keyField` instead.
+
+A realm author who writes a fallback ladder and an `ask` has said, in the only place the format lets
+them, that one key is not enough for this join. Quietly resolving it with one key anyway produces
+exactly the wrong answers the policy was written to prevent — and produces them silently, on
+customer data, with no warning at the point of use. Refusing the realm is loud, immediate, and
+fixable; ignoring the policy is none of those things.
+
+Until the join path consults the evaluator, `policy:` should be treated as a declaration of intent
+that a conforming host refuses rather than a feature a realm can depend on.
 
 **Mining a database into a realm.** A relational schema already IS a graph — tables are
 labels, primary keys identities, foreign keys edges. The host can mine a datasource's
