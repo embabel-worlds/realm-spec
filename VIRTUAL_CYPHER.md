@@ -1089,16 +1089,28 @@ says how to try, in order, and what to do when the rules disagree:
   producer: customersById
   policy:
     rules:
-      - key: { on: customer_id, to: id }                          # the declared key
-      - key: { on: customer_email, to: email, ci: true, confidence: medium }
+      - key: { on: customer_id, to: id }                          # the declared key, via `producer`
+      - key: { on: customer_email, to: email, ci: true, confidence: medium,
+               producer: customersByEmail }                       # a DIFFERENT door, keyed by email
       - ask: "Which customer placed this order?"                  # a person, when rules disagree
       - none                                                      # no link is a legitimate answer
 ```
+
+**A `key` rule may name its own `producer`, and usually must.** A producer is keyed by ONE field —
+`keyArg` for a remote op, `keyColumn` for SQL, `keyTemplate` for a query string — fixed in its own
+declaration. So a rule that matches on a different target field needs the door that is keyed by that
+field: `customersById` cannot be asked for a customer by email, however the rule is written. Omit
+`producer` and the rule uses the join's, which is right for the rule whose `to` IS the join's key and
+wrong for every other. This mirrors a `resolve:` chain, where `canonicalEmail: { producer: … }` names
+its door the same way and for the same reason.
 
 Guarantees:
 
 - **Rules are tried IN ORDER and the first that yields wins.** A rule that yields nothing does not
   end the chain — that is what a fallback is for.
+- **Each rule fetches ONCE for every anchor still unresolved**, through its own producer, and anchors
+  a rule settles leave the chain. A chain of three rules over a thousand anchors is at most three
+  fetches, never one per anchor.
 - **More than one match is not a match.** The rows become the candidates offered to a later `ask`,
   and resolution continues rather than picking one.
 - **`ask` never runs before the rules that could answer without a person**, and where nobody can be
