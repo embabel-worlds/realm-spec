@@ -181,10 +181,19 @@ The reference profile supports:
 The initial implementation rejects unsupported auth schemes, parameter references, alternative
 servers, mutations and credential injection into HTTP framing/control headers. In captured
 Worlds, live Realm API declarations do not create legacy tools or trigger credential
-resolution. API calls use approved captured handlers; explicitly owner-authored World API
-entries keep their separate owner path. It does not provide a general credential lookup or a complete OpenAPI
-schema validator. Producer and lens use of these operations requires the same retained
-resource boundary; handler support alone does not establish that integration.
+resolution. Approved operations are also available directly through the owner gateway and
+its generated descriptors. An API-only Realm needs operation approval but no handler grant
+or executable program. Previously discovered tools must refuse after an installation revision
+change or revocation and while the wallet value differs from the approved value. Direct tools
+retain the captured API contract even if source files change.
+
+Captured API namespaces cannot shadow ordinary gateway tools or captured handlers. The
+shared producer, enrichment, query-bound-operation and generic signal catalogs exclude
+direct captured API tools until those callers carry retained authority. A legacy Realm
+callback cannot use a direct owner tool to bypass its captured callback requirements.
+Explicitly owner-authored World APIs keep their separate path. The API profile provides
+neither a general credential lookup nor complete OpenAPI schema validation. Producer and
+lens integration remains open.
 
 ## Backends and dependencies
 
