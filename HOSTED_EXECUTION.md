@@ -195,6 +195,13 @@ Explicitly owner-authored World APIs keep their separate path. The API profile p
 neither a general credential lookup nor complete OpenAPI schema validation. Producer and
 lens integration remains open.
 
+### Result admission
+
+After a handler completes, the host rechecks its original retained target before returning
+the result. Realm revocation, installation revision changes, lost consumer/source constraints
+and interruption refuse a late result. The host does not replace stale authority with a
+newer approval. Completed effects cannot be undone by this check.
+
 ## Backends and dependencies
 
 The contract separates admission from backend selection. A host may implement Wasm, Docker
