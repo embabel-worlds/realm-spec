@@ -87,4 +87,5 @@ confirm completion of consumer processing or external effects.
 
 **Consumer Checkpoint**:
 A durable position advanced after an offered record prefix succeeds under current admission.
-An uncheckpointed offer may be replayed, so effects need stable idempotency keys.
+An uncheckpointed offer may be replayed, so effects need stable idempotency keys. Records that
+every adopted consumer has checkpointed past may be reclaimed by the host.

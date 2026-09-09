@@ -178,8 +178,23 @@ within both existing caps. The shared percentage applies after its metadata allo
 Appends stop at the lower ceiling; adoption, offers and checkpoints may use the remaining
 capacity. All frames consume append capacity. Hosts may configure 0–50%; zero disables the
 reserve. Changing it affects new appends without rewriting existing data. A full total budget
-can still block offers or checkpoints. Automatic compaction and retention are not implemented;
-crash-safe replacement and recovery must also fit within the storage budget.
+can still block offers or checkpoints.
+
+The host reclaims a record once every adopted consumer of its source has checkpointed past it.
+A source with no consumer keeps its records until capacity refuses new writes. Reclamation
+never changes an offset, a source position, a consumer checkpoint, a pending offer or a
+delegation, and a rewrite that fails at any step leaves either the previous log or the
+complete replacement; it never acknowledges a lost record. A consumer adopted after
+reclamation starts at the retained horizon, so replay of history is best-effort within
+retained capacity. Reclamation needs bounded temporary space for the replacement within the
+host's free-space reserve; without it the host refuses as full rather than rewriting.
+
+Exact retries hold inside bounded windows after reclamation. The reference host keeps at
+least the latest 256 batch receipts per source and the identities of the last 256 reclaimed
+events: inside those windows an identical retry returns its receipt or the original offsets
+and conflicting content is refused; outside them a retry is appended as a new event. This is
+the at-least-once boundary between a host receipt and an external effect, and a positioned
+batch is still refused when its expected position is stale.
 
 ## Credentials and databases
 
