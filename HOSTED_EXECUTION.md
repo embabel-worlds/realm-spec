@@ -146,6 +146,12 @@ or another isolated backend while preserving retained identity, bounded I/O, med
 and refusal behavior. A remote backend must preserve those checks and authenticate its
 transport; backend placement does not grant access to credentials.
 
+Captured Docker execution can load bundled CommonJS and JSON artifacts from
+`dist/node_modules/`. The reference host verifies at most 256 runtime entries totaling 8 MiB
+and resolves package main/index, subpaths, relative modules and cycles inside the container.
+Missing imports have no host fallback. Package exports maps, ESM and native module loading
+are unsupported. Bundled code receives no additional authority or credentials.
+
 Dependency and storage capabilities require explicit host support. Unsupported requirements
 must be rejected before execution. Portable dependency negotiation and private database
 persistence remain open. This document does not introduce dependency or VFS syntax.
@@ -163,6 +169,7 @@ Its current support is narrower than some trusted-host examples in the main spec
 | Captured callback to an approved sibling | Implemented within the same installation. |
 | Captured Virtual Cypher and other host-resource callbacks | Refused pending retained resource receivers. |
 | Owner database target approval | Implemented; runtime datasource use still needs integration. |
+| Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
 | Dependency negotiation, private Realm database persistence and VFS | Not implemented on this path. |
 | Firecracker, generalized remote backends and resumable arbitrary computation | Not implemented. |
 
