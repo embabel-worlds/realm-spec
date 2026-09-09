@@ -965,7 +965,7 @@ name: Movie details
 handler: movie.movieDetail
 ```
 
-Required fields are `version`, `id`, `name` and `handler`; `description` is optional.
+Required fields are `version`, `id`, `name` and `handler`; `description` and `result` are optional.
 The ID is a lowercase letter followed by lowercase letters, digits or hyphens, at
 most 64 characters. The name is at most 128 characters; description at most 512.
 Fields are strict. Aliases, tags, malformed UTF-8, nested paths, duplicate IDs and
@@ -975,8 +975,18 @@ Owner World definitions and owner saves take precedence.
 
 An opening passes JSON object arguments through the retained handler.
 The handler returns a JSON object within 1 MiB, 32 nesting levels and 65,536
-characters per string. Results are data only; graph entities, executable references,
-and custom presentations are outside this profile.
+characters per string. `result: json` is the default and returns data only.
+
+With `result: content`, the handler returns optional `focus` (up to 256 unique
+entity ID strings, each at most 1,024 UTF-8 bytes), `data` (any JSON value),
+`presentation` (`items`, `table` or `json`) and `complete` (boolean, default true).
+Unknown fields are refused. Content lenses require the retained `cypher_query`
+grant alongside handler approval. The host reads owned focus on access; missing,
+ambiguous or inaccessible IDs are excluded and mark the result incomplete.
+`complete: false` also marks it incomplete. A presentation preference selects an
+existing compatible host view; guest HTML and executable references are refused.
+Background envelopes are snapshots. Losing ownership of any already projected
+focus entity invalidates the stored envelope at its next admission check.
 The host retains the same target and serialized arguments through refresh, rechecks
 owner World and approval on reads, and disables cache reuse. API calls inside the
 handler require their own operation and credential approvals.
