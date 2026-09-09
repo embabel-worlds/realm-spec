@@ -134,10 +134,52 @@ External SQL belongs behind bound Virtual Cypher, approved producers or typed op
 Use `params` for query values, including lists and nested objects. Raw `gateway.sql` access
 is not a portable guest capability. Owner database setup selects a host-configured target
 and its digest before storing credentials; target approval alone does not make it queryable.
+Upgrade and revocation require the current installation and revision. Replacement approval
+invalidates old access before removing its credentials. Revocation requires no database
+connection and remains available when the configured target has been removed.
 
 A private SQLite dependency serves the Realm's own computation or persistence. Its database,
 WAL, snapshots and recovery overhead must fit that Realm's finite budget. It grants no access
 to an external datasource. The host channel journal is a separate delivery facility.
+
+## Captured API operations
+
+A captured Realm may declare approved API operations in `apis/apis.yml` using vendored
+OpenAPI documents. Each operation binds a fixed destination and a key from the owner's
+wallet. In the governed profile, `token-env` identifies a wallet entry; it does not authorize
+an environment-variable fallback. The guest supplies operation arguments, never credentials,
+headers, server overrides or an alternative URL.
+
+Owner preview shows the captured digest, installation revision, operation destination and
+required wallet key name. Grant and revoke requests select the displayed installation and
+revision. Granting an operation binds the current wallet value. Changing or deleting that
+value invalidates its approval; a replacement requires approval again. Revocation remains
+available after key deletion. These mutations advance the Realm installation revision, so
+older retained invocations become stale.
+
+The host checks the retained handler, consumer and operation grants and current credential
+binding before network access and before returning data. API approval does not grant access
+to another operation. Provider responses and errors must not expose the injected credential.
+The provider itself is trusted with that credential: rejecting common echoes cannot prove
+that a malicious provider has not transformed it into other response data. Revocation cannot
+undo a request already accepted by the provider.
+
+The reference profile supports:
+
+| Declaration | Support |
+| --- | --- |
+| Specification | Vendored OpenAPI 3 JSON under `apis/`; no remote documents or external references. |
+| Destination | One fixed HTTPS origin per API, port 443, validated public addresses and verified TLS hostname; no redirects. |
+| Operations | Explicit GET operation IDs, at most 128 per Realm. |
+| Arguments | At most 64 scalar path/query parameters and 64 KiB JSON; no body or caller headers. |
+| Validation | Types, required fields, enum and string-length limits; numeric ranges and regex annotations remain provider validation. |
+| Authentication | API key in a query parameter or header, or HTTP bearer token; optional fixed `X-` headers. |
+| Response | At most 1 MiB of strict UTF-8 JSON; common credential echoes and diagnostic exception text are refused. |
+
+The initial implementation rejects unsupported auth schemes, parameter references, alternative
+servers and mutations. It does not provide a general credential lookup or a complete OpenAPI
+schema validator. Producer and lens use of these operations requires the same retained
+resource boundary; handler support alone does not establish that integration.
 
 ## Backends and dependencies
 
@@ -167,8 +209,9 @@ Its current support is narrower than some trusted-host examples in the main spec
 | Approved provider lifecycle and durable journal delivery | Implemented for Discord, Slack and Telegram. |
 | Captured source/consumer approval and publication | Implemented with World-load source discovery. |
 | Captured callback to an approved sibling | Implemented within the same installation. |
+| Captured API operations and wallet bindings | Implemented for the GET profile; Movie Wasm tests cover query-key and header-key authentication. |
 | Captured Virtual Cypher and other host-resource callbacks | Refused pending retained resource receivers. |
-| Owner database target approval | Implemented; runtime datasource use still needs integration. |
+| Owner database target approval | Adoption, upgrade and revocation implemented; runtime datasource use still needs integration. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
 | Dependency negotiation, private Realm database persistence and VFS | Not implemented on this path. |
 | Firecracker, generalized remote backends and resumable arbitrary computation | Not implemented. |
