@@ -119,8 +119,15 @@ an uncommitted append or deleting unread records.
 The reference journal defaults to 64 MiB shared across the host and 8 MiB of retained frame
 bytes per World and Realm installation. A separate free-space check reserves 64 MiB. The
 per-Realm charge spans all source names and streams. Reinstalling does not reclaim the old
-installation's bytes from the shared limit. A full budget can block new offers or checkpoints;
-automatic compaction and retention are not implemented.
+installation's bytes from the shared limit.
+
+By default, the reference journal reserves 25% of frame capacity for consumer control writes,
+within both existing caps. The shared percentage applies after its metadata allowance.
+Appends stop at the lower ceiling; adoption, offers and checkpoints may use the remaining
+capacity. All frames consume append capacity. Hosts may configure 0–50%; zero disables the
+reserve. Changing it affects new appends without rewriting existing data. A full total budget
+can still block offers or checkpoints. Automatic compaction and retention are not implemented;
+crash-safe replacement and recovery must also fit within the storage budget.
 
 ## Credentials and databases
 
