@@ -2111,13 +2111,49 @@ shared-tenancy boundary.
 
 ## `commands/`
 
-Slash command mappings — map `/command` names to actions.
+Captured commands map a slash name to an approved handler in the same Realm installation.
+They do not grant handler access or select a host action.
 
 ```yaml
-# commands/fix-issue.yml
+# commands/read-notes.yml
+version: 1
+command: read-notes
+handler: notes.read
+description: Read notes
+```
+
+Each flat `.yml` or `.yaml` file contains one object. Required fields are `version: 1`,
+`command` and `handler`; `description` is optional. Command names match
+`[a-z][a-z0-9-]{0,63}`. Handler names identify a captured `namespace.function` entry.
+Description text is limited to 512 characters. A capture contains at most 32 command files,
+8 KiB per file and 64 KiB combined. File basenames contain 1–128 ASCII letters, digits, dots,
+underscores or hyphens and start with a letter or digit. Nested YAML paths, duplicate fields or command names,
+unknown fields, YAML aliases/tags, invalid UTF-8 and version coercion are refused. Invalid
+command declarations do not disable independently approved handlers.
+
+The host binds each alias to the captured digest, installation and approval revision. It
+checks the current owner World and handler approval during discovery, before execution,
+at host callbacks and before returning results. Changing live Realm files cannot redirect
+an alias. Revocation or a changed approval revision refuses retained aliases. Aliases with
+the same name in multiple installations are unavailable; built-ins, owner action commands
+and skills reserve their names.
+
+`/read-notes {"skus":["SKU-A","SKU-B"],"limit":2}` passes that JSON object to the handler.
+A bare command passes `{}`. Matching is case-insensitive and requires whitespace before
+arguments. The host preserves JSON value types and rejects duplicate keys, trailing documents,
+non-object input and arguments over 1 MiB. The handler result returns directly to chat.
+Command input and results remain conversation content; credentials belong in the owner
+wallet and must use an approved host credential binding.
+
+Owner discovery exposes the command, Realm, handler, description, installation ID and
+revision. These descriptors confer no authority. Hosts using captured execution do not
+load legacy Realm `actionName` mappings. A host may retain owner-managed action commands
+as a separate configuration surface:
+
+```yaml
 command: fix-issue
 actionName: fix-issue
-description: "Fix a GitHub issue"
+description: Fix an issue
 ```
 
 ## `webhooks/`
