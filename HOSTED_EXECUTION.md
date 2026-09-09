@@ -391,6 +391,43 @@ const result = await ctx.gateway.cypher.query({
 `CapturedRealmQueriesTest` covers real Wasm and Docker, owned graph reads, retained grants,
 same-installation producer materialization, rollback and nested API readmission.
 
+## Me captured goal profile
+
+A captured Realm may declare planner goals under `goals/` as version-1 data:
+
+```yaml
+version: 1
+goal: summarize-notes
+handler: notes.summarize
+input: NoteRequest
+output: NoteSummary
+description: Summarize the owner's notes
+```
+
+`goal` uses `[a-z][a-z0-9-]{0,63}`. `handler` names a captured `namespace.function` of the
+same installation. `input` and `output` are simple type names declared by the Realm; `input`
+may also be `UserInput`, the host's request type, delivered to the handler as
+`{"content": text}`. Names with package or path separators, any other field, and
+legacy owner goal shapes are refused. A Realm's goal declarations count against the same
+limits as commands: 32 flat YAML files, 8 KiB per file, 64 KiB combined.
+
+The host deploys each current goal as one handler-backed planner action plus one exported
+goal named `<goal>_goal`, callable from chat as a goal tool. The action passes the input's
+fields to the handler as one JSON object and binds the handler's object result as the
+output type; the handler's input and output schemas apply. Every selection and run retains
+the owner, World, installation revision, capture digest and handler approval, rechecked
+before dispatch, on host callbacks and before the result is released. A refused or failed
+run is reported to the conversation and leaves the output unbound; the process is not
+aborted. Goals that name undeclared types, reuse an owner action or goal name, or duplicate
+another Realm's goal are excluded with a loading problem. The owner may switch a goal off by
+name. Owner-authored planner steps keep their own trust boundary and are the way a chat
+request becomes a Realm input type; Realm `actions/` are not loaded.
+
+Me verifies this profile with real Wasm dispatch through planner selection and execution,
+the request form, refusal after revocation and for a foreign owner or World, undeclared
+types, name collisions, the owner's switch, legacy files, and the declaration limits and
+refused shapes.
+
 ## Authenticated source ingress
 
 An authenticated owner can append an external event to an approved captured source:
@@ -425,9 +462,10 @@ reply protocol need a host adapter. Source IDs and payload fields are not creden
 Me does not load Realm `actions/`, `goals/` or `mcp/` files as host StepSpecs or
 subprocess registrations. Owner configuration retains those host features. Compile
 Realm code into captured manifest handlers and bind commands, function schedules,
-producer handlers, lenses or data-pipe consumers. Captured declarative goals and
-MCP/GraphQL transports require dedicated profiles; host declarations do not grant
-those capabilities.
+producer handlers, lenses, data-pipe consumers or captured goals. A legacy
+`stepType: goal` file inside a captured Realm is reported and never parsed; declare
+goals with the [captured goal profile](#me-captured-goal-profile) instead. MCP/GraphQL
+transports require dedicated profiles; host declarations do not grant those capabilities.
 
 ## Approved SQL callers
 

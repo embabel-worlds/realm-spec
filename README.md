@@ -379,8 +379,11 @@ Actions are deployed to the host's planner on world load.
 
 ## `goals/`
 
-Me keeps this legacy host configuration outside Realm execution. Use the
-[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for Me Realms.
+Me keeps this legacy host configuration outside Realm execution. For Me Realms, declare a
+version-1 [captured goal](HOSTED_EXECUTION.md#me-captured-goal-profile) that binds one approved
+handler to Realm-declared input and output types; a legacy file of the shape below inside a
+captured Realm is reported and never parsed. See the
+[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration).
 
 Goal specifications — multi-step workflows composed of actions.
 
