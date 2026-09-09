@@ -2,9 +2,12 @@
 
 Realms are self-contained, declarative bundles of agent capabilities that can be installed into an Embabel-based host. Each realm is a git repository (no JVM bytecode, no native binaries) that provides actions, types, APIs, MCP servers, commands, webhooks, event sources, Trigger Bindings, skills, prompts, and apps. The host platform reads the realm and wires its contents into the running agent.
 
-This document is the spec.
+The [hosted execution contract](HOSTED_EXECUTION.md) defines captured execution, channel
+publication, finite capacity and credential mediation. It also records the governed reference
+implementation's current support. Trusted-host examples below do not authorize a governed
+guest to bypass those checks.
 
-> **Status: living draft.** Sections marked _forward-looking_ describe shape that is settled but may still be in implementation across hosts. Everything else describes the format current Embabel hosts already consume. Where this document cites concrete defaults or behaviour of "the reference host", it means the host implementation this spec is developed against; those values are informative, not part of the contract.
+> **Status: living draft.** Sections marked _forward-looking_ describe shape that is settled but may still be in implementation across hosts. Other sections describe portable declarations and trusted-host formats; capability support differs by host profile. Where this document cites concrete defaults or behaviour of "the reference host", it means the host implementation this spec is developed against; those values are informative, not part of the contract.
 
 ---
 
@@ -64,7 +67,8 @@ realm-name/
 │   └── my-webhook.yml
 ├── events/               # Event ingestion — push + poll
 │   └── my-source.yml
-├── channels/             # Realm-shipped channel connectors (YAML)
+├── data-pipes.yml        # Captured channel source and consumer declarations
+├── channels/             # Realm-shipped provider connector drafts (YAML)
 │   └── my-channel.yml
 ├── handlers/             # Trigger Bindings — reactions to signals/cron the user adopts
 │   └── my-handler.yml
@@ -593,7 +597,7 @@ Producer `kind`s:
 | kind | fetch | notes |
 |------|-------|-------|
 | `remote` (alias `api`) | a `gateway.<name>.*` op (realm handler or learned API) — a **RemoteRepository** | list mode (`keyArg` → array) or string mode (`keyTemplate` + `{keys}`); `records` JSONPaths the response |
-| `sql` | a SELECT against a realm/world `datasource` | keys expand into `IN (…)`; rows are the records; SELECT-only, wallet/env creds |
+| `sql` | a SELECT against a host-configured datasource | keys expand into `IN (…)`; rows are records. The host mediates approved credentials and operations; governed captured callers require a retained resource receiver. |
 | `compute` | an in-process computation over the keys | scores / rollups / synthesis — no external I/O; *local*, so NOT a RemoteRepository |
 | `vector` | top-k **semantic similarity** to the anchor | for joins with no key — similarity *is* the join (related docs/chunks); rides the host embedder |
 | `generative` | **GENERATES** the edge (resumably) rather than reading it — an LLM's world knowledge (`SIMILAR_TO`, `IN_INDUSTRY`) or a code function | pluggable generator (`llm` \| `function`); keeps generating; resolves each answer onto the type spine; provenance-stamped |
@@ -1542,8 +1546,9 @@ So a virtual type's class gives its on-demand instances behaviour:
   `issue.needsTriage()`, `pr.isReadyForReview()`);
 - **effectful** methods write back to the source through `this.gateway.<ns>.*`
   (`issue.close()`, `issue.addLabels('stale')`, `pr.requestReviewers('alice')`),
-  and may reuse the host `gateway.sql` / `gateway.cypher` ops the generated
-  `GatewayContext` exposes.
+  and may use bound `gateway.cypher.query({cypher, params})` when the host has an
+  admitted receiver. External SQL uses approved producers or typed operations; raw SQL
+  gateway access is not a portable guest capability.
 
 A read materialises transient nodes and rolls them back; an effectful method commits
 to the real source (the rollback never touches that side-effect). A program reads,
@@ -2257,7 +2262,16 @@ No JVM bytecode is shipped — realms that need behaviour beyond mapping should 
 
 ## `channels/` — realm-shipped channel connectors
 
-Where `events/` is stateless ingestion — call an API, map results to signals, done — a **channel** is a live conversational surface with a lifecycle: a persistent connection the host holds open, an inbound half that ingests messages as signals, and an outbound half the assistant replies through. Use `events/` when data only flows in; use `channels/` when the assistant also talks back on the same surface.
+A channel is a general data pipe, including provider messages, webhooks, database changes
+and Realm-produced events. It may carry data in either direction. `channels/` declares
+provider connector drafts; `data-pipes.yml` declares captured sources and consumers. See the
+[hosted data-pipe contract](HOSTED_EXECUTION.md#data-pipes) for source identity, grants,
+publication, receipts and checkpoints.
+
+The governed host requires owner approval and owner-scoped credential references before
+starting a provider connector. A Realm declaration, `auto-start` value or process environment
+variable grants no runtime authority. The following legacy connector format applies only
+where the host explicitly supports it; it does not replace the owner lifecycle API.
 
 A realm configures a connector the host implements — host-extension via FQN, the same dispatch pattern as `PolicyActionSpec`:
 
@@ -2273,8 +2287,8 @@ auto-start: true
 |---|---|---|
 | `type` | yes | FQN of a host-provided channel connector configuration. The host documents which connectors it ships; a realm cannot ship connector code. |
 | `name` | yes | The channel's name on this world. |
-| `token-env` | connector-specific | Environment variable holding the connector's credential, resolved host-side. The credential itself never appears in the realm. |
-| `auto-start` | no | Start the connection on world load. Default `true`. |
+| `token-env` | connector-specific | Legacy credential name resolved by a trusted host. Governed hosts require owner-scoped credential approval. Values never belong in the Realm. |
+| `auto-start` | no | Legacy startup preference. Governed startup also requires current owner approval and a supported provider lifecycle. |
 
 `auto-start` controls the connector lifecycle only; it does not adopt or activate any handler or
 manifest schedule. A credential-backed live connector registration is owned by exactly one world in
@@ -2287,9 +2301,15 @@ Within that world, every inbound and reply route is bound to one explicit contex
 revision, and run-as principal. A connector session may multiplex such routes only when it keeps those
 bindings separate; it never broadcasts an event or reply route into every context by default.
 
-The inbound half emits ordinary `Signal`s of a type the realm declares in `types/` — a channel message is downstream-indistinguishable from any other signal, so triage rules, attention, persistence, and handler reactions all apply unchanged. The realm typically ships the message type, its identity projections, and any functions over the stream (a digest, a search) alongside the connector config.
+Provider adapters map incoming data to host events. The governed host appends the event to a
+durable journal before acknowledgment, then projects signals or invokes approved consumers
+with independent checkpoints. A provider message, a journal receipt and a completed consumer
+effect have different completion semantics.
 
-What this spec pins down is the envelope, not the connector. The file format, the common fields above, and the signals-in / replies-out shape are portable. Everything connector-specific — how platform messages map onto the declared signal type, conversation and thread identity, how an outbound reply is addressed — is defined by the connector `type` and documented by the host that ships it. Additional keys in the file pass through to the connector, which validates them. A channel realm is therefore host-extension territory, like an FQN `stepType`: it runs where the named connector exists.
+Provider-specific addressing, conversation identity and reply rules belong to the connector
+implementation. `channels/` references only host-provided connector types; a Realm cannot
+install JVM connector code. General Realm-produced sources use captured declarations and
+sandbox callbacks instead.
 
 An unknown `type` is reported against the file and that channel is skipped; the realm's other content loads.
 

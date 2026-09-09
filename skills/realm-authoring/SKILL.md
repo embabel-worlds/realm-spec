@@ -102,18 +102,16 @@ back is **Virtual Cypher** — see "Virtual Cypher — the engine" under "Joinin
 
 ## CypherScript (querying the graph from realm code)
 
-> **A WASM handler is not a `code_mode` script, and this section's `gateway.*` examples do not
-> run there.** A handler in `wasm/handlers.ts` is `export function name(args, ctx)` — args
-> FIRST, and the surface is `ctx.gateway`. There is no global `gateway`: writing the code below
-> verbatim inside a handler fails at the first call with `gateway is not defined`. The host tools
-> granted inside wasm are `cypher_query`, `sql_query` and `sql_update` — `gateway.kg.query` is
-> NOT one of them, so a handler reads the graph with `ctx.gateway.cypher.query`. An evaluation
-> followed this section literally, got `gateway is not defined`, and recovered the real signature
-> only by disassembling the sandbox shim.
->
-> Note the sharp edge while it lasts: `cypher_query` takes no `params`, so a handler cannot yet
-> bind a user-supplied value into a graph read. Filter in JS over a bounded read rather than
-> concatenating a value into the Cypher string.
+A Wasm handler has the signature `export function name(args, ctx)` and accesses the gateway
+through `ctx.gateway`. Code-mode scripts use `gateway` directly. These execution surfaces
+have different admitted operations.
+
+Where supported, `ctx.gateway.cypher.query({cypher, params})` binds values through `params`;
+arrays and nested objects remain structured. Raw SQL gateway calls are not a portable guest
+capability. External SQL uses approved producers or typed operations. The governed captured
+path currently refuses Cypher until its retained resource receiver is connected. Check the
+[hosted execution contract](../../HOSTED_EXECUTION.md#reference-implementation) before using
+a host-resource callback.
 
 A handler / decoration / skill runs **CypherScript** in `code_mode`: TS/JS that interleaves
 `await gateway.kg.query({cypher, params})` (graph reads through Virtual Cypher — scoped,
@@ -197,10 +195,11 @@ metered API to protect (go lower), or a batch op behind a `remote` producer (go 
 And shape the view so the cap rarely matters: **narrow before an enrichment hop.** Sort and `LIMIT`
 the rows you will show, *then* resolve their names — not the other way round.
 
-## Hard rules (don't get these wrong)
+## Constraints
 
-- **No secrets in the realm.** Reference them by env-var/credential-store name; OAuth client
-  creds live in the host admin, never the repo.
+- Credentials stay in host-managed, owner-scoped storage. Governed guests use approved
+  operations and sources; they receive no secrets or general credential lookup. Ambient
+  environment variables do not authorize credential use.
 - **Descriptions are for an LLM planner** — write them as routing signal, not prose.
 - **Stable ids.** Renaming a `name` (realm/action/type/command) breaks every installed
   world wired to it — that's a major version bump.
@@ -209,3 +208,17 @@ the rows you will show, *then* resolve their names — not the other way round.
 - **Naming**: lowercase-hyphenated ids, UpperCamelCase type names.
 - **An untested view is an unshipped view.** Declarative capabilities are only proven by a live
   run against the real source — see "The declarative half has no unit tests".
+
+
+## Channel sources and consumers
+
+Declare sources and consumers in `data-pipes.yml` using the
+[hosted data-pipe contract](../../HOSTED_EXECUTION.md#data-pipes). A source names its stream
+and event type. A consumer names a captured handler; the owner separately approves its exact
+source and handler. A declaration creates no grant.
+
+Use `gateway.channel.publish` in a captured Docker handler or `ctx.gateway.channel.publish`
+in a Wasm handler. Keep `eventId`, `occurredAt` and payload stable on retry. The returned receipt
+confirms durable acceptance; downstream effects still require idempotency. All retained data
+and dependencies remain within host-enforced Realm limits. Private SQLite is a dependency,
+not an external SQL gateway or a substitute for source approval.
