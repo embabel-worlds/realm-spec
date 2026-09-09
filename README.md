@@ -2122,7 +2122,39 @@ The current Me captured-execution profile excludes producers and virtual joins l
 Realm files. Owner-authored definitions remain available. Producer execution and cache reuse
 retain World and declaration checks; shared cache partitions include both. The legacy Wasm
 producer example demonstrates the compatibility route, not captured resource admission.
-Captured producer declarations and the guest query receiver remain implementation work.
+Me also accepts the following captured handler producer profile. Each flat
+`producers/*.yml` or `.yaml` file contains one version-1 object:
+
+```yaml
+# producers/movie-records.yml
+version: 1
+name: movie-records
+handler: movie.records
+keyArgument: keys
+joins:
+  - targetLabel: MovieRecord
+    anchorLabel: Person
+    relationship: HAS_RECORD
+    keyField: id
+    recordKeyField: personId
+```
+
+The binding retains an approved handler from the same installation. The handler
+receives a JSON object whose `keyArgument` contains an array of string keys and
+returns an array of record objects. Declare the target type and identity separately;
+`recordKeyField` links records to their matching anchor keys. The host owns graph
+scope and overlay metadata; records cannot supply `userId` or `__vc*` properties.
+Owner producer names take precedence and suppress conflicting captured joins.
+
+This profile has no caching, paging or predicate pushdown. Me limits each fetch to
+256 keys, 2,048 characters per key, 64 KiB of encoded arguments, 1 MiB of output and
+1,024 rows. It accepts 32 flat declaration files, 8 KiB per file, 64 KiB total and
+eight joins per binding. All fields shown are required; unknown fields, duplicate
+names or joins, aliases, tags and undeclared handlers are refused. These are host
+profile limits, independent of backend placement.
+
+A handler grant does not grant API or datasource access. Each host call still needs
+its resource approval. The guest query receiver remains implementation work.
 
 ## `mcp/`
 
