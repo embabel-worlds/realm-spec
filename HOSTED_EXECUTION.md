@@ -404,3 +404,39 @@ consumer execution. World load restores approved source bindings and replays pen
 This route uses the host's owner authentication. It does not mint an ingress-only token or
 verify provider-specific webhook signatures. Providers that require their own signature or
 reply protocol need a host adapter. Source IDs and payload fields are not credentials.
+
+### Legacy executable migration
+
+Me does not load Realm `actions/`, `goals/` or `mcp/` files as host StepSpecs or
+subprocess registrations. Owner configuration retains those host features. Compile
+Realm code into captured manifest handlers and bind commands, function schedules,
+producer handlers, lenses or data-pipe consumers. Captured declarative goals and
+MCP/GraphQL transports require dedicated profiles; host declarations do not grant
+those capabilities.
+
+## Approved SQL callers
+
+Production SQL reads and introspection use `OwnerSqlConnections`. The facade resolves the
+current authenticated owner and selected World, then retains the exact datasource approval,
+configured PostgreSQL target digest and scoped wallet credential. A legacy datasource YAML
+entry cannot choose a production connection or credential. Discovery lists current owner
+approvals. There is no environment or generic wallet-key fallback on this connection path.
+
+Connections use the configured certificate policy and driver timeouts. Reads run in a
+read-only transaction with 15-second statement and three-second lock limits, then roll back.
+The receiver rechecks owner/World, approval and credential before use and after projection.
+The facade accepts a single SELECT and binds values with prepared statements. Results are
+limited to 1,024 rows, 128 columns and 1 MiB of encoded row data; overflow is unavailable rather than a partial
+success. These limits apply after driver value decoding. Database permissions and server
+memory limits remain deployment policy.
+
+The current approval profile is read-only. Updates and stored procedures are unavailable,
+and writable procedure tools are not exposed. Reads, metadata discovery and learning require
+an authenticated owner context; a supplied user ID alone is insufficient. Connection failures
+return fixed messages without JDBC URLs, driver errors or credentials.
+
+Migrate old owner datasource files by selecting and approving a configured target through
+Connect, then reference its target ID in Virtual Cypher producers or typed operations.
+Raw SQL remains excluded from captured guest operations. Private SQLite remains a separate
+bounded dependency use case. Tests for legacy SQL compilation and local database behavior
+use an explicit test-only connection adapter; production has no legacy connection fallback.

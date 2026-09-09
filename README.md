@@ -222,6 +222,9 @@ it in `apps/`. Same principle, existing convention, no new field.
 
 ## `actions/`
 
+Me keeps this legacy host configuration outside Realm execution. Use the
+[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for Me Realms.
+
 Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape; the framework's `NameOrClassTypeIdResolver` resolves either a registered short name (e.g. `action`, `goal`) **or a fully-qualified class name** (`com.example.MyCustomActionSpec`) to an `ActionSpec` class on the classpath. Host extensions can use either path.
 
 | `stepType` value | Shape |
@@ -375,6 +378,9 @@ When the cheap policy doesn't match, its `hasRun_<name>=TRUE` blocks re-picking;
 Actions are deployed to the host's planner on world load.
 
 ## `goals/`
+
+Me keeps this legacy host configuration outside Realm execution. Use the
+[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for Me Realms.
 
 Goal specifications — multi-step workflows composed of actions.
 
@@ -2234,6 +2240,9 @@ for limits, owner approval and excluded host operations.
 
 ## `mcp/`
 
+Me keeps this legacy host configuration outside Realm execution. Use the
+[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for Me Realms.
+
 MCP server configurations — each file lists Model Context Protocol servers to connect.
 
 **Prefer `apis/` (a vendored OpenAPI spec) over an MCP server whenever the
@@ -3189,3 +3198,11 @@ See [NOTICE.md](NOTICE.md) for the full statement of rights.
 
 The Me host also accepts [authenticated external source events](HOSTED_EXECUTION.md#authenticated-source-ingress)
 under the same captured source approval and durable receipt contract.
+
+The Me captured host excludes legacy Realm StepSpecs and MCP subprocess registrations.
+Use captured handlers and their versioned surface bindings; see
+[the migration contract](HOSTED_EXECUTION.md#legacy-executable-migration).
+
+Me host SQL readers and learning use [approved owner targets](HOSTED_EXECUTION.md#approved-sql-callers).
+Legacy datasource YAML does not authorize a connection. The current profile is read-only;
+SQL remains behind Virtual Cypher and typed host operations, outside the guest protocol.
