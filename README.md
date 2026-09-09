@@ -1187,6 +1187,19 @@ Two hard rules:
   revision or the deployment must migrate that dataset atomically. World-local version skew must not
   mutate a single unversioned public identity.
 
+### Me source authority profile
+
+Realm loading does not grant public visibility or shared mirror access. The host
+refuses those declarations and protects host-configured sources against replacement
+by Realm names or labels. Public source and anchor scopes require trusted host
+configuration; static private and organization scopes cannot be widened.
+
+The current source catalog is process-wide. Loading a captured World removes prior
+Realm metadata and disables subsequent live Realm contributions for that process.
+Host configuration remains available. Captured source approval, World-scoped metadata
+and retained mirror/coverage receivers remain open. A producer or handler grant does
+not authorize public graph access.
+
 ## `reference/`
 
 Reference (catalog / config) data a realm **brings into the KG** — the set of entities a realm's types describe that should exist regardless of what the user has done. Where `producers/` fetch data on demand and `populate` mirrors an external system, `reference/` seeds a fixed, realm-authored dataset: a controlled vocabulary, a lookup catalog, a set of well-known entities. Each `.yml` file in `reference/` is a list of records seeded (idempotently) into the KG on world load.
