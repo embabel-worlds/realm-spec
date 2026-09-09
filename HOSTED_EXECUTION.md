@@ -280,6 +280,7 @@ Its current support is narrower than some trusted-host examples in the main spec
 | [Captured command aliases](README.md#commands) | Strict versioned metadata, owner discovery and direct chat dispatch to approved same-installation handlers. |
 | Approved provider lifecycle and durable journal delivery | Implemented for Discord, Slack and Telegram. |
 | Captured source/consumer approval and publication | Implemented with World-load source discovery. |
+| Scheduled API-to-channel handlers | Verified composition of captured schedules, approved GET operations, durable publication and consumer replay. Provider cursor persistence remains open. |
 | Captured callback to an approved sibling | Implemented within the same installation. |
 | Captured API operations and wallet bindings | Implemented for the GET profile; Movie Wasm tests cover query-key and header-key authentication. |
 | Captured Virtual Cypher and other host-resource callbacks | Refused pending retained resource receivers. |
