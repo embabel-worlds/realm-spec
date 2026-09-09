@@ -327,8 +327,8 @@ Its current support is narrower than some trusted-host examples in the main spec
 | Captured handler lenses | Versioned same-installation bindings; bounded JSON results, original-target refresh and prepared background runs. Completion and response checks retain admission; revocation clears stored data. Active work and settled storage are capped. Cache reuse is disabled. Opt-in content results hydrate owned focus under retained graph approval and select compatible built-in views; executable presentations are excluded. |
 | Legacy Realm lenses | Excluded in captured Worlds, including previously loaded definitions and retained views. Owner lenses remain available; cached results are isolated by owner. Versioned handler bindings use the captured route. |
 | Captured handler producers | Version-1 same-installation bindings, JSON batch keys and bounded record arrays. Owner precedence, retained World/approval checks, cancellation and call budgets apply. No result cache, paging or pushdown. Graph materialization preserves owner boundaries and host metadata. |
-| Collection sources and shared mirrors | Live and warmed Realm source metadata excluded in captured mode; public labels and shared mirrors require separate trusted host configuration. Captured source approval and mirror/coverage receivers remain open. |
-| Captured Virtual Cypher and other host-resource callbacks | Refused pending retained resource receivers. |
+| Collection sources and mirrors | Captured complete-snapshot receiver with separate read/storage grants, atomic private records and coverage, authority-partitioned caches and finite capacity. Public declarations need matching host policy and never publish shared nodes. |
+| Captured Virtual Cypher | Implemented owned reads and same-installation captured producers/collections with retained resource grants and rollback materialization. |
 | Owner database target approval | Adoption, upgrade and revocation implemented; runtime datasource use still needs integration. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
 | Additional dependency ecosystems, private Realm database persistence and VFS | Not implemented on this path. |
@@ -341,7 +341,7 @@ operation's contract; they do not grant permission or prove receiver availabilit
 
 
 `ctx.gateway.cypher.query({cypher, params})` reads owned graph data and returns
-`{rows, warnings}`. Pass values through `params`, as a JSON object or a JSON string.
+`{rows, warnings, coverage}`. Pass values through `params`, as a JSON object or a JSON string.
 The owner must approve `cypher_query` separately from the handler. List resources at
 `GET /realms/{realmName}/resource-approvals`; grant or revoke with
 `POST /realms/{realmName}/resource-approvals/cypher_query/{grant|revoke}` and
@@ -352,7 +352,7 @@ Every matched node must carry consistent ownership for the caller. Shared-label
 exemptions, explicit sharing, anonymous nodes, variable-length paths, collection
 construction, procedures and model-backed functions are outside this profile.
 Ordinary scalar functions and numeric aggregates are supported. Named host views,
-source mirrors and diagnostic probes are not expanded or invoked.
+global source mirrors and diagnostic probes are not expanded or invoked. Captured collections use the retained snapshot profile below.
 
 Queries use the existing scoped Cypher executor and virtual join engine. Only
 captured producers from the same installation can run. Their callbacks retain the
@@ -531,3 +531,60 @@ profile allows a lifetime of one second through 30 days, up to
 Expired/revoked indexes can be pruned at issuance; historical frames remain charged to the
 journal's finite byte budget. New grants, rotation and append use data capacity, preserving
 control reserve for revocation. Legacy records without attribution remain readable.
+
+
+## Captured collection snapshots
+
+A host may support version-1 `sources.yml` containing at most 16 sources in 64 KiB.
+Each entry binds `name`, `producer`, `label`, `identityProperty`, `partitionProperty`,
+`visibility`, `sync` and `completeness` to verified capture bytes. The producer must be
+a captured same-installation handler binding whose joins target that label and partition
+field. The identity must agree with the captured query type identity. Supported sync is
+`{strategy: mirror, refresh: full_rewalk, trigger: on_first_use}`; completeness is exactly
+`{declaredTotal: '$.total', aggregatesRequireComplete: true}`. Unknown fields and policies
+are refused. Organization sources and explicit anchors are outside this profile.
+
+The owner separately approves `cypher_query`, `source.read.<name>` and
+`source.mirror.<name>` through the resource approval API, in addition to both querying
+and producer handlers and any API operations. Every acquisition, read, refresh, write,
+coverage read and final result retains owner, World, installation, capture digest,
+revision, producer and source/storage grants. Revocation or changed retained authority
+refuses warm reads as well as new acquisition. A public declaration additionally needs
+an exact host-configured public source policy for its producer, label, identity,
+partition, sync and completeness. It does not authorize shared publication. Existing
+host public-dataset publication remains a separate explicit host decision.
+
+The producer receives one partition key and returns `{records,total}`. The total must
+match the distinct record count. Missing totals, partial results, duplicate IDs, wrong
+partitions and reserved ownership/sharing/internal properties refuse before persistence.
+Empty complete partitions use an empty array and total zero. Each snapshot is at most
+512 rows / 1 MiB; each row has at most 64 scalar properties, and text values are at most
+65,536 characters. Identity and partition strings are bounded. A query fetch accepts
+at most 16 partition keys and 1,024 rows; a result includes at most 64 coverage entries.
+Only complete snapshots may reach query materialization or aggregate evaluation.
+
+Records and measured coverage are one atomically committed, privately addressed value.
+The address includes the entire retained authority, source and partition. It cannot be
+selected by guest-supplied owner or storage identifiers. No private cache node is visible
+to ordinary guest queries, and no source row merges into preexisting application nodes.
+Queries materialize owner- and run-specific virtual nodes and roll them back, including
+when a foreign, public or unowned node shares a record ID. The returned `coverage` list
+contains source, partition, held count, declared total, `COMPLETE` status and acquisition
+time. Global source/coverage registries are not consulted by this receiver.
+
+The Me graph adapter permits 16 concurrent acquisitions, 32 retained partitions per
+source revision and 256 partitions / 16 MiB of record payload per host. It refuses
+competing or recursive acquisition of the same partition. Snapshots expire after 15
+minutes; callers can request full refresh of accessed sources with
+`refreshSources: ["source-name"]` on `cypher_query`. Writes reclaim expired entries and
+superseded revisions of that installation/source. Otherwise a full store refuses.
+These limits cover retained application payload and finite metadata; graph-engine logs
+and physical overhead are host infrastructure concerns. Neo4j uniqueness constraints
+and a common transactional lock serialize capacity checks. Graph operations have a
+15-second server deadline. Hosts unable to provide bounded atomic storage refuse this
+profile rather than falling back to the legacy shared mirror writer.
+
+The Docker adapter permits two active invocations per installation within the configured
+global container cap (default four), allowing a querying handler to call its captured
+producer. Further nesting and exhausted global capacity refuse immediately. Failed
+container cleanup retains its capacity reservation. The isolation profile is unchanged.
