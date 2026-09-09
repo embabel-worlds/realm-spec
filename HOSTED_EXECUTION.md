@@ -153,8 +153,10 @@ headers, server overrides or an alternative URL.
 Owner preview shows the captured digest, installation revision, operation destination and
 required wallet key name. Grant and revoke requests select the displayed installation and
 revision. Granting an operation binds the current wallet value. Changing or deleting that
-value invalidates its approval; a replacement requires approval again. Revocation remains
-available after key deletion. These mutations advance the Realm installation revision, so
+value prevents its use while the value is absent or differs from the approved value.
+A different value requires approval. Restoring the identical approved value resumes access;
+explicit operation or Realm revocation prevents that. Revocation remains available after
+key deletion. These mutations advance the Realm installation revision, so
 older retained invocations become stale.
 
 The host checks the retained handler, consumer and operation grants and current credential
@@ -177,7 +179,10 @@ The reference profile supports:
 | Response | At most 1 MiB of strict UTF-8 JSON; common credential echoes and diagnostic exception text are refused. |
 
 The initial implementation rejects unsupported auth schemes, parameter references, alternative
-servers and mutations. It does not provide a general credential lookup or a complete OpenAPI
+servers, mutations and credential injection into HTTP framing/control headers. In captured
+Worlds, live Realm API declarations do not create legacy tools or trigger credential
+resolution. API calls use approved captured handlers; explicitly owner-authored World API
+entries keep their separate owner path. It does not provide a general credential lookup or a complete OpenAPI
 schema validator. Producer and lens use of these operations requires the same retained
 resource boundary; handler support alone does not establish that integration.
 
