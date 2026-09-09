@@ -2441,7 +2441,7 @@ A channel is a general data pipe, including provider messages, webhooks, databas
 and Realm-produced events. It may carry data in either direction. `channels/` declares
 provider connector drafts; `data-pipes.yml` declares captured sources and consumers. See the
 [hosted data-pipe contract](HOSTED_EXECUTION.md#data-pipes) for source identity, grants,
-publication, receipts and checkpoints.
+publication, atomic polling positions, receipts and checkpoints.
 
 The governed host requires owner approval and owner-scoped credential references before
 starting a provider connector. A Realm declaration, `auto-start` value or process environment

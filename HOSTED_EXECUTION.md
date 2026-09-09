@@ -93,6 +93,46 @@ The governed reference implementation accepts at most 64 KiB UTF-8 JSON with nes
 32. It rejects extra fields, duplicate keys, trailing JSON and invalid Unicode. Publication
 requires a retained captured invocation; there is no generic HTTP publication tool.
 
+## Polling positions
+
+A captured poller reads its source cursor with `gateway.channel.position({source})`, which
+returns `{position: string | null}`. It commits a page through `gateway.channel.publishBatch`:
+
+```typescript
+const { position } = await gateway.channel.position({ source: "changes" });
+const receipt = await gateway.channel.publishBatch({
+  source: "changes",
+  batchId: page.id,
+  expectedPosition: position,
+  nextPosition: page.nextCursor,
+  events: page.events,
+});
+```
+
+Each event has `eventId`, `streamId`, `occurredAt` and object `payload`, with the same meaning
+as single publication. All batch fields are required; only `expectedPosition` may be null.
+The host appends the events and cursor change in one journal frame. A mismatched expected
+position refuses the batch. An empty event list may advance the cursor. The receipt contains
+`receiptId`, `offsets` and `replayed`.
+
+Keep the batch ID, event identities, original timestamps, payloads and both positions stable
+when retrying a page. An identical retry returns its original receipt; changed content under
+the same batch ID is refused. A frame may already be durable when admission is revoked and
+the response is refused. Admission is checked after force and before returning to the guest;
+a retry still needs current authority. Receipt replay does not repeat the cursor update.
+
+Position reads and batches require the current handler and same-installation source grant.
+Requests cannot select an owner, World, installation or event type. A cursor belongs to the
+logical source and its declared partition stream, not an event's `streamId`. Approving an
+updated artifact preserves that logical cursor. A provider change or incompatible cursor
+format needs a new source/stream identity or an explicit migration.
+
+The reference host limits position requests to 8 KiB of UTF-8 JSON and batches to 1 MiB with
+at most 256 events. Positions are nonblank opaque strings of at most 4 KiB UTF-8, without NUL.
+Strict JSON parsing, journal payload limits and host/Realm storage caps also apply. These
+callbacks work through Wasm and Docker. They support Realm-authored pollers using approved
+schedules and API operations; automatic provider polling and webhook adapters remain separate.
+
 ## Replay
 
 A consumer receives `offset`, `eventId`, `streamId`, `type`, `occurredAt`, `gap` and `payload`.
