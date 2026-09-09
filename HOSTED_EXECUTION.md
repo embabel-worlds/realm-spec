@@ -208,9 +208,40 @@ and resolves package main/index, subpaths, relative modules and cycles inside th
 Missing imports have no host fallback. Package exports maps, ESM and native module loading
 are unsupported. Bundled code receives no additional authority or credentials.
 
-Dependency and storage capabilities require explicit host support. Unsupported requirements
-must be rejected before execution. Portable dependency negotiation and private database
-persistence remain open. This document does not introduce dependency or VFS syntax.
+A Realm can declare exact package requirements in `dependencies/manifest.json`:
+
+```json
+{
+  "version": 1,
+  "runtime": "typescript",
+  "dependencies": [
+    { "ecosystem": "npm", "name": "formatters", "version": "1.2.3" }
+  ]
+}
+```
+
+The document is limited to 64 KiB and 128 unique ecosystem/name pairs. Nonempty
+requirements need version 1. Unknown fields, duplicates, malformed values and version
+ranges are refused. The optional runtime marker retains its existing language meaning.
+An absent or empty dependency list requests no host packages.
+
+The selected backend must admit every requirement before binding and execution. A backend
+with no package support refuses nonempty requests. Requirements remain bound to captured
+program content; editing source files does not change them. Declarations do not select a
+sandbox, registry, command, path or credential.
+
+The reference Docker adapter accepts bundled npm packages with matching name and exact
+semantic version in `dist/node_modules/<name>/package.json`. Metadata is strict JSON with
+a 64 KiB limit. The entrypoint must exist within the package, using supported CommonJS/JSON
+file or index resolution. Exports maps, ESM and `gypfile: true` are refused; native modules
+remain unsupported. These declarations check required root packages; they do not limit
+imports from other modules already included in the same bounded capture.
+
+No download, installation or registry resolution occurs. Libraries compiled into a Wasm
+program remain part of that artifact; the reference Wasm backend supplies no host packages.
+Other ecosystems, runtime provisioning and private database persistence remain open.
+Unsupported storage requirements must be rejected before handler execution. No VFS syntax
+is introduced here.
 
 ## Reference implementation
 
