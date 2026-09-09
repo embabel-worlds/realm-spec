@@ -336,3 +336,42 @@ Its current support is narrower than some trusted-host examples in the main spec
 
 Hosts must state which profile and capabilities they support. Generated types describe an
 operation's contract; they do not grant permission or prove receiver availability.
+
+## Me captured graph-query profile
+
+
+`ctx.gateway.cypher.query({cypher, params})` reads owned graph data and returns
+`{rows, warnings}`. Pass values through `params`, as a JSON object or a JSON string.
+The owner must approve `cypher_query` separately from the handler. List resources at
+`GET /realms/{realmName}/resource-approvals`; grant or revoke with
+`POST /realms/{realmName}/resource-approvals/cypher_query/{grant|revoke}` and
+`{installationId, expectedRevision}`. Each change advances the installation revision.
+
+Name every node and end the statement with a literal `LIMIT` between 1 and 512.
+Every matched node must carry consistent ownership for the caller. Shared-label
+exemptions, explicit sharing, anonymous nodes, variable-length paths, collection
+construction, procedures and model-backed functions are outside this profile.
+Ordinary scalar functions and numeric aggregates are supported. Named host views,
+source mirrors and diagnostic probes are not expanded or invoked.
+
+Queries use the existing scoped Cypher executor and virtual join engine. Only
+captured producers from the same installation can run. Their callbacks retain the
+querying handler's admission and each API operation still needs its own approval.
+Legacy SQL, model-backed producers and implicit identity enrichment are excluded.
+Producer records have no shared query cache, and materialization is rolled back.
+
+Requests are capped at 128 KiB, with 16 KiB statements and 128 parameters. Results
+are capped at 512 rows and 1 MiB. The Neo4j runner uses a 15-second transaction
+limit and buffers at most 4,096 rows or 4 MiB per internal statement. These buffering
+limits apply after driver decoding; database memory limits remain deployment
+configuration. Engines without a bounded runner refuse captured queries.
+
+```typescript
+const result = await ctx.gateway.cypher.query({
+  cypher: "MATCH (b:Bill) WHERE b.status = $status RETURN b LIMIT 100",
+  params: { status: "unpaid" },
+});
+```
+
+`CapturedRealmQueriesTest` covers real Wasm and Docker, owned graph reads, retained grants,
+same-installation producer materialization, rollback and nested API readmission.

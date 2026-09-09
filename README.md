@@ -2216,7 +2216,11 @@ names or joins, aliases, tags and undeclared handlers are refused. These are hos
 profile limits, independent of backend placement.
 
 A handler grant does not grant API or datasource access. Each host call still needs
-its resource approval. The guest query receiver remains implementation work.
+its resource approval. Me supports an explicitly approved owned-data query profile:
+`gateway.cypher.query({cypher, params})` returns `{rows, warnings}` and invokes only
+same-installation captured producers. Statements require named owned nodes and a
+final literal LIMIT from 1 to 512. See [hosted execution](HOSTED_EXECUTION.md#me-captured-graph-query-profile)
+for limits, owner approval and excluded host operations.
 
 ## `mcp/`
 
