@@ -1808,9 +1808,10 @@ Two consequences are normative:
 - **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world, context, principal, or execution. Realms deliberately share declared types inside a world; graph data is readable only through the current context/access policy or an explicit policy-authorized bridge. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world-, context-, and where principal-dependent, principal-scoped.
 - **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
 
-The host is placement, not the Realm Function contract. Types, producers, lenses, APIs, events, and prompts load
-the same way everywhere. Artifacts do not: each host runs a different artifact, and a function must fit
-that host's capability set. A handler that needs npm does not become a wasm function by relabeling it.
+The Realm Function contract is independent of placement. Each host declares which executable
+and declarative surfaces it supports, and admits them against the captured Realm and resource
+grants. Parsing a producer, lens, API or event declaration does not authorize its execution.
+A handler that needs npm does not become a Wasm function by relabeling it.
 Two hosts exist:
 
 | Host | What runs | Choose it when |
@@ -2115,7 +2116,13 @@ description: "Translates document batches on demand."
 - The `{ result }` / `{ error }` envelope, at the function boundary and on every gateway call.
 - Signal identity: a signal dispatched by a wasm-hosted function is indistinguishable downstream from the same signal dispatched by a docker-hosted one.
 - The identity model: execution is bound independently to a world and acting principal by the host; no host puts a credential or scope key inside the unit.
-- Declarative content: types, producers, lenses, APIs, events, and prompts load whether or not the executable surface can.
+- Declarative schemas remain independent of placement. Activating a declaration requires host support and the applicable Realm and resource approvals.
+
+The current Me captured-execution profile excludes producers and virtual joins loaded from live
+Realm files. Owner-authored definitions remain available. Producer execution and cache reuse
+retain World and declaration checks; shared cache partitions include both. The legacy Wasm
+producer example demonstrates the compatibility route, not captured resource admission.
+Captured producer declarations and the guest query receiver remain implementation work.
 
 ## `mcp/`
 
