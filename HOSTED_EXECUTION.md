@@ -283,6 +283,7 @@ Its current support is narrower than some trusted-host examples in the main spec
 | Scheduled API-to-channel handlers | Verified composition of captured schedules, approved GET operations, durable publication and consumer replay. Provider cursor persistence remains open. |
 | Captured callback to an approved sibling | Implemented within the same installation. |
 | Captured API operations and wallet bindings | Implemented for the GET profile; Movie Wasm tests cover query-key and header-key authentication. |
+| Legacy Realm lenses | Excluded in captured Worlds, including previously loaded definitions and retained views. Owner lenses remain available; cached results are isolated by owner. Captured handler lenses remain open. |
 | Captured Virtual Cypher and other host-resource callbacks | Refused pending retained resource receivers. |
 | Owner database target approval | Adoption, upgrade and revocation implemented; runtime datasource use still needs integration. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
