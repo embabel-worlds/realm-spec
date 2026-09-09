@@ -440,3 +440,49 @@ Connect, then reference its target ID in Virtual Cypher producers or typed opera
 Raw SQL remains excluded from captured guest operations. Private SQLite remains a separate
 bounded dependency use case. Tests for legacy SQL compilation and local database behavior
 use an explicit test-only connection adapter; production has no legacy connection fallback.
+
+## Captured browser apps
+
+A browser app needs its own explicit approval for an exact captured entry point. Handler
+approval alone does not approve an app. Its HTML and handler allowlist belong to the same
+World, installation and digest as that approval.
+
+The reference browser profile accepts `apps/<name>.html` (or `.htm`) with a matching
+`apps/<name>.html.app.json` declaration:
+
+```json
+{"version":1,"handlers":["notes.list"]}
+```
+
+Only `version` and `handlers` are accepted. Handler names are unique and must appear in the
+same captured handler manifest. The reference limits are 32 apps per capture, 32 handlers
+per app, 8 KiB per declaration and 1 MiB of UTF-8 HTML per entry point. Unknown fields,
+duplicate JSON keys and unsupported versions are refused.
+
+The browser receives a `realm.call(handler, arguments)` function. It returns a promise for
+the handler's JSON result, or rejects when the operation is refused or unavailable. Arguments
+must be a JSON object. The selected handler must be declared by the app and independently
+approved. Its API, query and channel capabilities retain their separate grants. A request
+cannot select an owner, World, capture or installation through its arguments.
+
+Realm HTML runs in an opaque browser sandbox. It cannot read the owner page's storage,
+cookies or DOM, call arbitrary owner APIs, open popups or submit forms. The reference
+profile requires self-contained HTML with inline or embedded assets; direct network access
+and the general owner app runtime are unavailable. Bundle external code and styles during
+authoring. Realm JavaScript and templates cannot be imported into owner-origin pages through
+app-serving URLs. Owner-authored workspace apps and trusted World-template apps retain
+the host's owner app runtime.
+
+The host mediates calls through a document-bound message channel and a retained session.
+App and handler approval, installation revision and expiry remain attached to nested calls,
+host callbacks and final result release. Revocation or any installation revision change
+invalidates the session. The reference host permits one active call, up to 256 calls and a
+15-minute lifetime per session, with at most 16 sessions per owner and 256 per host. Restart
+discards sessions. Opening a new session requires current approval. The bridge does not retry
+effects automatically; a refused response cannot undo an effect that already completed.
+
+In the reference owner API, `GET /api/v1/realm-browser/{realm}/approvals` lists the current
+installation, revision, digest, app names, declared handlers and approval state.
+`POST /api/v1/realm-browser/{realm}/approvals/{name}/grant` and `/revoke` take exactly
+`installationId` and `expectedRevision`. A stale revision returns 409. Open an approved app
+at `/apps/{realm}/{name}`. Existing flat links retain name-resolution precedence.
