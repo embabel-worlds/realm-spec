@@ -2204,7 +2204,8 @@ The binding retains an approved handler from the same installation. The handler
 receives a JSON object whose `keyArgument` contains an array of string keys and
 returns an array of record objects. Declare the target type and identity separately;
 `recordKeyField` links records to their matching anchor keys. The host owns graph
-scope and overlay metadata; records cannot supply `userId` or `__vc*` properties.
+scope and overlay metadata; records cannot supply `userId`, `worldId`, `workspaceId`,
+`visibleTo` or `__vc*` properties. Sharing uses an explicit host operation.
 Owner producer names take precedence and suppress conflicting captured joins.
 
 This profile has no caching, paging or predicate pushdown. Me limits each fetch to
