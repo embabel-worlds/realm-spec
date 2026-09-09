@@ -2110,6 +2110,45 @@ description: "Translates document batches on demand."
 
 `isolate` is not part of this spec. It is here to state the test every proposed host must pass: if supporting it forces a realm author to change anything beyond `host:`, the design is wrong.
 
+
+### Me captured handler schema profile
+
+The host checks manifest schemas before binding an approved handler, validates input
+before entering its backend, and validates the unwrapped result before returning it.
+This applies to direct calls, schedules, channels, lenses and producers. A method's
+schema describes `args`; its transport envelope requires object-valued `self` and
+`args` and accepts no other fields. Validation does not coerce values or add defaults.
+
+The current profile supports these JSON Schema keywords:
+
+| Contract | Supported fields |
+| --- | --- |
+| Types | `type`, including nullable type arrays |
+| Objects | `properties`, `required`, `additionalProperties`, `minProperties`, `maxProperties` |
+| Arrays | One `items` schema, `minItems`, `maxItems` |
+| Strings | `minLength`, `maxLength`, measured in Unicode code points |
+| Numbers | `minimum`, `maximum`, numeric `exclusiveMinimum`/`exclusiveMaximum`, positive `multipleOf` |
+| Values and alternatives | Scalar `enum`/`const`, `allOf`, `anyOf`, `oneOf`, `not`, nested boolean schemas |
+
+`title`, `description`, `default`, `examples`, `readOnly`, `writeOnly` and `deprecated`
+are annotations. `$schema` may identify draft 2020-12 or draft-07. Unsupported
+keywords, including references, definitions, patterns, formats, tuples and
+`uniqueItems`, refuse the binding. The host performs no schema network or file access.
+This is a bounded subset of [JSON Schema validation](https://json-schema.org/draft/2020-12/json-schema-validation), not a claim of full dialect support.
+
+Each schema is limited to 64 KiB, 2,048 schema nodes and 16 nested schema levels.
+Objects declare at most 256 properties or required names; enums contain at most
+256 scalar values; each combination contains at most 16 alternatives. Input and
+output are each limited to 1 MiB, 32 JSON nesting levels, 65,536 characters per
+string and 100,000 JSON nodes. Numeric precision and absolute decimal scale are
+limited to 1,000. Validation allows 100,000 steps; exceeding a limit refuses the call.
+An empty schema still permits any value within these limits, while function input
+must remain an object. Backend and surface limits can be stricter.
+
+Malformed schemas, invalid values and exhausted limits produce a fixed refusal
+without returning schema or payload contents. Final Realm admission is checked again
+after output validation. Validation cannot reverse effects the handler already made.
+
 ### What placement never changes
 
 - Function names, namespaces, schemas, and the manifest format.

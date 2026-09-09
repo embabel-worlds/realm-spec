@@ -211,8 +211,9 @@ shared producer, enrichment, query-bound-operation and generic signal catalogs e
 direct captured API tools until those callers carry retained authority. A legacy Realm
 callback cannot use a direct owner tool to bypass its captured callback requirements.
 Explicitly owner-authored World APIs keep their separate path. The API profile provides
-neither a general credential lookup nor complete OpenAPI schema validation. Producer and
-graph-backed lens integration remains open.
+neither a general credential lookup nor complete OpenAPI schema validation. Captured
+handler producers can use the same approved API receiver. Graph-backed lens integration
+remains open.
 
 ### Result admission
 
@@ -276,7 +277,7 @@ Its current support is narrower than some trusted-host examples in the main spec
 
 | Capability | State |
 | --- | --- |
-| Captured Wasm and Docker handlers, type methods and schedules | Retained approval checks; scheduled calls also require the action process caller to match the owner World. |
+| Captured Wasm and Docker handlers, type methods and schedules | Retained approval checks; scheduled calls also require the action process caller to match the owner World. The bounded handler schema profile validates inputs before dispatch and outputs before final admission. |
 | [Captured command aliases](README.md#commands) | Strict versioned metadata, owner discovery and direct chat dispatch to approved same-installation handlers. |
 | Approved provider lifecycle and durable journal delivery | Implemented for Discord, Slack and Telegram. |
 | Captured source/consumer approval and publication | Implemented with World-load source discovery. |
@@ -285,10 +286,11 @@ Its current support is narrower than some trusted-host examples in the main spec
 | Captured API operations and wallet bindings | Implemented for the GET profile; Movie Wasm tests cover query-key and header-key authentication. |
 | Captured handler lenses | Versioned same-installation bindings; synchronous bounded JSON results, original-target refresh and approval checks on reads. Cache reuse and deferred result storage are disabled; graph hydration and custom presentations remain open. |
 | Legacy Realm lenses | Excluded in captured Worlds, including previously loaded definitions and retained views. Owner lenses remain available; cached results are isolated by owner. Versioned handler bindings use the captured route. |
+| Captured handler producers | Version-1 same-installation bindings, JSON batch keys and bounded record arrays. Owner precedence, retained World/approval checks, cancellation and call budgets apply. No result cache, paging or pushdown. Graph materialization preserves owner boundaries and host metadata. |
 | Captured Virtual Cypher and other host-resource callbacks | Refused pending retained resource receivers. |
 | Owner database target approval | Adoption, upgrade and revocation implemented; runtime datasource use still needs integration. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
-| Dependency negotiation, private Realm database persistence and VFS | Not implemented on this path. |
+| Additional dependency ecosystems, private Realm database persistence and VFS | Not implemented on this path. |
 | Firecracker, generalized remote backends and resumable arbitrary computation | Not implemented. |
 
 Hosts must state which profile and capabilities they support. Generated types describe an
