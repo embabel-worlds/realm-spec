@@ -973,16 +973,25 @@ undeclared handlers are refused. Hosts accept at most 32 flat `.yml`/`.yaml` fil
 8 KiB each and 64 KiB aggregate. IDs conflicting across installations are unavailable.
 Owner World definitions and owner saves take precedence.
 
-A synchronous opening passes JSON object arguments through the retained handler.
+An opening passes JSON object arguments through the retained handler.
 The handler returns a JSON object within 1 MiB, 32 nesting levels and 65,536
 characters per string. Results are data only; graph entities, executable references,
-custom presentations and background result storage are outside this profile.
+and custom presentations are outside this profile.
 The host retains the same target and serialized arguments through refresh, rechecks
 owner World and approval on reads, and disables cache reuse. API calls inside the
 handler require their own operation and credential approvals.
 
 This is independent of the selected sandbox backend. The Me implementation exposes
-it through synchronous `/api/v1/lenses/{id}/invoke` and the JSON view endpoint.
+it through `/api/v1/lenses/{id}/invoke` and the JSON view endpoint. Add
+`background=true` or `waitSeconds` for deferred execution. Preparation retains the
+selected target and serialized arguments; queued work cannot select a new revision.
+Completion and every result response recheck admission. Revocation clears stored
+data; new approval cannot revive an old run. Results and handles are in memory.
+
+The reference host limits active work to 64 runs globally and eight per owner,
+returning HTTP 429 at capacity. Cancelled workers consume capacity until they exit.
+It retains up to 200 settled runs and cancels overdue work using the configured
+background timeout. Cancellation cannot undo completed effects.
 See [hosted execution](HOSTED_EXECUTION.md) for supported routes and limits.
 
 ### Host-specific legacy definitions
