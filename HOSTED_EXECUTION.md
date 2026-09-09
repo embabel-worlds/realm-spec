@@ -212,7 +212,7 @@ direct captured API tools until those callers carry retained authority. A legacy
 callback cannot use a direct owner tool to bypass its captured callback requirements.
 Explicitly owner-authored World APIs keep their separate path. The API profile provides
 neither a general credential lookup nor complete OpenAPI schema validation. Producer and
-lens integration remains open.
+graph-backed lens integration remains open.
 
 ### Result admission
 
@@ -283,7 +283,8 @@ Its current support is narrower than some trusted-host examples in the main spec
 | Scheduled API-to-channel handlers | Verified composition of captured schedules, approved GET operations, durable publication and consumer replay. Provider cursor persistence remains open. |
 | Captured callback to an approved sibling | Implemented within the same installation. |
 | Captured API operations and wallet bindings | Implemented for the GET profile; Movie Wasm tests cover query-key and header-key authentication. |
-| Legacy Realm lenses | Excluded in captured Worlds, including previously loaded definitions and retained views. Owner lenses remain available; cached results are isolated by owner. Captured handler lenses remain open. |
+| Captured handler lenses | Versioned same-installation bindings; synchronous bounded JSON results, original-target refresh and approval checks on reads. Cache reuse and deferred result storage are disabled; graph hydration and custom presentations remain open. |
+| Legacy Realm lenses | Excluded in captured Worlds, including previously loaded definitions and retained views. Owner lenses remain available; cached results are isolated by owner. Versioned handler bindings use the captured route. |
 | Captured Virtual Cypher and other host-resource callbacks | Refused pending retained resource receivers. |
 | Owner database target approval | Adoption, upgrade and revocation implemented; runtime datasource use still needs integration. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |

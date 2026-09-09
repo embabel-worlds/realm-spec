@@ -48,7 +48,7 @@ realm-name/
 │   └── my-reference.yml
 ├── views/                # Named Cypher views (YAML, optional) — appear in the console Views list
 │   └── my-views.yml
-├── lenses/               # Named focused experiences (YAML, optional) — CypherScript/fixed/anchor/module
+├── lenses/               # Named lenses (YAML, optional) — captured handlers or host-specific definitions
 │   └── my-lens.yml
 ├── apis/                 # API entries (YAML)
 │   └── my-api.yml
@@ -948,9 +948,48 @@ for (const p of busy) {
 }
 ```
 
-`cypher` is your own query and `params` is a JSON **string** (bind values as `$name`; never string-concatenate). Reads and `gateway.ai.*` are always safe; guard every write with `if (!dryRun)` in a handler. The same model underlies **lenses**: stored, named CypherScript or typed programs that open focused views. A realm can ship reusable lenses in `lenses/`; a world can override them by id.
+`params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below, and currently refuse Virtual Cypher calls until its retained resource receiver is available.
 
 ## `lenses/`
+
+### Captured handler binding
+
+A captured host uses versioned metadata to bind a lens to an approved handler in the
+same installation. The declaration supplies no execution capability by itself.
+
+```yaml
+# lenses/movie-details.yml
+version: 1
+id: movie-details
+name: Movie details
+handler: movie.movieDetail
+```
+
+Required fields are `version`, `id`, `name` and `handler`; `description` is optional.
+The ID is a lowercase letter followed by lowercase letters, digits or hyphens, at
+most 64 characters. The name is at most 128 characters; description at most 512.
+Fields are strict. Aliases, tags, malformed UTF-8, nested paths, duplicate IDs and
+undeclared handlers are refused. Hosts accept at most 32 flat `.yml`/`.yaml` files,
+8 KiB each and 64 KiB aggregate. IDs conflicting across installations are unavailable.
+Owner World definitions and owner saves take precedence.
+
+A synchronous opening passes JSON object arguments through the retained handler.
+The handler returns a JSON object within 1 MiB, 32 nesting levels and 65,536
+characters per string. Results are data only; graph entities, executable references,
+custom presentations and background result storage are outside this profile.
+The host retains the same target and serialized arguments through refresh, rechecks
+owner World and approval on reads, and disables cache reuse. API calls inside the
+handler require their own operation and credential approvals.
+
+This is independent of the selected sandbox backend. The Me implementation exposes
+it through synchronous `/api/v1/lenses/{id}/invoke` and the JSON view endpoint.
+See [hosted execution](HOSTED_EXECUTION.md) for supported routes and limits.
+
+### Host-specific legacy definitions
+
+The definitions below describe the compatibility runtime. Captured Worlds do not
+execute Realm-provided legacy module, CypherScript, fixed-query or anchor lenses.
+
 
 Named focused experiences a realm installs alongside its types, producers and apps. Each `.yml`
 file serializes one Lens. The host discovers world-authored lenses first and then installed-realm
