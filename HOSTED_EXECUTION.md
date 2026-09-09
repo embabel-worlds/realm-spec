@@ -109,6 +109,18 @@ After restart, replay begins when the owner World loads through startup warming 
 access. Provider connectors retain a separate approved lifecycle. Source discovery starts
 no guest execution; the bounded replay scheduler performs delivery.
 
+## Legacy event declarations
+
+The reference host excludes live Realm `events/` files from runtime loading when captured
+execution is selected. This covers scheduled polls, manual polls, webhook event projection
+and declared-signal discovery, including a World previously loaded in compatibility mode.
+The host checks the execution model before resolving live Realm directories.
+
+Captured data-pipe publication and approved channel consumers keep their existing paths.
+Generic captured polling and webhook event manifests remain unsupported. Explicit owner
+webhook actions use a separate route. Declaration reads for authoring do not register a
+source or grant execution.
+
 ## Capacity
 
 Every Realm has finite host-enforced execution and storage limits. A dependency declaration
