@@ -375,3 +375,32 @@ const result = await ctx.gateway.cypher.query({
 
 `CapturedRealmQueriesTest` covers real Wasm and Docker, owned graph reads, retained grants,
 same-installation producer materialization, rollback and nested API readmission.
+
+## Authenticated source ingress
+
+An authenticated owner can append an external event to an approved captured source:
+
+```http
+POST /api/v1/channels/sources/{realmName}/{sourceName}/events
+Content-Type: application/json
+```
+
+```json
+{"installationId":"<approved installation>","sourceRevision":1,"event":{"eventId":"provider-event-42","streamId":"room-7","occurredAt":"2026-09-09T00:00:00Z","payload":{"text":"hello"}}}
+```
+
+Read installation and source revision from the source approval endpoint. Source revisions
+survive unrelated handler approval changes; revoking and granting the source creates a new
+revision. The owner and selected World come from authentication, and the stream and event
+type come from the verified declaration. Payload fields cannot override that authority.
+The request is strict JSON, at most 64 KiB, with the journal's existing event limits.
+
+HTTP 200 returns `{receiptId, offset, replayed}` after durable append. Retry the exact event
+ID and content after an uncertain response; a restart returns the same receipt. Changed
+content for an existing event ID returns 409. Capacity returns 429 and storage failure 503.
+Admission is checked again during the write. Acknowledgment confirms storage, not successful
+consumer execution. World load restores approved source bindings and replays pending offers.
+
+This route uses the host's owner authentication. It does not mint an ingress-only token or
+verify provider-specific webhook signatures. Providers that require their own signature or
+reply protocol need a host adapter. Source IDs and payload fields are not credentials.

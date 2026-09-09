@@ -3186,3 +3186,6 @@ compatibility or conformance claims using the "Embabel" or "Virtual Cypher" mark
 written permission.
 
 See [NOTICE.md](NOTICE.md) for the full statement of rights.
+
+The Me host also accepts [authenticated external source events](HOSTED_EXECUTION.md#authenticated-source-ingress)
+under the same captured source approval and durable receipt contract.
