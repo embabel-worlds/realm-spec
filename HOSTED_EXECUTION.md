@@ -486,3 +486,48 @@ installation, revision, digest, app names, declared handlers and approval state.
 `POST /api/v1/realm-browser/{realm}/approvals/{name}/grant` and `/revoke` take exactly
 `installationId` and `expectedRevision`. A stale revision returns 409. Open an approved app
 at `/apps/{realm}/{name}`. Existing flat links retain name-resolution precedence.
+
+## Delegated source ingress
+
+A host may issue an append-only bearer credential for one approved captured source. The
+credential MUST retain the owner World, installation identity, capture digest and exact
+source revision. Possession authorizes only source append, never owner authentication,
+approval changes, reads or unrelated routes. Source removal/reapproval, capture change and
+reinstall invalidate the old binding. Unrelated approval changes may preserve source
+revision. Provider webhook signatures require a separate profile.
+
+Only a cryptographic verifier of a high-entropy secret may persist. The host returns the
+secret once at issue/rotation, does not expose it in metadata listings, and requires secure
+transport. Credentials travel in the Authorization header, not event payloads or query
+parameters. The host derives attribution and limits independently of untrusted event data.
+
+Append MUST commit event, attribution, receipt and quota consumption atomically. Exact
+response-loss retries return the same receipt without spending quota again. Rotation MUST
+invalidate the old verifier while preserving delegation identity, expiry, quota and retry
+identity. Expiry and revocation deny new appends and receipt replay; a recorded event does
+not restore authority. A different delegation cannot reuse another submitter's event ID to
+claim its receipt. Consumers require their own current source/consumer admission.
+
+### Me delegated-ingress profile
+
+Owner endpoints are `/api/v1/channels/sources/{realmName}/{sourceName}/delegations` (GET
+metadata, POST issue), with `/{id}/rotate` and `/{id}/revoke` POST operations. Issue fields
+are exactly `installationId`, `sourceRevision`, `label`, `expiresInSeconds`, `maxEvents`.
+Rotation/revocation require exactly `installationId`, `sourceRevision`, `expectedGeneration`.
+Issue and rotation return `{delegation, token}` with no-store caching; metadata includes ID,
+label, expiry, quota, accepted-event count, generation and revocation status.
+
+`POST /api/v1/channel-ingress/delegated/{id}/events` accepts the bearer and exactly
+`eventId`, `streamId`, `occurredAt`, `payload`. The receiver supplies declared event type and
+host attribution. It returns `{receiptId, offset, replayed}` after durable storage. Quota
+exhaustion returns 429; changed event content or conflicting generation returns 409. Failed
+authority or storage checks return refusal, never an unverified success receipt. A response
+refusal can follow a completed append if authority changes during durable IO.
+
+The secret contains 256 random bits; the private journal stores a SHA-256 verifier. The
+profile allows a lifetime of one second through 30 days, up to
+10,000 accepted events, one event/request of at most 64 KiB, 32 indexed delegations/source,
+4,096/host and 32 concurrent token requests/service. Rotation does not renew expiry or quota.
+Expired/revoked indexes can be pruned at issuance; historical frames remain charged to the
+journal's finite byte budget. New grants, rotation and append use data capacity, preserving
+control reserve for revocation. Legacy records without attribution remain readable.
