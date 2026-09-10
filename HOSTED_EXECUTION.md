@@ -1069,12 +1069,8 @@ that failed is legible as a failure from its trace span alone, through an error 
 fixed outcome value the host chooses, so failures can be alerted on without anyone reading
 what a Realm wrote.
 
-Two limits hold today, and neither is a promise this contract makes elsewhere. The host
-tracks closing both as follow-up work. First, when a dispatch to a Realm's handler fails,
-the error message inside that failure can still reach an exported trace span, unlike the
-other Realm-authored text described above. Second, the handler name a dispatch is recorded
-under is the one the Realm declared for itself, and it is recorded before the host's own
-admission check for that dispatch runs: if that check then refuses the dispatch, the
-declared name has already been recorded rather than being replaced by the placeholder value
-an unmatched host call gets, and a declared name shaped like a plain identifier is recorded
-as it stands.
+A guest failure's own words do not reach an exported trace span's status description, name,
+attributes or events. A handler name no grant admits is represented by the host's fixed
+unresolved marker, including when the legacy handler route receives that name. These limits
+apply to the default confidential mode. An operator who enables the bounded excerpt mode
+chooses to retain escaped guest text in host logs.
