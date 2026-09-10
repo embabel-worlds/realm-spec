@@ -84,10 +84,10 @@ The host derives the owner, installation, event type and partition from the reta
 and verified declaration. `streamId` identifies a logical event stream within that partition.
 It does not select another source or World.
 
-Publication returns `{receiptId, offset, replayed}` after the durable append. Keep the event
-ID, timestamp and payload stable on retry. An identical retry returns the original receipt;
-conflicting content for the same event identity is refused. A receipt confirms acceptance,
-not completed downstream effects.
+Publication returns `{receiptId, offset, replayed}` after the durable append. Keep the
+producer identity, stream ID, event ID, timestamp and payload stable on retry. An identical
+retry returns the original receipt; conflicting content for the same retry identity is
+refused. A receipt confirms acceptance, not completed downstream effects.
 
 The governed reference implementation accepts at most 64 KiB UTF-8 JSON with nesting depth
 32 and string values up to 65,536 characters. It rejects extra fields, duplicate keys,
@@ -402,13 +402,13 @@ in the main specification:
 
 | Capability | State |
 | --- | --- |
-| Captured Wasm and Docker handlers, type methods and schedules | Retained approval checks; scheduled calls also require the action process caller to match the owner World. The bounded handler schema profile validates inputs before dispatch and outputs before final admission. |
+| Captured Wasm and Docker handlers, type methods and schedules | Retained approval checks. The bounded handler schema profile validates inputs before dispatch and outputs before final admission. |
 | [Captured command aliases](README.md#commands) | Strict versioned metadata, owner discovery and direct chat dispatch to approved same-installation handlers. |
 | Approved provider lifecycle and durable journal delivery | Implemented for Discord, Slack and Telegram. |
 | Captured source/consumer approval and publication | Implemented with World-load source discovery. |
-| Scheduled API-to-channel handlers | Verified composition of captured schedules, approved GET operations, durable publication and consumer replay, including poller cursor persistence through `gateway.channel.position`/`publishBatch`. |
+| Scheduled API-to-channel handlers | Captured schedules, approved GET operations, durable publication and consumer replay, including poller cursor persistence through `gateway.channel.position`/`publishBatch`. |
 | Captured callback to an approved sibling | Implemented within the same installation. |
-| Captured API operations and wallet bindings | Implemented for the read (GET) and write (`post`/`put`/`patch`/`delete`) profiles, each under its own grant; Movie Wasm tests cover query-key and header-key authentication. |
+| Captured API operations and wallet bindings | Implemented for the read (GET) and write (`post`/`put`/`patch`/`delete`) profiles, each under its own grant. |
 | Captured handler lenses | Versioned same-installation bindings; bounded JSON results, original-target refresh and prepared background runs. Completion and response checks retain admission; revocation clears stored data. Active work and settled storage are capped. Cache reuse is disabled. Opt-in content results hydrate owned focus under retained graph approval and select compatible built-in views; executable presentations are excluded. |
 | Legacy Realm lenses | Excluded in captured Worlds, including previously loaded definitions and retained views. Owner lenses remain available; cached results are isolated by owner. Versioned handler bindings use the captured route. |
 | Captured handler producers | Version-1 same-installation bindings, JSON batch keys and bounded record arrays. Owner precedence, retained World/approval checks, cancellation and call budgets apply. No result cache or pushdown; paging only through a declared cursor argument under a bounded page count, re-verified before every page. Graph materialization preserves owner boundaries and host metadata. |
@@ -524,10 +524,10 @@ executor's own output — the `rows` array, at most 512 entries — is checked a
 1 MiB bound; the `coverage` list is assembled and attached to the response afterward,
 without a further size check, so a response near that bound plus a coverage list
 carrying long partition identifiers can exceed 1 MiB overall, though the host's outer
-4 MiB gateway response limit still applies. The Neo4j runner uses a 15-second
-transaction limit and buffers at most 4,096 rows or 4 MiB per internal statement.
-These buffering limits apply after driver decoding; database memory limits remain
-deployment configuration. Engines without a bounded runner refuse captured queries.
+4 MiB gateway response limit still applies. A host that supports this profile limits a
+query transaction to 15 seconds and buffers at most 4,096 rows or 4 MiB per statement.
+These buffering limits apply after driver decoding; database memory limits remain deployment
+configuration. Engines without bounded query execution refuse captured queries.
 
 ```typescript
 const result = await ctx.gateway.cypher.query({
@@ -535,9 +535,6 @@ const result = await ctx.gateway.cypher.query({
   params: { status: "unpaid" },
 });
 ```
-
-Real Wasm and Docker coverage exercises owned graph reads, retained grants, same-installation
-producer materialization, rollback and nested API readmission.
 
 ### View references
 
@@ -608,11 +605,6 @@ and leaves the output unbound; the process is not aborted. Goals that name undec
 another Realm's goal are excluded with a loading problem. The owner may switch a goal off by
 name. Owner-authored planner steps keep their own trust boundary and are the way a chat
 request becomes a Realm input type; Realm `actions/` are not loaded.
-
-Me verifies this profile with real Wasm dispatch through planner selection and execution,
-the request form, refusal after revocation and for a foreign owner or World, undeclared
-types, name collisions, the owner's switch, legacy files, and the declaration limits and
-refused shapes.
 
 ## Me captured trigger profile
 
@@ -752,8 +744,9 @@ producer with no `page` declaration behaves exactly as it did before this profil
 The host refuses: a page argument equal to the key argument; a `maxPages` outside 1–16; a
 result that is not an object holding exactly `rows` and `next`; a next cursor that is not
 text or null, is empty, or carries a control character or invalid Unicode; a next cursor over
-2048 bytes; a next cursor repeating one already seen in the same fetch; more pages than declared;
-and a cumulative row count or byte total over the cap — never a silently truncated result.
+2048 bytes; a next cursor repeating one already seen in the same fetch; a non-null next cursor
+on the final permitted page; more pages than declared; and a cumulative row count or byte total
+over the cap — never a silently truncated result.
 Authority is rechecked before every page and after the last; a revocation partway through
 refuses the whole fetch, never a partial one.
 
@@ -823,8 +816,7 @@ return fixed messages without JDBC URLs, driver errors or credentials.
 Migrate old owner datasource files by selecting and approving a configured target through
 Connect, then reference its target ID in Virtual Cypher producers or typed operations.
 Raw SQL remains excluded from captured guest operations. Private SQLite remains a separate
-bounded dependency use case. Tests for legacy SQL compilation and local database behavior
-use an explicit test-only connection adapter; production has no legacy connection fallback.
+bounded dependency use case. Production has no legacy connection fallback.
 
 ## Captured browser apps
 
@@ -1005,17 +997,16 @@ this receiver, but the host's global public-source policy is still consulted whe
 a public declaration, since that policy is where the exact producer, label, identity,
 partition, sync and completeness match against a public declaration is defined.
 
-The Me graph adapter permits 16 concurrent acquisitions, 32 retained partitions per
-source revision and 256 partitions / 16 MiB of record payload per host. It refuses
+A host supporting this profile permits 16 concurrent acquisitions, 32 retained partitions
+per source revision and 256 partitions / 16 MiB of record payload per host. It refuses
 competing or recursive acquisition of the same partition. Snapshots expire after 15
 minutes; callers can request full refresh of accessed sources with
 `refreshSources: ["source-name"]` on `cypher_query`. Writes reclaim expired entries and
 superseded revisions of that installation/source. Otherwise a full store refuses.
 These limits cover retained application payload and finite metadata; graph-engine logs
-and physical overhead are host infrastructure concerns. Neo4j uniqueness constraints
-and a common transactional lock serialize capacity checks. Graph operations have a
-15-second server deadline. Hosts unable to provide bounded atomic storage refuse this
-profile rather than falling back to the legacy shared mirror writer.
+and physical overhead are host infrastructure concerns. Graph operations have a 15-second
+server deadline. Hosts unable to provide bounded atomic storage refuse this profile rather
+than falling back to the legacy shared mirror writer.
 
 The Docker adapter permits two active invocations per installation within the configured
 global container cap (default four), allowing a querying handler to call its captured
@@ -1027,8 +1018,9 @@ way. The isolation profile is unchanged.
 
 ## Observability
 
-A host tracks every dispatch and every host call it accepts on a Realm's behalf, along with
-every admission decision it makes about one, and an operator can see that activity as
+A host tracks every dispatch and every host call it accepts on a Realm's behalf after it
+passes the host's up-front shape and size validation, along with every admission decision it
+makes about one, and an operator can see that activity as
 metrics, trace spans and log lines. What the host records about one of those crossings is
 identifiers and outcomes: who owns the Realm, which World and installation it is installed
 in, which Realm and handler ran, a per-call identifier, whether the crossing succeeded,
