@@ -777,7 +777,7 @@ pushdown:
     valuePattern: '…([\w.-]+/[\w.-]+?)(?:/|$)'   # optional regex; group 1 replaces {value}
 ```
 
-So `WHERE i.html_url CONTAINS 'embabel/me'` turns `is:issue author:X {filters}` into `is:issue author:X repo:embabel/me` — one scoped search instead of fetching the author's thousands and intersecting in the graph. The mapping is declarative and source-specific; the engine knows nothing of `repo:`.
+So `WHERE i.html_url CONTAINS 'acme-corp/widgets'` turns `is:issue author:X {filters}` into `is:issue author:X repo:acme-corp/widgets` — one scoped search instead of fetching the author's thousands and intersecting in the graph. The mapping is declarative and source-specific; the engine knows nothing of `repo:`.
 
 > **Verify that a pushdown actually narrows — some sources ignore unknown filters SILENTLY.** The engine cannot tell a filter the source honoured from one it discarded: both return 200 with records. A source that responds to an unrecognised filter key by returning the *entire unfiltered collection* turns a typo, a renamed upstream field, or an optimistic guess into a full-collection scan that looks like a success — the query still returns correct rows (the graph filters what pushdown didn't), so nothing fails; you just quietly fetch everything, every time. This is real: the NSW planning feed used by `realm-nsw-property` returns all 426,096 records for a misspelled filter and never errors.
 >
@@ -957,7 +957,7 @@ for (const p of busy) {
 }
 ```
 
-`params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below, and currently refuse Virtual Cypher calls until its retained resource receiver is available.
+`params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below. Virtual Cypher calls are available to a captured handler once the owner separately approves `cypher_query`, following [the captured graph-query profile](HOSTED_EXECUTION.md#me-captured-graph-query-profile).
 
 ## `lenses/`
 
@@ -1222,11 +1222,14 @@ refuses those declarations and protects host-configured sources against replacem
 by Realm names or labels. Public source and anchor scopes require trusted host
 configuration; static private and organization scopes cannot be widened.
 
-The current source catalog is process-wide. Loading a captured World removes prior
-Realm metadata and disables subsequent live Realm contributions for that process.
-Host configuration remains available. Captured source approval, World-scoped metadata
-and retained mirror/coverage receivers remain open. A producer or handler grant does
-not authorize public graph access.
+The legacy source catalog described in this section is process-wide. Loading a captured
+World removes prior Realm metadata and disables subsequent live Realm contributions for
+that process. Host configuration remains available. This process-wide catalog itself has
+no World-scoped metadata and no retained mirror/coverage receiver of its own. Captured
+Worlds instead use the separate [captured collection snapshot
+profile](HOSTED_EXECUTION.md#captured-collection-snapshots), which already implements
+per-World source read/storage approval and a retained, authority-partitioned mirror and
+coverage receiver. A producer or handler grant does not authorize public graph access.
 
 ## `reference/`
 
@@ -2157,8 +2160,10 @@ description: "Translates document batches on demand."
 The host checks manifest schemas before binding an approved handler, validates input
 before entering its backend, and validates the unwrapped result before returning it.
 This applies to direct calls, schedules, channels, lenses and producers. A method's
-schema describes `args`; its transport envelope requires object-valued `self` and
-`args` and accepts no other fields. Validation does not coerce values or add defaults.
+schema describes `args`; its transport envelope independently requires object-valued
+`self` and accepts no fields beyond `self` and `args`, but `args` itself is typed by
+whatever schema the method declares — a method with no schema of its own admits any
+JSON value there, not only an object. Validation does not coerce values or add defaults.
 
 The current profile supports these JSON Schema keywords:
 
@@ -2227,7 +2232,9 @@ scope and overlay metadata; records cannot supply `userId`, `worldId`, `workspac
 `visibleTo` or `__vc*` properties. Sharing uses an explicit host operation.
 Owner producer names take precedence and suppress conflicting captured joins.
 
-This profile has no caching, paging or predicate pushdown. Me limits each fetch to
+This profile has no caching or predicate pushdown. A producer may declare the separate
+[paging profile](HOSTED_EXECUTION.md#me-captured-producer-paging-profile) to walk a
+handler's own cursor across multiple calls within one fetch. Me limits each fetch to
 256 keys, 2,048 characters per key, 64 KiB of encoded arguments, 1 MiB of output and
 1,024 rows. It accepts 32 flat declaration files, 8 KiB per file, 64 KiB total and
 eight joins per binding. All fields shown are required; unknown fields, duplicate
@@ -2236,7 +2243,7 @@ profile limits, independent of backend placement.
 
 A handler grant does not grant API or datasource access. Each host call still needs
 its resource approval. Me supports an explicitly approved owned-data query profile:
-`gateway.cypher.query({cypher, params})` returns `{rows, warnings}` and invokes only
+`gateway.cypher.query({cypher, params})` returns `{rows, warnings, coverage}` and invokes only
 same-installation captured producers. Statements require named owned nodes and a
 final literal LIMIT from 1 to 512. See [hosted execution](HOSTED_EXECUTION.md#me-captured-graph-query-profile)
 for limits, owner approval and excluded host operations.

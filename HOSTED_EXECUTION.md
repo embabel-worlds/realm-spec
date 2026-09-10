@@ -90,8 +90,11 @@ conflicting content for the same event identity is refused. A receipt confirms a
 not completed downstream effects.
 
 The governed reference implementation accepts at most 64 KiB UTF-8 JSON with nesting depth
-32. It rejects extra fields, duplicate keys, trailing JSON and invalid Unicode. Publication
-requires a retained captured invocation; there is no generic HTTP publication tool.
+32 and string values up to 65,536 characters. It rejects extra fields, duplicate keys,
+trailing JSON and invalid Unicode. This callback route requires a retained captured
+invocation; the owner-authenticated and delegated-bearer ingress routes below append to the
+same journal through their own authenticated identity instead, with no captured guest
+invocation in the loop. There is no generic HTTP publication tool.
 
 ## Polling positions
 
@@ -129,16 +132,23 @@ format needs a new source/stream identity or an explicit migration.
 
 The reference host limits position requests to 8 KiB of UTF-8 JSON and batches to 1 MiB with
 at most 256 events. Positions are nonblank opaque strings of at most 4 KiB UTF-8, without NUL.
-Strict JSON parsing, journal payload limits and host/Realm storage caps also apply. These
+A batch ID, event ID and stream ID are each nonblank, NUL-free and at most 256 UTF-8 bytes;
+an occurrence timestamp is bounded to 128 bytes and an event payload to 256 KiB (4 KiB when
+the event instead carries a gap marker). A duplicate event ID within the same batch refuses
+it. Strict JSON parsing, journal payload limits and host/Realm storage caps also apply. These
 callbacks work through Wasm and Docker. They support Realm-authored pollers using approved
 schedules and API operations; automatic provider polling and webhook adapters remain separate.
 
 ## Replay
 
-A consumer receives `offset`, `eventId`, `streamId`, `type`, `occurredAt`, `gap` and `payload`.
-The envelope omits host paths, credentials and authority selectors. Processing retains the
-source and consumer grants through host callbacks and nested calls. A checkpoint advances
-only after the handler succeeds and admission remains current.
+A consumer receives all seven fields by default — `offset`, `eventId`, `streamId`, `type`,
+`occurredAt`, `gap` and `payload` — unless a [declared trigger](#me-captured-trigger-profile)
+narrows the selection down to a subset of them. The envelope omits host paths, credentials
+and authority selectors. Processing retains the source and consumer grants through host
+callbacks and nested calls. A checkpoint advances only after the handler succeeds and
+admission remains current. A host retains at most 1,024 sources, and at most 128 captured
+consumers may bind to any one source; registration or delivery can refuse at these limits
+even while the journal still has byte capacity to spare.
 
 Delivery is at least once. A failed or interrupted handler keeps its durable offer for retry;
 external effects need their own stable idempotency key. A completed Signal Bus handoff does
@@ -180,8 +190,15 @@ capacity. All frames consume append capacity. Hosts may configure 0–50%; zero 
 reserve. Changing it affects new appends without rewriting existing data. A full total budget
 can still block offers or checkpoints.
 
-The host reclaims a record once every adopted consumer of its source has checkpointed past it.
-A source with no consumer keeps its records until capacity refuses new writes. Reclamation
+A record becomes eligible for reclamation once every adopted consumer of its source has
+checkpointed past it; the reference host's automatic compaction only rewrites the log once
+usage crosses a configured threshold (50% of frame capacity by default) and the rewrite
+would shrink the log by a configured minimum (10% by default) — an eligible record can sit
+unreclaimed for a while under those defaults, and automatic compaction also skips a rewrite
+when the host's temporary scratch space is unavailable. An explicit compaction request
+follows the same worthwhile-shrink check but, unlike the automatic path, refuses outright
+when scratch space is short rather than skipping silently. A source with no consumer keeps
+its records until capacity refuses new writes. Reclamation
 never changes an offset, a source position, a consumer checkpoint, a pending offer or a
 delegation, and a rewrite that fails at any step leaves either the previous log or the
 complete replacement; it never acknowledges a lost record. A consumer adopted after
@@ -189,12 +206,15 @@ reclamation starts at the retained horizon, so replay of history is best-effort 
 retained capacity. Reclamation needs bounded temporary space for the replacement within the
 host's free-space reserve; without it the host refuses as full rather than rewriting.
 
-Exact retries hold inside bounded windows after reclamation. The reference host keeps at
-least the latest 256 batch receipts per source and the identities of the last 256 reclaimed
-events: inside those windows an identical retry returns its receipt or the original offsets
-and conflicting content is refused; outside them a retry is appended as a new event. This is
-the at-least-once boundary between a host receipt and an external effect, and a positioned
-batch is still refused when its expected position is stale.
+Exact retries hold inside bounded windows after reclamation. The reference host defaults to
+keeping the latest 256 batch receipts per source, configurable from 16 through 65,536, and
+the identities of the last 256 reclaimed events, configurable from 0 through 65,536: inside those
+windows an identical retry returns its receipt or the original offsets and conflicting
+content is refused; outside them a retry is appended as a new event. This is the
+at-least-once boundary between a host receipt and an external effect. A positioned batch
+whose exact receipt is still within the retained window replays that receipt even when its
+expected position no longer matches the source's current position; a positioned batch is
+refused for a stale expected position only once its identity falls outside that window.
 
 ## Credentials and databases
 
@@ -246,14 +266,17 @@ The reference profile supports:
 | --- | --- |
 | Specification | Vendored OpenAPI 3 JSON under `apis/`; no remote documents or external references. |
 | Destination | One fixed HTTPS origin per API, port 443, validated public addresses and verified TLS hostname; no redirects. |
-| Operations | Explicit GET operation IDs, at most 128 per Realm. |
-| Arguments | At most 64 scalar path/query parameters and 64 KiB JSON; no body or caller headers. |
+| Operations | Explicit GET operation IDs for reads, at most 128 per Realm; `post`/`put`/`patch`/`delete` operation IDs for writes under the [write-operation profile](#write-operations), each under its own grant. |
+| Arguments | At most 64 scalar path/query parameters and 64 KiB JSON; a read operation takes no request body and no caller headers beyond the fixed set below. Each string argument is checked for a path-safe alphabet or a nonempty, control-free string as its location requires, capped at 2,048 characters; `body` is a reserved argument name a read operation cannot use; an integer is bounded to a signed 64-bit value and a number must be finite. |
 | Validation | Types, required fields, enum and string-length limits; numeric ranges and regex annotations remain provider validation. |
 | Authentication | API key in a query parameter or header, or HTTP bearer token; optional fixed `X-` headers. |
+| Transport | The assembled request URI is bounded; a non-2xx provider status, unsupported content encoding, or a response exceeding the transport's own deadline all refuse the call — a small valid JSON payload alone does not guarantee acceptance. |
 | Response | At most 1 MiB of strict UTF-8 JSON; common credential echoes and diagnostic exception text are refused. |
 
 The initial implementation rejects unsupported auth schemes, parameter references, alternative
-servers, mutations and credential injection into HTTP framing/control headers. In captured
+servers, a read operation carrying a mutation, and credential injection into HTTP
+framing/control headers — the separate write-operation profile above is where a captured
+Realm reaches `post`/`put`/`patch`/`delete` operations under their own grant. In captured
 Worlds, live Realm API declarations do not create legacy tools or trigger credential
 resolution. Approved operations are also available directly through the owner gateway and
 its generated descriptors. An API-only Realm needs operation approval but no handler grant
@@ -280,11 +303,15 @@ its existing read `operation-ids`:
 write-operation-ids: [createReview]
 ```
 
-A write id cannot also appear among the read ids, and the write list is checked against the
-same vendored document, the same destination, port and TLS rules as a read operation. A
-request body, when present, carries only `application/json` content, whose schema is either
-an inline object or a reference local to the vendored document's own `#/components/`; the
-request body itself is bounded, at most 64 KiB.
+A Realm declares at most 32 API entries. An entry's read `operation-ids` list must stay
+nonempty even when it also declares writes, and at most 64 write ids are accepted per entry,
+within the same 128-operations-per-Realm ceiling the read profile already enforces. A write id cannot also appear among the read
+ids, and the write list is checked against the same vendored document, the same
+destination, port and TLS rules as a read operation. A request body, when present, is
+declared as an OpenAPI `requestBody` object holding only a `content` key — no `required` or
+`description` alongside it — whose sole entry carries only `application/json` content, whose
+own schema is either an inline object or a reference local to the vendored document's own
+`#/components/`; the request body itself is bounded, at most 64 KiB.
 
 The host refuses: a write id already listed as a read id, or vice versa; an unknown write
 id; a `get` operation listed under `write-operation-ids`; a request body of any content
@@ -303,8 +330,12 @@ write grant between an owner's approval and the invocation that follows refuses 
 The owner's approval view lists write operations distinctly from read operations, so
 approving a Realm's reads is never mistaken for approving its writes.
 
-The request body is checked as a bounded, well-formed JSON object; it is not yet validated
-against the operation's own declared request schema.
+The guest supplies the body under the operation argument named `body`. The host validates
+it against the operation's own declared request schema — object shape, required
+properties, the four scalar types, enum values and arrays — before it goes anywhere near
+the network; an omitted or null `body` is accepted when the operation declares no request
+schema, since a declared request body is not itself compulsory. This check is bounded
+transitively by the 64 KiB argument cap above, since the body is a subset of that payload.
 
 Pagination and an MCP transport remain a separate contract; GraphQL operations have their own
 [captured GraphQL operation profile](#me-captured-graphql-operation-profile).
@@ -366,8 +397,8 @@ is introduced here.
 
 ## Reference implementation
 
-The governed implementation is tracked in [embabel/me#1091](https://github.com/embabel/me/pull/1091).
-Its current support is narrower than some trusted-host examples in the main specification:
+This governed implementation's current support is narrower than some trusted-host examples
+in the main specification:
 
 | Capability | State |
 | --- | --- |
@@ -375,15 +406,15 @@ Its current support is narrower than some trusted-host examples in the main spec
 | [Captured command aliases](README.md#commands) | Strict versioned metadata, owner discovery and direct chat dispatch to approved same-installation handlers. |
 | Approved provider lifecycle and durable journal delivery | Implemented for Discord, Slack and Telegram. |
 | Captured source/consumer approval and publication | Implemented with World-load source discovery. |
-| Scheduled API-to-channel handlers | Verified composition of captured schedules, approved GET operations, durable publication and consumer replay. Provider cursor persistence remains open. |
+| Scheduled API-to-channel handlers | Verified composition of captured schedules, approved GET operations, durable publication and consumer replay, including poller cursor persistence through `gateway.channel.position`/`publishBatch`. |
 | Captured callback to an approved sibling | Implemented within the same installation. |
-| Captured API operations and wallet bindings | Implemented for the GET profile; Movie Wasm tests cover query-key and header-key authentication. |
+| Captured API operations and wallet bindings | Implemented for the read (GET) and write (`post`/`put`/`patch`/`delete`) profiles, each under its own grant; Movie Wasm tests cover query-key and header-key authentication. |
 | Captured handler lenses | Versioned same-installation bindings; bounded JSON results, original-target refresh and prepared background runs. Completion and response checks retain admission; revocation clears stored data. Active work and settled storage are capped. Cache reuse is disabled. Opt-in content results hydrate owned focus under retained graph approval and select compatible built-in views; executable presentations are excluded. |
 | Legacy Realm lenses | Excluded in captured Worlds, including previously loaded definitions and retained views. Owner lenses remain available; cached results are isolated by owner. Versioned handler bindings use the captured route. |
 | Captured handler producers | Version-1 same-installation bindings, JSON batch keys and bounded record arrays. Owner precedence, retained World/approval checks, cancellation and call budgets apply. No result cache or pushdown; paging only through a declared cursor argument under a bounded page count, re-verified before every page. Graph materialization preserves owner boundaries and host metadata. |
 | Collection sources and mirrors | Captured complete-snapshot receiver with separate read/storage grants, atomic private records and coverage, authority-partitioned caches and finite capacity. Public declarations need matching host policy and never publish shared nodes. |
 | Captured Virtual Cypher | Implemented owned reads and same-installation captured producers/collections with retained resource grants and rollback materialization. |
-| Owner database target approval | Adoption, upgrade and revocation implemented; runtime datasource use still needs integration. |
+| Owner database target approval | Adoption, upgrade, revocation and read-only production SQL use through the owner connection facade are implemented. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
 | Additional dependency ecosystems, private Realm database persistence and VFS | Not implemented on this path. |
 | Firecracker, generalized remote backends and resumable arbitrary computation | Not implemented. |
@@ -422,32 +453,43 @@ variables; a variable is one of four scalar types — string, integer, number or
 with an optional required flag, a length range for string-shaped values (default 0 to 2048,
 capped at 2048), and an optional enumeration of up to 128 allowed values.
 
-Each persisted document is checked once, at load time, against its own declared variables:
-it must be exactly one `query` operation — never a `mutation`, `subscription`, or
-`__schema`/`__type` introspection — with no fragments and no second top-level operation, and
-its scalar variable signature (name, GraphQL scalar type and required-ness) must match the
-declared list exactly, with nothing extra and nothing missing. This check only recognizes
-scalar-typed variables (`$name: Type`); a variable declared with a list type (for example
-`$xs: [String!]`) is not recognized and so is not matched against the manifest today, and a
-document is not refused for carrying one. A call then supplies only a
-`variables` object; the host validates each value's type, length and enumeration against the
-declaration — each value capped at 8 KiB on its own — fills in the fixed document text
-untouched, and refuses if the assembled request body would exceed 64 KiB. The document text
-itself never varies per call and is never built from a guest-supplied fragment.
+The manifest is read from the single fixed path `graphql/operations.yml`; no other file
+name is recognized, and the file itself is capped at 64 KiB. Each persisted document is
+checked once, at load time, against its own declared variables: it must be exactly one
+`query` operation — never a `mutation`, `subscription`, or `__schema`/`__type`
+introspection — with no fragments, no second top-level operation and no variable default
+value, and its variable signature (name, GraphQL scalar type and required-ness) must match
+the declared list exactly, with nothing extra and nothing missing. This check only
+recognizes scalar-typed variables (`$name: Type`); a variable declared with a list type (for
+example `$xs: [String!]`) does not parse as one of the four scalars, so the document is
+refused at load time — a document is never left to run with an unmatched variable silently
+dropped from validation. A call then supplies only a `variables` object; a declared optional
+variable may be omitted or null. The host validates each supplied value's type, length and
+enumeration against the declaration — each value capped at 8 KiB on its own, an integer
+bounded to a signed 64-bit value and a number required to be finite — fills in the fixed
+document text untouched, and refuses if the assembled request body would exceed 64 KiB. The
+document text itself never varies per call and is never built from a guest-supplied
+fragment.
 
-The host refuses: an endpoint outside the fixed HTTPS shape above; an auth header that
-collides with a fixed header; more than 32 operations per Realm or 32 variables per
-operation; duplicate operation or variable names; a document over 16 KiB, not valid UTF-8,
-or carrying disallowed control characters; a document containing a mutation, subscription,
-introspection field or fragment, or more than one top-level operation; a document whose
-variable signature does not exactly match its declaration; and a call that supplies anything
-besides `variables`, an unknown variable name, a missing required variable, a value of the
-wrong scalar type, or a value outside its declared length or enumeration bound.
+The host accepts up to 16 fixed `X-` headers, each bounded to printable ASCII, and a bearer
+`Authorization` header. The host refuses: an endpoint outside the fixed HTTPS shape above;
+more than 16 fixed headers, or a fixed header outside that shape; an API-key header whose
+name collides with a fixed header or with a small set of reserved authentication header
+names; more than 32 operations per
+Realm or 32 variables per operation; duplicate operation or variable names; a document over
+16 KiB, not valid UTF-8, or carrying disallowed control characters; a document containing a
+mutation, subscription, introspection field, fragment or variable default, or more than one
+top-level operation; a document whose variable signature does not exactly match its
+declaration; and a call that supplies anything besides `variables`, an unknown variable
+name, a missing required non-optional variable, a value of the wrong scalar type, or a
+value outside its declared length or enumeration bound.
 
-The response is parsed as JSON. It is refused unless the parsed value is a JSON object, and
-refused if that object carries an `errors` member. On success, only the response's `data`
-member is returned, unwrapped — the rest of the response is discarded. Typing that returned
-data beyond this, pagination and an MCP transport remain a separate contract.
+The response is parsed as JSON. It is refused unless the parsed value is a JSON object
+carrying a `data` member, and refused if that object carries an `errors` member — an
+object with neither is refused rather than treated as an empty success. On success, only
+the response's `data` member is returned, unwrapped — the rest of the response is
+discarded. Typing that returned data beyond this, pagination and an MCP transport remain a
+separate contract.
 
 ## Me captured graph-query profile
 
@@ -459,12 +501,17 @@ The owner must approve `cypher_query` separately from the handler. List resource
 `POST /realms/{realmName}/resource-approvals/cypher_query/{grant|revoke}` and
 `{installationId, expectedRevision}`. Each change advances the installation revision.
 
-Name every node and end the statement with a literal `LIMIT` between 1 and 512.
-Every matched node must carry consistent ownership for the caller. Shared-label
-exemptions, explicit sharing, anonymous nodes, variable-length paths, collection
-construction, procedures and model-backed functions are outside this profile.
-Ordinary scalar functions and numeric aggregates are supported. Named host views,
-global source mirrors and diagnostic probes are not expanded or invoked. Captured collections use the retained snapshot profile below.
+Give every newly bound node a label and a name, and end the statement with a literal
+`LIMIT` between 1 and 512. Every matched node must carry consistent ownership for the
+caller. Shared-label exemptions, explicit sharing, anonymous or unlabelled nodes, named
+paths, variable-length paths, collection construction, procedures and model-backed
+functions are outside this profile. `params` cannot set `userId`, `worldId`,
+`workspaceId` or any name starting with `__` — those stay host-derived. Supported
+functions are a fixed set: `count`, `sum`, `avg`, `min`, `max`, `coalesce`, `size`,
+`tolower`, `toupper`, `trim`, `tostring`, `tointeger`, `tofloat`, `toboolean`, `abs`,
+`ceil`, `floor`, `round`, `date` and `datetime`; a call to any other function refuses.
+Named host views, global source mirrors and diagnostic probes are not expanded or
+invoked. Captured collections use the retained snapshot profile below.
 
 Queries use the existing scoped Cypher executor and virtual join engine. Only
 captured producers from the same installation can run. Their callbacks retain the
@@ -472,11 +519,15 @@ querying handler's admission and each API operation still needs its own approval
 Legacy SQL, model-backed producers and implicit identity enrichment are excluded.
 Producer records have no shared query cache, and materialization is rolled back.
 
-Requests are capped at 128 KiB, with 16 KiB statements and 128 parameters. Results
-are capped at 512 rows and 1 MiB. The Neo4j runner uses a 15-second transaction
-limit and buffers at most 4,096 rows or 4 MiB per internal statement. These buffering
-limits apply after driver decoding; database memory limits remain deployment
-configuration. Engines without a bounded runner refuse captured queries.
+Requests are capped at 128 KiB, with 16 KiB statements and 128 parameters. The query
+executor's own output — the `rows` array, at most 512 entries — is checked against a
+1 MiB bound; the `coverage` list is assembled and attached to the response afterward,
+without a further size check, so a response near that bound plus a coverage list
+carrying long partition identifiers can exceed 1 MiB overall, though the host's outer
+4 MiB gateway response limit still applies. The Neo4j runner uses a 15-second
+transaction limit and buffers at most 4,096 rows or 4 MiB per internal statement.
+These buffering limits apply after driver decoding; database memory limits remain
+deployment configuration. Engines without a bounded runner refuse captured queries.
 
 ```typescript
 const result = await ctx.gateway.cypher.query({
@@ -499,12 +550,12 @@ views:
   - {alias: recent, view: RecentPeople}
 ```
 
-At most 32 entries are allowed, each an `{alias, view}` pair; `alias` uses
-`[a-z][a-z0-9_]{0,63}` and `view` names one of the owner's own declared views. Aliases and
-view names are each unique within the file; unknown fields refuse, and an absent file means
-no references. Each declared alias becomes its own owner-approved resource, listed and
-granted or revoked the same way as the graph-query resource itself, with a description
-naming the view it exposes.
+The file is capped at 8 KiB. At most 32 entries are allowed, each an `{alias, view}` pair;
+`alias` uses `[a-z][a-z0-9_]{0,63}` and `view` uses `[A-Za-z][A-Za-z0-9_]{0,63}`, naming one
+of the owner's own declared views. Aliases and view names are each unique within the file;
+unknown fields refuse, and an absent file means no references. Each declared alias becomes
+its own owner-approved resource, listed and granted or revoked the same way as the
+graph-query resource itself, with a description naming the view it exposes.
 
 A captured Cypher statement may name an approved alias as a node label. The host inlines
 that alias's view body in its place, once, then validates the whole expanded statement
@@ -513,10 +564,13 @@ parameters, and the function and procedure restrictions above.
 
 The host refuses: a view body that itself references another view or alias, so nesting is
 excluded; a materialized view; a view that takes parameters, since the guest cannot supply
-them; and any alias without its own current grant — a revoked alias refuses the next query.
-Naming the owner's view by its real name, rather than the alias, never returns the alias's
-data. Identity bridges, resolve chains, node-view composition and lens combinations remain
-unsupported.
+them; a view whose current body cannot be inlined for reasons beyond those named exclusions;
+and any alias without its own current grant — a revoked alias refuses the next query. An
+approval does not guarantee the aliased view stays expandable; a view an owner later edits
+into an unsupported shape refuses at the next query even though the alias grant itself is
+unchanged. Naming the owner's view by its real name, rather than the alias, never returns
+the alias's data. Identity bridges, resolve chains, node-view composition and lens
+combinations remain unsupported.
 
 ## Me captured goal profile
 
@@ -532,20 +586,25 @@ description: Summarize the owner's notes
 ```
 
 `goal` uses `[a-z][a-z0-9-]{0,63}`. `handler` names a captured `namespace.function` of the
-same installation. `input` and `output` are simple type names declared by the Realm; `input`
-may also be `UserInput`, the host's request type, delivered to the handler as
-`{"content": text}`. Names with package or path separators, any other field, and
-legacy owner goal shapes are refused. A Realm's goal declarations count against the same
-limits as commands: 32 flat YAML files, 8 KiB per file, 64 KiB combined.
+same installation. `input` and `output` are simple type names resolved against the whole
+World's declared types, not only ones the declaring Realm itself supplies — the handler
+locality check above is the binding restriction, and type names carry no equivalent
+per-Realm restriction of their own. `input` may also be `UserInput`, the host's request
+type, delivered to the handler as `{"content": text}`. `description` is optional, at most
+512 characters. Names with package or path separators, any other field, and legacy owner
+goal shapes are refused. A Realm's goal declarations count against the same limits as
+commands: 32 flat YAML files, 8 KiB per file, 64 KiB combined.
 
 The host deploys each current goal as one handler-backed planner action plus one exported
 goal named `<goal>_goal`, callable from chat as a goal tool. The action passes the input's
 fields to the handler as one JSON object and binds the handler's object result as the
 output type; the handler's input and output schemas apply. Every selection and run retains
 the owner, World, installation revision, capture digest and handler approval, rechecked
-before dispatch, on host callbacks and before the result is released. A refused or failed
-run is reported to the conversation and leaves the output unbound; the process is not
-aborted. Goals that name undeclared types, reuse an owner action or goal name, or duplicate
+before dispatch, on host callbacks and before the result is released. Binding the output
+also walks the output type's own ancestry, each parent once; a handler that otherwise
+succeeds still leaves the output unbound if that walk exceeds 64 distinct labels. A refused
+or failed run, or an output that fails to bind this way, is reported to the conversation
+and leaves the output unbound; the process is not aborted. Goals that name undeclared types, reuse an owner action or goal name, or duplicate
 another Realm's goal are excluded with a loading problem. The owner may switch a goal off by
 name. Owner-authored planner steps keep their own trust boundary and are the way a chat
 request becomes a Realm input type; Realm `actions/` are not loaded.
@@ -595,11 +654,18 @@ widens it.
 That guarantee assumes the installation's trigger manifest resolves cleanly. Today, a
 manifest with even one trigger naming a source, consumer or handler that does not exist fails
 to resolve at all, and delivery stops for every consumer of that installation — not just the
-consumer the bad trigger names — until the manifest is corrected.
+consumer the bad trigger names, and regardless of whether the affected consumer is bound to a
+Realm-declared source or a host-provided one such as Discord, Slack or Telegram — until the
+manifest is corrected. A source with no declared name of its own, like those host-provided
+channels, matches a trigger by consumer name alone; if more than one declared trigger matches
+the same consumer this way, that is itself refused as ambiguous, even when the triggers'
+own names differ.
 
 In `observe` mode the handler receives its narrowed record and runs with every host call that
-would publish an event (`gateway.channel.publish`, `gateway.channel.publishBatch`) or propose
-a write (`write_propose`) refused for the whole invocation. That refusal is fixed on the
+would publish an event (`gateway.channel.publish`, `gateway.channel.publishBatch`), propose
+a write (`write_propose`), or invoke any approved write-effect API operation refused for the
+whole invocation — an otherwise-approved API write is refused the same as an unapproved one.
+Reads stay available. That refusal is fixed on the
 retained target at bind time, so it reaches everything the handler goes on to start as well —
 a query that fetches a producer, or a sibling handler reached through the host — not just the
 handler's own frame. The handler's own returned result is discarded by the delivery path
@@ -627,13 +693,20 @@ names a method to call, or a `decoration`, which sets fields directly:
  "effect":"private-storage"}
 ```
 
-`target.label` names a type the Realm has declared; `target.key` is text, at most 2048
-bytes. `method` is required for a `method-write-back` proposal and refused for a
-`decoration`. `fields` is a nonempty map of at most 64 entries, nested no deeper than 4
-levels; a key reserved for host identity or bookkeeping — `userId`, `worldId`,
-`workspaceId`, `visibleTo`, or any key beginning with an underscore — refuses the whole
-proposal. `expectedRevision`, when present, is a non-negative whole number. `effect` is
-exactly `private-storage` or `external`, naming where the write is understood to land.
+`target.label` names a type with a registered source contract — the host looks up that
+contract's own label and identity property to check for an existing owned node, rather
+than checking that the calling Realm itself declares the type; a type the Realm declares
+but no source contract registers is refused here, and a registered label the Realm never
+declared is admitted the same way. `target.key` is text, at most 2048 bytes. `method` is required for a `method-write-back` proposal and refused for a
+`decoration`. `fields` is a nonempty map; the 64-entry limit and the 4-level nesting bound
+apply to every nested object or array in the tree, not only the top level, so a guest
+cannot dodge the entry cap by nesting extra keys one level down. A key reserved for host
+identity or bookkeeping — `userId`, `worldId`, `workspaceId`, `visibleTo`, `owner`,
+`ownerId`, `labels`, or any key beginning with an underscore — refuses the whole proposal
+wherever in the tree it appears. An integer outside the signed 64-bit range, or a
+non-finite decimal, also refuses. `expectedRevision`, when present, is a non-negative whole
+number. `effect` is exactly `private-storage` or `external`, naming where the write is
+understood to land.
 
 The host refuses: the whole document over 65,536 bytes or carrying duplicate keys; an
 unknown top-level field; a malformed target; `fields` absent, empty, over the entry or
@@ -643,12 +716,16 @@ depth limit, or holding a reserved key; a negative or fractional `expectedRevisi
 A handler submits a proposal with a `write_propose` host call and gets a proposal id back
 synchronously; it never learns how, or whether, the proposal is later confirmed. The host
 checks that the target belongs to the calling installation's own owner and World before
-accepting it. Each installation holds a bounded number of pending proposals, and revoking
-the installation clears whatever of its proposals is still pending. Nothing on this path
-applies a proposal to the graph. Submitting a proposal today needs the same grant that
-graph queries need; captured Realms do not yet have a grant of their own for write
-proposals. The confirmation that follows a proposal, and the write it may produce, remain a
-separate later contract.
+accepting it. Each installation holds at most 32 pending proposals at once; a submission beyond that cap
+is refused. Revoking the installation makes its still-pending proposals unusable, but the
+mailbox itself is only cleared opportunistically, on that installation's next submission or
+retrieval — a revoked installation's stale entries can sit in memory until then, though
+they can no longer be taken. Nothing on this path
+applies a proposal to the graph. Submitting a proposal needs its own approval, distinct
+from `cypher_query`: the owner grants it through the same admission preview, adopt and
+upgrade flow as other resources, and it is listed separately from graph-query approval, so
+approving a Realm's reads never also approves its write proposals. The confirmation that
+follows a proposal, and the write it may produce, remain a separate later contract.
 
 ## Me captured producer paging profile
 
@@ -660,20 +737,25 @@ page:
   maxPages: 4
 ```
 
-`argument` is a lowercase identifier distinct from the producer's own key argument.
-`maxPages` is a whole number from 1 to 16. On the first call the host omits the page
-argument; on each later call it passes the cursor the handler returned. The handler
-answers with its rows and a next cursor, or a null cursor to stop; the host repeats the
-call until the handler stops or the declared page cap is reached, and the rows gathered
-across the whole fetch stay within the same cap an unpaged fetch already enforces. A
+`argument` matches `[a-z][A-Za-z0-9]{0,63}` (so `nextCursor` is accepted and `next_cursor` is
+refused) and must differ from the producer's own key argument. `maxPages` is a whole number
+from 1 to 16. If the handler's own input schema closes its properties (an explicit
+`additionalProperties: false`) without listing the page argument among them, the whole
+declaration is refused at bind time rather than left to fail opaquely on the second page. On
+the first call the host omits the page argument; on each later call it passes the cursor the
+handler returned. The handler answers with an object holding exactly `rows` and `next` — a
+next cursor, or a null `next` to stop; the host repeats the call until the handler stops or
+the declared page cap is reached, and the rows gathered across the whole fetch stay within
+the same cap an unpaged fetch already enforces, checked cumulatively page over page. A
 producer with no `page` declaration behaves exactly as it did before this profile existed.
 
 The host refuses: a page argument equal to the key argument; a `maxPages` outside 1–16; a
-result that is not an object holding rows and a next cursor; a next cursor over 2048 bytes;
-a next cursor repeating one already seen in the same fetch; more pages than declared; and a
-cumulative row count over the cap — never a silently truncated result. Authority is
-rechecked before every page and after the last; a revocation partway through refuses the
-whole fetch, never a partial one.
+result that is not an object holding exactly `rows` and `next`; a next cursor that is not
+text or null, is empty, or carries a control character or invalid Unicode; a next cursor over
+2048 bytes; a next cursor repeating one already seen in the same fetch; more pages than declared;
+and a cumulative row count or byte total over the cap — never a silently truncated result.
+Authority is rechecked before every page and after the last; a revocation partway through
+refuses the whole fetch, never a partial one.
 
 SQL, vector, generative and aggregate producer profiles, result pushdown and partition
 changes remain a separate contract.
@@ -719,9 +801,9 @@ transports require dedicated profiles; host declarations do not grant those capa
 
 ## Approved SQL callers
 
-Production SQL reads and introspection use `OwnerSqlConnections`. The facade resolves the
-current authenticated owner and selected World, then retains the exact datasource approval,
-configured PostgreSQL target digest and scoped wallet credential. A legacy datasource YAML
+Production SQL reads and introspection go through one owner-scoped connection path. It
+resolves the current authenticated owner and selected World, then retains the exact datasource
+approval, configured PostgreSQL target digest and scoped wallet credential. A legacy datasource YAML
 entry cannot choose a production connection or credential. Discovery lists current owner
 approvals. There is no environment or generic wallet-key fallback on this connection path.
 
@@ -757,10 +839,11 @@ The reference browser profile accepts `apps/<name>.html` (or `.htm`) with a matc
 {"version":1,"handlers":["notes.list"]}
 ```
 
-Only `version` and `handlers` are accepted. Handler names are unique and must appear in the
-same captured handler manifest. The reference limits are 32 apps per capture, 32 handlers
-per app, 8 KiB per declaration and 1 MiB of UTF-8 HTML per entry point. Unknown fields,
-duplicate JSON keys and unsupported versions are refused.
+`version`, `handlers` and the optional `resources` field described below are the only
+fields accepted. Handler names are unique and must appear in the same captured handler
+manifest. The reference limits are 32 apps per capture, 32 handlers per app, 8 KiB per
+declaration and 1 MiB of UTF-8 HTML per entry point. Unknown fields, duplicate JSON keys
+and unsupported versions are refused.
 
 The browser receives a `realm.call(handler, arguments)` function. It returns a promise for
 the handler's JSON result, or rejects when the operation is refused or unavailable. Arguments
@@ -799,16 +882,20 @@ asset directory, alongside its existing handler allowlist:
 {"version":1,"handlers":["notes.list"],"resources":["apps/notes.html.assets/app.css"]}
 ```
 
-Each resource path has the shape `apps/<the app's own name>.html.assets/<file>.css` or
-`.js`; at most 16 resources are allowed, each at most 262,144 bytes, 1,048,576 bytes
-combined. The host inlines every declared stylesheet inside its own `<style>` block and
+Each resource path has the shape `apps/<the entry point's own filename, extension
+included>.assets/<file>.css` or `.js` — an entry point saved as `notes.htm` takes resources
+from `apps/notes.htm.assets/`, not `apps/notes.html.assets/`; at most 16 resources are
+allowed, each at most 262,144 bytes, 1,048,576 bytes combined. The host inlines every declared stylesheet inside its own `<style>` block and
 every script inside its own `<script>` block, in declaration order, ahead of the app's HTML
 and inside the same sandboxed guest document described above. An app that declares no
 resources renders exactly as it did before this profile existed.
 
-The host refuses: a path outside the declaring app's own asset directory — another app's
-directory, `..`, an absolute path, a URL, or an extension other than `.css`/`.js`; more
-resources, or a larger resource, than the count and size limits allow; and a resource whose
+Both the entry point's own filename and each resource's own file name are bounded basenames
+— up to 120 characters of letters, digits, `_`, `.` and `-` before the extension, the first
+of them a letter or digit — not arbitrary text; a name outside that shape refuses. The host refuses: a path outside the
+declaring app's own asset directory — another app's directory, `..`, an absolute path, a
+URL, or an extension other than `.css`/`.js`; more resources, or a larger resource, than
+the count and size limits allow; and a resource whose
 text contains the closing tag of its own wrapper — `</style` or `</script`, in any letter
 case — refused when the resource is read, never escaped into the page. A resource's own
 content is otherwise inlined verbatim; it carries no separate sandbox or origin of its own,
@@ -827,9 +914,11 @@ reinstall invalidate the old binding. Unrelated approval changes may preserve so
 revision. Provider webhook signatures require a separate profile.
 
 Only a cryptographic verifier of a high-entropy secret may persist. The host returns the
-secret once at issue/rotation, does not expose it in metadata listings, and requires secure
-transport. Credentials travel in the Authorization header, not event payloads or query
-parameters. The host derives attribution and limits independently of untrusted event data.
+secret once at issue/rotation and does not expose it in metadata listings. Credentials
+travel in the Authorization header, not event payloads or query parameters. Carrying that
+header over a secure transport is a deployment responsibility; the receiver itself checks
+bearer syntax and request shape and does not require or verify TLS on this route. The host
+derives attribution and limits independently of untrusted event data.
 
 Append MUST commit event, attribution, receipt and quota consumption atomically. Exact
 response-loss retries return the same receipt without spending quota again. Rotation MUST
@@ -841,14 +930,19 @@ claim its receipt. Consumers require their own current source/consumer admission
 ### Me delegated-ingress profile
 
 Owner endpoints are `/api/v1/channels/sources/{realmName}/{sourceName}/delegations` (GET
-metadata, POST issue), with `/{id}/rotate` and `/{id}/revoke` POST operations. Issue fields
-are exactly `installationId`, `sourceRevision`, `label`, `expiresInSeconds`, `maxEvents`.
-Rotation/revocation require exactly `installationId`, `sourceRevision`, `expectedGeneration`.
-Issue and rotation return `{delegation, token}` with no-store caching; metadata includes ID,
-label, expiry, quota, accepted-event count, generation and revocation status.
+metadata, POST issue), with `/{id}/rotate` and `/{id}/revoke` POST operations. These owner
+mutation request bodies are capped at 8,192 bytes. Issue fields are exactly `installationId`,
+`sourceRevision`, `label`, `expiresInSeconds`, `maxEvents`, with `label` nonblank, free of
+control characters and at most 128 UTF-8 bytes. Rotation/revocation require exactly
+`installationId`, `sourceRevision`, `expectedGeneration`. Issue and rotation return
+`{delegation, token}` with no-store caching; metadata includes ID, label, expiry, quota,
+accepted-event count, generation and revocation status.
 
 `POST /api/v1/channel-ingress/delegated/{id}/events` accepts the bearer and exactly
-`eventId`, `streamId`, `occurredAt`, `payload`. The receiver supplies declared event type and
+`eventId`, `streamId`, `occurredAt`, `payload`, with an event body capped at 64 KiB; this
+route refuses any request that carries a query string at all, not only one carrying
+credentials — `?trace=1` on an otherwise valid request refuses the same way a query-string
+bearer token would. The receiver supplies declared event type and
 host attribution. It returns `{receiptId, offset, replayed}` after durable storage. Quota
 exhaustion returns 429; changed event content or conflicting generation returns 409. Failed
 authority or storage checks return refusal, never an unverified success receipt. A response
@@ -884,9 +978,15 @@ an exact host-configured public source policy for its producer, label, identity,
 partition, sync and completeness. It does not authorize shared publication. Existing
 host public-dataset publication remains a separate explicit host decision.
 
-The producer receives one partition key and returns `{records,total}`. The total must
-match the distinct record count. Missing totals, partial results, duplicate IDs, wrong
-partitions and reserved ownership/sharing/internal properties refuse before persistence.
+An unpaged producer receives one partition key and returns `{records,total}` itself; the
+total must match the distinct record count, and a missing total refuses before persistence.
+A producer that instead declares the paging profile above returns `{rows,next}` per page as
+usual, and the host synthesizes `{records,total}` from the gathered pages, with `total` set
+to the row count it collected — the producer never supplies a declared total of its own on
+this path. Either way, partial results, duplicate IDs, wrong partitions and reserved
+ownership/sharing/internal properties refuse before persistence. Collection source names,
+producer names and labels must each be unique across the manifest; two differently named
+sources sharing one label refuses the whole manifest at load.
 Empty complete partitions use an empty array and total zero. Each snapshot is at most
 512 rows / 1 MiB; each row has at most 64 scalar properties, and text values are at most
 65,536 characters. Identity and partition strings are bounded. A query fetch accepts
@@ -900,7 +1000,10 @@ to ordinary guest queries, and no source row merges into preexisting application
 Queries materialize owner- and run-specific virtual nodes and roll them back, including
 when a foreign, public or unowned node shares a record ID. The returned `coverage` list
 contains source, partition, held count, declared total, `COMPLETE` status and acquisition
-time. Global source/coverage registries are not consulted by this receiver.
+time. Global source registries supply no snapshot records or measured coverage of their own to
+this receiver, but the host's global public-source policy is still consulted when checking
+a public declaration, since that policy is where the exact producer, label, identity,
+partition, sync and completeness match against a public declaration is defined.
 
 The Me graph adapter permits 16 concurrent acquisitions, 32 retained partitions per
 source revision and 256 partitions / 16 MiB of record payload per host. It refuses
@@ -916,5 +1019,8 @@ profile rather than falling back to the legacy shared mirror writer.
 
 The Docker adapter permits two active invocations per installation within the configured
 global container cap (default four), allowing a querying handler to call its captured
-producer. Further nesting and exhausted global capacity refuse immediately. Failed
-container cleanup retains its capacity reservation. The isolation profile is unchanged.
+producer. Further nesting and exhausted global capacity refuse immediately. Container teardown
+always releases its capacity reservation and invocation slot once removal has been asked
+for and waited on, whether or not that removal could be confirmed; an unconfirmed
+container is not held to protect anything, since no invocation slot is kept for it either
+way. The isolation profile is unchanged.

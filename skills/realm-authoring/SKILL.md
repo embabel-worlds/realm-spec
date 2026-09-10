@@ -109,7 +109,8 @@ have different admitted operations.
 Where supported, `ctx.gateway.cypher.query({cypher, params})` binds values through `params`;
 arrays and nested objects remain structured. Raw SQL gateway calls are not a portable guest
 capability. External SQL uses approved producers or typed operations. The governed captured
-path currently refuses Cypher until its retained resource receiver is connected. Check the
+path reaches Cypher through the same call once the owner separately approves `cypher_query`.
+Check the
 [hosted execution contract](../../HOSTED_EXECUTION.md#reference-implementation) before using
 a host-resource callback.
 
