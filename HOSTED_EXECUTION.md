@@ -270,6 +270,35 @@ neither a general credential lookup nor complete OpenAPI schema validation. Capt
 handler producers can use the same approved API receiver. Graph-backed lens integration
 remains open.
 
+### Write operations
+
+A captured `apis/apis.yml` entry may also declare `write-operation-ids`, naming OpenAPI
+`post`, `put`, `patch` or `delete` operations with an optional JSON request body, alongside
+its existing read `operation-ids`:
+
+```yaml
+write-operation-ids: [createReview]
+```
+
+A write id cannot also appear among the read ids, and the write list is checked against the
+same vendored document, the same destination, port and TLS rules as a read operation. A
+request body, when present, carries only `application/json` content, whose schema is either
+an inline object or a reference local to the vendored document's own `#/components/`; the
+request body itself is bounded, at most 64 KiB.
+
+The host refuses: a write id already listed as a read id, or vice versa; an unknown write
+id; a `get` operation listed under `write-operation-ids`; a request body of any content
+type other than `application/json`; a schema reference outside the document's own
+components, including a reference to another server or document; and a destination,
+redirect or authentication shape a read operation would also refuse.
+
+A declared write operation is parsed and validated at load. The host does not yet invoke
+it — it is absent from the operation catalogue, the tool set generated from it and the
+owner's approval list — until a later contract admits it for owner approval and dispatch.
+
+Owner approval for write operations, idempotency keys, response-loss classification and
+GraphQL operations remain a separate contract.
+
 ### Result admission
 
 After a handler completes, the host rechecks its original retained target before returning
@@ -341,7 +370,7 @@ Its current support is narrower than some trusted-host examples in the main spec
 | Captured API operations and wallet bindings | Implemented for the GET profile; Movie Wasm tests cover query-key and header-key authentication. |
 | Captured handler lenses | Versioned same-installation bindings; bounded JSON results, original-target refresh and prepared background runs. Completion and response checks retain admission; revocation clears stored data. Active work and settled storage are capped. Cache reuse is disabled. Opt-in content results hydrate owned focus under retained graph approval and select compatible built-in views; executable presentations are excluded. |
 | Legacy Realm lenses | Excluded in captured Worlds, including previously loaded definitions and retained views. Owner lenses remain available; cached results are isolated by owner. Versioned handler bindings use the captured route. |
-| Captured handler producers | Version-1 same-installation bindings, JSON batch keys and bounded record arrays. Owner precedence, retained World/approval checks, cancellation and call budgets apply. No result cache, paging or pushdown. Graph materialization preserves owner boundaries and host metadata. |
+| Captured handler producers | Version-1 same-installation bindings, JSON batch keys and bounded record arrays. Owner precedence, retained World/approval checks, cancellation and call budgets apply. No result cache or pushdown; paging only through a declared cursor argument under a bounded page count, re-verified before every page. Graph materialization preserves owner boundaries and host metadata. |
 | Collection sources and mirrors | Captured complete-snapshot receiver with separate read/storage grants, atomic private records and coverage, authority-partitioned caches and finite capacity. Public declarations need matching host policy and never publish shared nodes. |
 | Captured Virtual Cypher | Implemented owned reads and same-installation captured producers/collections with retained resource grants and rollback materialization. |
 | Owner database target approval | Adoption, upgrade and revocation implemented; runtime datasource use still needs integration. |
@@ -391,6 +420,36 @@ const result = await ctx.gateway.cypher.query({
 `CapturedRealmQueriesTest` covers real Wasm and Docker, owned graph reads, retained grants,
 same-installation producer materialization, rollback and nested API readmission.
 
+### View references
+
+A captured Realm may declare `queries/references.yml` (version 1), mapping a captured
+alias to one of the owner's named views:
+
+```yaml
+version: 1
+views:
+  - {alias: recent, view: RecentPeople}
+```
+
+At most 32 entries are allowed, each an `{alias, view}` pair; `alias` uses
+`[a-z][a-z0-9_]{0,63}` and `view` names one of the owner's own declared views. Aliases and
+view names are each unique within the file; unknown fields refuse, and an absent file means
+no references. Each declared alias becomes its own owner-approved resource, listed and
+granted or revoked the same way as the graph-query resource itself, with a description
+naming the view it exposes.
+
+A captured Cypher statement may name an approved alias as a node label. The host inlines
+that alias's view body in its place, once, then validates the whole expanded statement
+under the same bounds an ordinary query already meets — size, a terminal `LIMIT`,
+parameters, and the function and procedure restrictions above.
+
+The host refuses: a view body that itself references another view or alias, so nesting is
+excluded; a materialized view; a view that takes parameters, since the guest cannot supply
+them; and any alias without its own current grant — a revoked alias refuses the next query.
+Naming the owner's view by its real name, rather than the alias, never returns the alias's
+data. Identity bridges, resolve chains, node-view composition and lens combinations remain
+unsupported.
+
 ## Me captured goal profile
 
 A captured Realm may declare planner goals under `goals/` as version-1 data:
@@ -427,6 +486,96 @@ Me verifies this profile with real Wasm dispatch through planner selection and e
 the request form, refusal after revocation and for a foreign owner or World, undeclared
 types, name collisions, the owner's switch, legacy files, and the declaration limits and
 refused shapes.
+
+## Me captured trigger profile
+
+A captured Realm may declare trigger bindings under `triggers/` as version-1 data. A
+trigger binds one declared channel source to one declared consumer with an explicit
+delivery mode and a bounded selection of the event fields the consumer receives:
+
+```yaml
+version: 1
+trigger: on-change
+source: changes
+consumer: apply-change
+mode: observe
+input: [eventId, payload]
+description: React to a changed note
+```
+
+`trigger` uses `[a-z][a-z0-9-]{0,63}`. `source` and `consumer` name declarations in the
+Realm's own `data-pipes.yml`; a trigger is exposed only when both exist there, for the same
+installation the trigger was captured with. `mode` is exactly `observe` or `apply`. `input`,
+when present, is a subset of the seven fields a consumer receives — `offset`, `eventId`,
+`streamId`, `type`, `occurredAt`, `gap`, `payload` — with no duplicates; an absent `input`
+carries all seven. `description` is optional, at most 512 characters. A Realm's trigger
+declarations count against the same limits as its other flat manifests: 32 files, 8 KiB per
+file, 64 KiB combined.
+
+Unknown fields, an unrecognized `mode`, a duplicate `input` entry, a field outside the
+seven, an uppercase or path-shaped `trigger` name, and any legacy handler-style field all
+refuse without reflecting the offending value. A trigger naming a source or consumer the
+Realm has not declared, a foreign owner or World, and a stale capture digest all refuse the
+same way.
+
+Loading trigger bindings validates and exposes them; it does not yet deliver events through
+them. Delivery, the mode's own enforcement and any reply path are a separate later contract.
+
+## Me captured write proposal profile
+
+A captured handler may build a typed, bounded write proposal describing an intended graph
+write before any confirmation. A proposal is one of two kinds: a `method-write-back`, which
+names a method to call, or a `decoration`, which sets fields directly:
+
+```json
+{"version":1,"kind":"method-write-back","target":{"label":"Note","key":"n1"},
+ "method":"archive","fields":{"archived":true},"expectedRevision":3,
+ "effect":"private-storage"}
+```
+
+`target.label` names a type the Realm has declared; `target.key` is text, at most 2048
+bytes. `method` is required for a `method-write-back` proposal and refused for a
+`decoration`. `fields` is a nonempty map of at most 64 entries, nested no deeper than 4
+levels; a key reserved for host identity or bookkeeping — `userId`, `worldId`,
+`workspaceId`, `visibleTo`, or any key beginning with an underscore — refuses the whole
+proposal. `expectedRevision`, when present, is a non-negative whole number. `effect` is
+exactly `private-storage` or `external`, naming where the write is understood to land.
+
+The host refuses: the whole document over 65,536 bytes or carrying duplicate keys; an
+unknown top-level field; a malformed target; `fields` absent, empty, over the entry or
+depth limit, or holding a reserved key; a negative or fractional `expectedRevision`; and an
+`effect` outside the two named values. No refusal reflects the value that triggered it.
+
+This item defines the proposal's shape only. The host call a handler uses to submit one,
+and the confirmation and graph write that follow it, are a separate later contract.
+
+## Me captured producer paging profile
+
+A captured producer may declare a paging profile alongside its key argument:
+
+```yaml
+page:
+  argument: cursor
+  maxPages: 4
+```
+
+`argument` is a lowercase identifier distinct from the producer's own key argument.
+`maxPages` is a whole number from 1 to 16. On the first call the host omits the page
+argument; on each later call it passes the cursor the handler returned. The handler
+answers with its rows and a next cursor, or a null cursor to stop; the host repeats the
+call until the handler stops or the declared page cap is reached, and the rows gathered
+across the whole fetch stay within the same cap an unpaged fetch already enforces. A
+producer with no `page` declaration behaves exactly as it did before this profile existed.
+
+The host refuses: a page argument equal to the key argument; a `maxPages` outside 1–16; a
+result that is not an object holding rows and a next cursor; a next cursor over 2048 bytes;
+a next cursor repeating one already seen in the same fetch; more pages than declared; and a
+cumulative row count over the cap — never a silently truncated result. Authority is
+rechecked before every page and after the last; a revocation partway through refuses the
+whole fetch, never a partial one.
+
+SQL, vector, generative and aggregate producer profiles, result pushdown and partition
+changes remain a separate contract.
 
 ## Authenticated source ingress
 
@@ -539,6 +688,33 @@ installation, revision, digest, app names, declared handlers and approval state.
 `POST /api/v1/realm-browser/{realm}/approvals/{name}/grant` and `/revoke` take exactly
 `installationId` and `expectedRevision`. A stale revision returns 409. Open an approved app
 at `/apps/{realm}/{name}`. Existing flat links retain name-resolution precedence.
+
+### Declared resources
+
+A captured browser app may also declare stylesheet and script resources drawn from its own
+asset directory, alongside its existing handler allowlist:
+
+```json
+{"version":1,"handlers":["notes.list"],"resources":["apps/notes.html.assets/app.css"]}
+```
+
+Each resource path has the shape `apps/<the app's own name>.html.assets/<file>.css` or
+`.js`; at most 16 resources are allowed, each at most 262,144 bytes, 1,048,576 bytes
+combined. The host inlines every declared stylesheet inside its own `<style>` block and
+every script inside its own `<script>` block, in declaration order, ahead of the app's HTML
+and inside the same sandboxed guest document described above. An app that declares no
+resources renders exactly as it did before this profile existed.
+
+The host refuses: a path outside the declaring app's own asset directory — another app's
+directory, `..`, an absolute path, a URL, or an extension other than `.css`/`.js`; more
+resources, or a larger resource, than the count and size limits allow; and a resource whose
+text contains the closing tag of its own wrapper — `</style` or `</script`, in any letter
+case — refused when the resource is read, never escaped into the page. A resource's own
+content is otherwise inlined verbatim; it carries no separate sandbox or origin of its own,
+since it becomes part of the same guest document that requested it.
+
+Images, fonts, resources drawn from another origin, component imports and the owner's own
+app runtime remain outside this profile.
 
 ## Delegated source ingress
 
