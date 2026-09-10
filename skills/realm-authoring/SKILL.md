@@ -219,7 +219,10 @@ and event type. A consumer names a captured handler; the owner separately approv
 source and handler. A declaration creates no grant.
 
 Use `gateway.channel.publish` in a captured Docker handler or `ctx.gateway.channel.publish`
-in a Wasm handler. Keep `eventId`, `occurredAt` and payload stable on retry. The returned receipt
-confirms durable acceptance; downstream effects still require idempotency. All retained data
-and dependencies remain within host-enforced Realm limits. Private SQLite is a dependency,
-not an external SQL gateway or a substitute for source approval.
+in a Wasm handler. Keep `streamId`, `eventId`, `occurredAt` and payload stable on retry.
+Receipt and tombstone retention windows are bounded: an identical retry within them returns
+its receipt or original offsets, while a retry outside them can append again and consume
+quota. The returned receipt confirms durable acceptance; downstream effects still require
+idempotency. All retained data and dependencies remain within host-enforced Realm limits.
+Private SQLite is a dependency, not an external SQL gateway or a substitute for source
+approval.
