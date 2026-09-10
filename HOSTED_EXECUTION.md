@@ -292,12 +292,21 @@ type other than `application/json`; a schema reference outside the document's ow
 components, including a reference to another server or document; and a destination,
 redirect or authentication shape a read operation would also refuse.
 
-A declared write operation is parsed and validated at load. The host does not yet invoke
-it — it is absent from the operation catalogue, the tool set generated from it and the
-owner's approval list — until a later contract admits it for owner approval and dispatch.
+A write operation now runs under its own owner grant, separate from the read grant for the
+same key: approving a Realm's read operations does not approve any of its writes, and
+revoking the write grant leaves reads untouched. Invoking an approved write sends the
+request exactly once, carrying an idempotency key the host derives from the installation,
+the operation and its arguments; the host never retries a write on its own. If the response
+is lost once the request has gone out, the host refuses with a fixed message reporting the
+effect as unknown, rather than guessing whether the destination received it. Revoking the
+write grant between an owner's approval and the invocation that follows refuses the call.
+The owner's approval view lists write operations distinctly from read operations, so
+approving a Realm's reads is never mistaken for approving its writes.
 
-Owner approval for write operations, idempotency keys, response-loss classification and
-GraphQL operations remain a separate contract.
+The request body is checked as a bounded, well-formed JSON object; it is not yet validated
+against the operation's own declared request schema.
+
+GraphQL operations, pagination and an MCP transport remain a separate contract.
 
 ### Result admission
 
@@ -546,8 +555,15 @@ unknown top-level field; a malformed target; `fields` absent, empty, over the en
 depth limit, or holding a reserved key; a negative or fractional `expectedRevision`; and an
 `effect` outside the two named values. No refusal reflects the value that triggered it.
 
-This item defines the proposal's shape only. The host call a handler uses to submit one,
-and the confirmation and graph write that follow it, are a separate later contract.
+A handler submits a proposal with a `write_propose` host call and gets a proposal id back
+synchronously; it never learns how, or whether, the proposal is later confirmed. The host
+checks that the target belongs to the calling installation's own owner and World before
+accepting it. Each installation holds a bounded number of pending proposals, and revoking
+the installation clears whatever of its proposals is still pending. Nothing on this path
+applies a proposal to the graph. Submitting a proposal today needs the same grant that
+graph queries need; captured Realms do not yet have a grant of their own for write
+proposals. The confirmation that follows a proposal, and the write it may produce, remain a
+separate later contract.
 
 ## Me captured producer paging profile
 
