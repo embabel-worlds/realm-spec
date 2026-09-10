@@ -425,8 +425,11 @@ capped at 2048), and an optional enumeration of up to 128 allowed values.
 Each persisted document is checked once, at load time, against its own declared variables:
 it must be exactly one `query` operation — never a `mutation`, `subscription`, or
 `__schema`/`__type` introspection — with no fragments and no second top-level operation, and
-its variable signature (name, GraphQL scalar type and required-ness) must match the declared
-list exactly, with nothing extra and nothing missing. A call then supplies only a
+its scalar variable signature (name, GraphQL scalar type and required-ness) must match the
+declared list exactly, with nothing extra and nothing missing. This check only recognizes
+scalar-typed variables (`$name: Type`); a variable declared with a list type (for example
+`$xs: [String!]`) is not recognized and so is not matched against the manifest today, and a
+document is not refused for carrying one. A call then supplies only a
 `variables` object; the host validates each value's type, length and enumeration against the
 declaration — each value capped at 8 KiB on its own — fills in the fixed document text
 untouched, and refuses if the assembled request body would exceed 64 KiB. The document text
@@ -441,8 +444,10 @@ variable signature does not exactly match its declaration; and a call that suppl
 besides `variables`, an unknown variable name, a missing required variable, a value of the
 wrong scalar type, or a value outside its declared length or enumeration bound.
 
-Response parsing and typing, pagination and an MCP transport remain a separate contract; this
-profile only builds and bounds the outgoing request.
+The response is parsed as JSON. It is refused unless the parsed value is a JSON object, and
+refused if that object carries an `errors` member. On success, only the response's `data`
+member is returned, unwrapped — the rest of the response is discarded. Typing that returned
+data beyond this, pagination and an MCP transport remain a separate contract.
 
 ## Me captured graph-query profile
 
@@ -480,8 +485,8 @@ const result = await ctx.gateway.cypher.query({
 });
 ```
 
-`CapturedRealmQueriesTest` covers real Wasm and Docker, owned graph reads, retained grants,
-same-installation producer materialization, rollback and nested API readmission.
+Real Wasm and Docker coverage exercises owned graph reads, retained grants, same-installation
+producer materialization, rollback and nested API readmission.
 
 ### View references
 
@@ -587,21 +592,24 @@ more of the record than that selection carries. A consumer with no matching trig
 unaffected — a trigger only narrows what the untriggered wiring would already deliver, never
 widens it.
 
-In `observe` mode the handler receives its narrowed record and its own result is recorded the
-way any consumer's result is, but every host call that would publish an event
-(`gateway.channel.publish`, `gateway.channel.publishBatch`) or propose a write
-(`write_propose`) is refused for the whole invocation. That refusal is fixed on the retained
-target at bind time, so it reaches everything the handler goes on to start as well — a query
-that fetches a producer, or a sibling handler reached through the host — not just the
-handler's own frame. `apply` mode has no destination policy yet, so the host refuses it at
-bind time, before any event ever reaches the handler.
+That guarantee assumes the installation's trigger manifest resolves cleanly. Today, a
+manifest with even one trigger naming a source, consumer or handler that does not exist fails
+to resolve at all, and delivery stops for every consumer of that installation — not just the
+consumer the bad trigger names — until the manifest is corrected.
+
+In `observe` mode the handler receives its narrowed record and runs with every host call that
+would publish an event (`gateway.channel.publish`, `gateway.channel.publishBatch`) or propose
+a write (`write_propose`) refused for the whole invocation. That refusal is fixed on the
+retained target at bind time, so it reaches everything the handler goes on to start as well —
+a query that fetches a producer, or a sibling handler reached through the host — not just the
+handler's own frame. The handler's own returned result is discarded by the delivery path
+today rather than recorded. `apply` mode has no destination policy yet, so the host refuses
+it at bind time, before any event ever reaches the handler.
 
 None of this changes the durability contract every consumer already has: delivery stays at
-least once, so a duplicate or replayed event is not filtered out here; a binding revoked
-before its record is delivered is refused and left for retry rather than silently dropped;
-and a consumer whose handler is unavailable at bind time is simply not wired up rather than
-breaking the rest. The offer stays durable — none of this promises the handler's own effects
-ran exactly once.
+least once, so a duplicate or replayed event is not filtered out here, and a binding revoked
+before its record is delivered is refused and left for retry rather than silently dropped.
+The offer stays durable — none of this promises the handler's own effects ran exactly once.
 
 Pending: diagnostics that name which dependency a trigger was refused for — missing source,
 consumer or handler wiring, versus a stale capture digest — are not yet specified beyond that
