@@ -1024,3 +1024,57 @@ always releases its capacity reservation and invocation slot once removal has be
 for and waited on, whether or not that removal could be confirmed; an unconfirmed
 container is not held to protect anything, since no invocation slot is kept for it either
 way. The isolation profile is unchanged.
+
+## Observability
+
+A host tracks every dispatch and every host call it accepts on a Realm's behalf, along with
+every admission decision it makes about one, and an operator can see that activity as
+metrics, trace spans and log lines. What the host records about one of those crossings is
+identifiers and outcomes: who owns the Realm, which World and installation it is installed
+in, which Realm and handler ran, a per-call identifier, whether the crossing succeeded,
+failed or was refused, how long it took, and, for a dispatch, how many bytes crossed in
+each direction. The content of what ran is not part of that record: no argument value, no
+result value, no script and no message a Realm produced becomes a metric tag, a trace
+attribute or a trace event.
+
+Text a Realm wrote that would otherwise reach a host log line, a message it sent, a script
+it ran, the text of an error it threw, a name it declared that is not a plain identifier,
+goes through one redaction step first, and the operator picks between two behaviours. The
+default is confidential: the line carries how long the text was and a short fingerprint of
+it, and no fragment of the text itself, so an operator can tell two failures apart across
+log lines without either one reading as the Realm's own words. The alternative is an
+operator opt-in meant for local debugging, and it does put a bounded excerpt of what the
+Realm actually wrote into the log, so Realm words appear there. That excerpt is sanitized
+first: line endings, tabs and quotes are escaped, any other control character is replaced
+with a visible marker, the excerpt is bounded by a byte count rather than a character
+count, and it is never cut through the middle of a character. So no Realm can forge a log
+field or start what reads like a second, host-authored record under either behaviour, but
+only the default keeps a Realm's own words out of the host's logs altogether.
+
+A host call whose name a Realm addresses never shows up as typed if the call is refused
+before the host has matched it to one of the operations it actually granted, or if the name
+never matches a granted operation at all. An operator's dashboard shows the same fixed
+placeholder value for every such call, whatever the Realm sent, and that holds even where
+the identical check would have passed moments later. Once a host call does match a granted
+operation, the operator sees that operation's own name for the rest of that call, including
+when something inside the call fails or is refused afterwards. A crossing the host turns away
+for sheer size, a name longer than it accepts or a payload larger than it accepts, is refused
+before any of that tracking begins, so it leaves no trace at all in the operator's telemetry:
+no record of its own, and no placeholder value either. The Realm still gets its refusal.
+
+An operator can turn distributed tracing on for the platform without any change to a
+Realm's own declaration or code. It is a setting the operator applies, not something a
+Realm requests or is told about, and it is off until they apply it. With it on, a dispatch
+that failed is legible as a failure from its trace span alone, through an error status and a
+fixed outcome value the host chooses, so failures can be alerted on without anyone reading
+what a Realm wrote.
+
+Two limits hold today, and neither is a promise this contract makes elsewhere. The host
+tracks closing both as follow-up work. First, when a dispatch to a Realm's handler fails,
+the error message inside that failure can still reach an exported trace span, unlike the
+other Realm-authored text described above. Second, the handler name a dispatch is recorded
+under is the one the Realm declared for itself, and it is recorded before the host's own
+admission check for that dispatch runs: if that check then refuses the dispatch, the
+declared name has already been recorded rather than being replaced by the placeholder value
+an unmatched host call gets, and a declared name shaped like a plain identifier is recorded
+as it stands.
