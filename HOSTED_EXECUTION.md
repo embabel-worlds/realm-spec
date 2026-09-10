@@ -306,7 +306,8 @@ approving a Realm's reads is never mistaken for approving its writes.
 The request body is checked as a bounded, well-formed JSON object; it is not yet validated
 against the operation's own declared request schema.
 
-GraphQL operations, pagination and an MCP transport remain a separate contract.
+Pagination and an MCP transport remain a separate contract; GraphQL operations have their own
+[captured GraphQL operation profile](#me-captured-graphql-operation-profile).
 
 ### Result admission
 
@@ -389,6 +390,59 @@ Its current support is narrower than some trusted-host examples in the main spec
 
 Hosts must state which profile and capabilities they support. Generated types describe an
 operation's contract; they do not grant permission or prove receiver availability.
+
+## Me captured GraphQL operation profile
+
+A captured Realm may declare `graphql/operations.yml` (version 1), naming one fixed HTTPS
+endpoint and a fixed set of persisted query documents the Realm ships. There is no live
+query text, fragment, operation name or endpoint override on the call path: every document,
+its variable schema and the destination all come from the manifest, never from the caller:
+
+```yaml
+version: 1
+name: catalog
+endpoint: https://api.example.com/graphql
+auth: bearer
+token-env: catalog-token
+operations:
+  - name: productById
+    document: "query($id: ID!) { product(id: $id) { name price } }"
+    variables:
+      - {name: id, type: string, required: true, max-length: 64}
+```
+
+The endpoint is a single fixed HTTPS origin pinned in the manifest: host present, no user
+info, port 443 or the default, no query string, fragment, percent-encoded path segment or
+`.`/`..` traversal segment, and no `{`/`}` placeholder that could turn it into a template —
+reaching it follows the same no-redirect rule an ordinary captured API destination already
+follows. Authentication is a bearer token or an API key in a named header, drawn from the
+owner's wallet the same way an ordinary captured API operation's `token-env` is, plus up to
+16 fixed `X-` headers. At most 32 operations are declared per Realm, each with at most 32
+variables; a variable is one of four scalar types — string, integer, number or boolean —
+with an optional required flag, a length range for string-shaped values (default 0 to 2048,
+capped at 2048), and an optional enumeration of up to 128 allowed values.
+
+Each persisted document is checked once, at load time, against its own declared variables:
+it must be exactly one `query` operation — never a `mutation`, `subscription`, or
+`__schema`/`__type` introspection — with no fragments and no second top-level operation, and
+its variable signature (name, GraphQL scalar type and required-ness) must match the declared
+list exactly, with nothing extra and nothing missing. A call then supplies only a
+`variables` object; the host validates each value's type, length and enumeration against the
+declaration — each value capped at 8 KiB on its own — fills in the fixed document text
+untouched, and refuses if the assembled request body would exceed 64 KiB. The document text
+itself never varies per call and is never built from a guest-supplied fragment.
+
+The host refuses: an endpoint outside the fixed HTTPS shape above; an auth header that
+collides with a fixed header; more than 32 operations per Realm or 32 variables per
+operation; duplicate operation or variable names; a document over 16 KiB, not valid UTF-8,
+or carrying disallowed control characters; a document containing a mutation, subscription,
+introspection field or fragment, or more than one top-level operation; a document whose
+variable signature does not exactly match its declaration; and a call that supplies anything
+besides `variables`, an unknown variable name, a missing required variable, a value of the
+wrong scalar type, or a value outside its declared length or enumeration bound.
+
+Response parsing and typing, pagination and an MCP transport remain a separate contract; this
+profile only builds and bounds the outgoing request.
 
 ## Me captured graph-query profile
 
@@ -527,8 +581,31 @@ refuse without reflecting the offending value. A trigger naming a source or cons
 Realm has not declared, a foreign owner or World, and a stale capture digest all refuse the
 same way.
 
-Loading trigger bindings validates and exposes them; it does not yet deliver events through
-them. Delivery, the mode's own enforcement and any reply path are a separate later contract.
+Loading trigger bindings now feeds real delivery. A bound trigger narrows what its consumer
+receives to exactly the fields `input` names (all seven when absent); the handler never sees
+more of the record than that selection carries. A consumer with no matching trigger is
+unaffected — a trigger only narrows what the untriggered wiring would already deliver, never
+widens it.
+
+In `observe` mode the handler receives its narrowed record and its own result is recorded the
+way any consumer's result is, but every host call that would publish an event
+(`gateway.channel.publish`, `gateway.channel.publishBatch`) or propose a write
+(`write_propose`) is refused for the whole invocation. That refusal is fixed on the retained
+target at bind time, so it reaches everything the handler goes on to start as well — a query
+that fetches a producer, or a sibling handler reached through the host — not just the
+handler's own frame. `apply` mode has no destination policy yet, so the host refuses it at
+bind time, before any event ever reaches the handler.
+
+None of this changes the durability contract every consumer already has: delivery stays at
+least once, so a duplicate or replayed event is not filtered out here; a binding revoked
+before its record is delivered is refused and left for retry rather than silently dropped;
+and a consumer whose handler is unavailable at bind time is simply not wired up rather than
+breaking the rest. The offer stays durable — none of this promises the handler's own effects
+ran exactly once.
+
+Pending: diagnostics that name which dependency a trigger was refused for — missing source,
+consumer or handler wiring, versus a stale capture digest — are not yet specified beyond that
+shared refusal. Any reply path a trigger might carry also remains a separate later contract.
 
 ## Me captured write proposal profile
 
