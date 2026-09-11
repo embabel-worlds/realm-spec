@@ -59,3 +59,33 @@ _Avoid_: world, user context
 The exclusively active runtime epoch of one durable world. A new incarnation fences stale execution
 after restore, migration, or administrative transfer without changing the world's identity.
 _Avoid_: world version, cloned world
+
+
+## Channels
+
+**Channel**:
+A general data pipe carrying provider messages, webhook events, database changes or
+Realm-produced events. A conversational provider connection is one channel adapter.
+
+**Channel Source**:
+An approved producer identity and stream within a World. Realm sources retain their
+installation, artifact digest, source name and source-grant revision. Host provider sources
+retain their provider registration and revision.
+
+**Source Grant Revision**:
+A host-assigned revision identifying one active source approval. Unrelated handler or consumer
+approvals preserve it. Source removal/reapproval, artifact change and reinstall invalidate it.
+It does not replace an invocation's retained approval revision.
+
+**Channel Consumer**:
+An independently approved reader of one exact source, with a durable cursor. A Realm consumer
+maps its name to a captured handler and also requires handler approval.
+
+**Journal Receipt**:
+Confirmation that an event append is durable under the host's storage contract. It does not
+confirm completion of consumer processing or external effects.
+
+**Consumer Checkpoint**:
+A durable position advanced after an offered record prefix succeeds under current admission.
+An uncheckpointed offer may be replayed, so effects need stable idempotency keys. Records that
+every adopted consumer has checkpointed past may be reclaimed by the host.
