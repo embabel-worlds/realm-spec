@@ -159,6 +159,29 @@ After restart, replay begins when the owner World loads through startup warming 
 access. Provider connectors retain a separate approved lifecycle. Source discovery starts
 no guest execution; the bounded replay scheduler performs delivery.
 
+### Admitted-event memory
+
+The admitted-event memory profile processes admitted source events, channel conversation
+events and watch delivery items by default, without a separate per-source memory grant.
+It must retain the authenticated owner, selected World, stable source/event identity and
+the owner's memory context at first admission. Retrying an event must reuse that context
+and content; conflicting content under the same identity is refused. Current source or
+watch authority is required through extraction and persistence.
+
+Each completed extraction must identify its source revision, extraction run and canonical
+propositions. Canonical proposition persistence, run links and completion must commit
+together; a failed attempt must leave the journal offer retryable. An exact replay of a
+completed event returns the recorded lineage without repeating its persistence. A valid
+extraction with no propositions completes with zero counts; missing or failed extraction
+does not count as completion. Model execution and downstream effects remain at least once.
+
+Work must be bounded in input bytes, concurrency, execution time and proposition count.
+The reference profile accepts at most 256 KiB of admitted event text, refuses overflow
+without truncation, and admits at most 64 propositions per extraction. Event content may
+reach the extraction model and owner-private memory; it must not become operational log
+or trace content. An observe-only consumer's prohibition on domain writes does not disable
+this separately authorized host memory persistence.
+
 ## Legacy event declarations
 
 The reference host excludes live Realm `events/` files from runtime loading when captured
@@ -428,9 +451,50 @@ imports from other modules already included in the same bounded capture.
 
 No download, installation or registry resolution occurs. Libraries compiled into a Wasm
 program remain part of that artifact; the reference Wasm backend supplies no host packages.
-Other ecosystems, runtime provisioning and private database persistence remain open.
+Linked Wasm modules use the separate profile below; they are not host package requests.
+Other package ecosystems and dynamic runtime provisioning remain open.
 Unsupported storage requirements must be rejected before handler execution. No VFS syntax
 is introduced here.
+
+### Linked modules and private snapshots
+
+A host may admit captured linked Wasm dependencies by exact module name, version and
+SHA-256 digest from an operator-controlled module allowlist. Every requested module and
+typed method signature must match current operator authority before the Realm's handlers
+bind and before execution. The host must verify the bytes, retain an immutable copy and
+recheck module authority before publishing private state. A missing store, unavailable
+module, digest mismatch or unsupported signature refuses the Realm's whole handler set
+by category, without exposing store paths or raw diagnostics. Equal bytes do not make
+different version coordinates interchangeable. No download or implicit package fallback
+is permitted.
+
+The reference profile supports SQLite and H3 linked modules for TypeScript and compiled
+Wasm handlers. Python dependency plans are unsupported. SQLite supplies a fixed database
+bridge; H3 supplies allowlisted numeric methods, with 64-bit integer identities transported
+as decimal strings to preserve precision. Initializer bytes belong to the verified capture;
+later edits to source files cannot change an admitted initializer. Modules and initializers
+confer no filesystem, credential, external datasource or cross-Realm authority.
+
+Persistent SQLite state is private to the host-derived World, Realm and dependency identity.
+The guest cannot select a machine path. A fresh execution restores the previous snapshot
+only when its module, version, digest and initializer metadata match. Mismatch must refuse
+reuse without silently deleting or replacing the old state. A host must serialize competing
+writers within its supported deployment model and state whether it supports multiple
+processes; the reference profile supports one host process only.
+
+Successful output validation and current retained authority precede the final publication
+decision. Failure, accepted cancellation or deadline expiry before that decision must
+preserve the previous published state. Once publication wins, later cancellation or
+revocation cannot be reported as if the completed publication had not occurred. Publication
+latency after that decision is not bounded by the guest execution deadline.
+
+The reference profile caps each serialized snapshot at 64 MiB, refusing an oversized
+candidate before publication. This cap does not establish aggregate Realm storage admission
+or physical high-water accounting for all files and recovery overhead. It provides forced
+complete candidate contents, atomic replacement of each individual file and normal restart
+persistence. It does not provide power-loss recovery, atomic replacement of a snapshot and
+its metadata as a pair, or a writable guest filesystem. Export requires explicit host
+authorization and a consistent copy; another process must not read the live private database.
 
 ## Reference implementation
 
@@ -453,11 +517,40 @@ in the main specification:
 | Captured Virtual Cypher | Implemented owned reads and same-installation captured producers/collections with retained resource grants and rollback materialization. |
 | Owner database target approval | Adoption, upgrade, revocation and read-only production SQL use through the owner connection facade are implemented. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
-| Additional dependency ecosystems, private Realm database persistence and VFS | Not implemented on this path. |
+| Linked Wasm modules and private SQLite snapshots | Implemented under the exact-module and bounded snapshot profile above, with normal restart persistence and explicit capacity/durability limits. |
+| Additional package ecosystems, aggregate private-state accounting and writable guest VFS | Not implemented on this path. |
 | Firecracker, generalized remote backends and resumable arbitrary computation | Not implemented. |
 
 Hosts must state which profile and capabilities they support. Generated types describe an
 operation's contract; they do not grant permission or prove receiver availability.
+
+## Captured watch execution and approval
+
+An authenticated owner may explicitly check an admitted watch immediately. Manual and
+scheduled execution must retain the same owner, World, installation, revision, capture
+digest, watch and lens authority and use the same bounded evaluation and judge policy.
+The manual action cannot supply replacement authority or execution arguments. It grants
+no permission of its own. The five-minute minimum interval continues to govern schedules;
+it does not delay an explicit owner action or become a configurable demonstration exception.
+
+Watch approval is distinct from handler, lens, query and API approval. The owner must
+approve the exact captured watch separately; granting or revoking one watch must preserve
+unrelated grants and use the current installation/revision. Discovery reads verified
+declarations without running guest code. A persisted approval and subsequent runtime
+rebuild have separate outcomes: a failed rebuild must not be reported as an unsaved grant.
+
+The first successful check baselines without delivering. Later checks compare the bounded
+items against the saved snapshot and deliver only newly admitted items. Outcomes distinguish
+baseline, delivered, nothing new, failed and refused, retaining the actual count of accepted
+notifications even if later work fails or authority changes. Acceptance by the host is not
+a receipt from a phone or other external channel. Memory provenance completes before a
+watch item is published as a notification; a failed memory attempt remains retryable.
+
+Notification identity retains owner, World, installation, Realm, watch and item identity
+without incorporating capture digest or approval revision. An approved capture upgrade
+therefore preserves notification identity, but the reference snapshot policy rebaselines
+when the capture digest changes. This is not continuation of the previous comparison
+snapshot or an exactly-once delivery guarantee.
 
 ## Me captured GraphQL operation profile
 
@@ -553,6 +646,13 @@ functions are a fixed set: `count`, `sum`, `avg`, `min`, `max`, `coalesce`, `siz
 `ceil`, `floor`, `round`, `date` and `datetime`; a call to any other function refuses.
 Named host views, global source mirrors and diagnostic probes are not expanded or
 invoked. Captured collections use the retained snapshot profile below.
+
+Graph ownership identifiers and captured World authority are separate. In this profile,
+graph `userId`, `worldId` and `workspaceId` are tenant aliases: populated ownership fields
+must consistently identify the caller. They are not the captured filesystem World's
+authority identifier. The host separately retains and checks the selected World for
+execution and owner decisions. This profile does not promise a separate graph partition
+for each filesystem World selected by the same owner.
 
 Queries use the existing scoped Cypher executor and virtual join engine. Only
 captured producers from the same installation can run. Their callbacks retain the
@@ -757,8 +857,49 @@ they can no longer be taken. Nothing on this path
 applies a proposal to the graph. Submitting a proposal needs its own approval, distinct
 from `cypher_query`: the owner grants it through the same admission preview, adopt and
 upgrade flow as other resources, and it is listed separately from graph-query approval, so
-approving a Realm's reads never also approves its write proposals. The confirmation that
-follows a proposal, and the write it may produce, remain a separate later contract.
+approving a Realm's reads never also approves its write proposals. Confirmation and the
+effect it may produce use the separate owner-decision profile below.
+
+### Owner-confirmed private effects
+
+A host may expose an authenticated owner decision over a pending proposal. It must derive
+the owner and selected World from authentication, retain the submission's installation,
+revision, capture digest, handler and required grants, and resolve fresh current authority
+before applying a decision. A finished guest invocation's deadline is not the lifetime of
+the owner's later decision. Revocation, an upgrade or a World mismatch must refuse the
+old proposal; a newer grant cannot authorize it. Guest code has no confirmation capability.
+
+The reference decision policy is operator-configured and empty by default. It admits only
+`private-storage` effects on one existing, uniquely matched, consistently owned private
+node. Public, reference, organization-shared, virtual and explicitly shared targets are
+refused. A decoration may set only separately allowlisted properties. A named method maps
+an exact set of arguments to operator-selected stored properties; it does not execute
+arbitrary methods, guest code or external operations. Identity, ownership, sharing and
+host bookkeeping fields cannot be written.
+
+This policy is narrower than the submission grammar above: at most 64 scalar fields,
+strings of at most 8 KiB UTF-8, signed 64-bit integers, finite numbers, booleans and null.
+Nested objects and arrays may be valid submissions but are refused for application, as
+are `external` effects and unconfigured methods or properties. Submission acceptance
+therefore does not promise that this host can apply the proposal.
+
+When the operator configures a revision property, an absent stored revision means zero;
+invalid, negative or exhausted revisions refuse. A supplied `expectedRevision` must match
+under the node's write lock, and a successful write increments the revision. Supplying an
+expected revision without a configured revision property refuses. Omitting it makes no
+pre-image or conflict-merge guarantee.
+
+Accept and reject compete for one process-local claim, consumed before an effect. The
+private mutation and a categorical audit receipt must commit atomically under bounded
+execution, with retained authority rechecked before commit. The receipt identifies the
+decision and authority without copying proposed field values. Outcomes distinguish
+applied, rejected, refused, conflict and unknown. A failed or lost commit acknowledgment
+must not be reported as proof of no effect; an unknown result is not automatically retried.
+No post-commit authority check can turn a committed write into an apparent refusal.
+
+Pending proposals are process-local and disappear on restart. A second decision on a
+consumed or absent proposal conflicts. These limits do not provide a durable decision
+queue, multi-process coordination or exactly-once delivery of owner decisions.
 
 ## Me captured producer paging profile
 
