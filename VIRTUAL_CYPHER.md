@@ -2315,7 +2315,116 @@ RETURN p
 
 ---
 
-## 13. The contract, in one line
+## 13. Derived labels — DERIVE rules
+
+A **rule set** defines a **derived label**: a label that exists on no stored node, whose
+membership is CONCLUDED from data by rules — including rules that refer to the label they are
+defining. That self-reference is the point: it expresses propagation no single query can —
+ownership chains, phoenix succession, status that feeds back into further status. Where a view
+(§8) saves *one* query, a rule set is *many unordered clauses of one definition*, evaluated to a
+least fixpoint. A view cannot reference itself; a rule may.
+
+```yaml
+# rules/phoenix-succession.yml — one rule set per file (shipped by realm-gov-uk)
+name: gov-uk/phoenix-succession
+derives: PhoenixSuccessor
+description: >-
+  An appointment that follows the same officer's appointment at a company the register now
+  records as dissolved; phoenixDepth counts dissolved predecessors in the chain.
+rules:
+  - derive: "(b:PhoenixSuccessor)"
+    from: |
+      MATCH (a:UkAppointment {companyStatus: 'dissolved'}), (b:UkAppointment)
+      WHERE b.officerId = a.officerId AND b.companyNumber <> a.companyNumber
+        AND a.appointedOn IS NOT NULL AND b.appointedOn IS NOT NULL
+        AND b.appointedOn > a.appointedOn
+  - derive: "(c:PhoenixSuccessor {phoenixDepth: d})"
+    from: |
+      MATCH (b:PhoenixSuccessor), (c:UkAppointment)
+      WHERE c.officerId = b.officerId AND c.companyNumber <> b.companyNumber
+        AND b.companyStatus = 'dissolved'
+        AND b.appointedOn IS NOT NULL AND c.appointedOn IS NOT NULL
+        AND c.appointedOn > b.appointedOn
+      WITH c, max(coalesce(b.phoenixDepth, 1) + 1) AS d
+```
+
+Each rule is a **head and a body** — read it as an implication:
+
+- **`derive`** is a node pattern naming what the rule concludes: which body variable becomes a
+  member, and (optionally) derived properties computed from body bindings. Its one label must be
+  the rule set's `derives`. Quote it: property maps contain `: `, which YAML would otherwise read
+  as a nested mapping.
+- **`from`** is ordinary read-only Virtual Cypher that BINDS variables and stops — **no
+  RETURN**. The head is the projection; the host constructs the runnable query from the parsed
+  head, and both productions are parsed by the real Cypher parser (the same §8.1 stance: no new
+  grammar in queries, definition is metadata).
+
+**Semantics in one sentence: a node carries the label if and only if some rule concludes it.**
+Rules are unordered clauses — reordering them cannot change the result — and evaluation runs to a
+fixpoint, so a member concluded by one rule can satisfy another rule's body; the second rule
+above chains through its own conclusions, which is how a depth-unbounded pattern is expressed in
+two clauses. Two rule sets may derive the same label: that is the union of their clauses, not a
+conflict. The classic worked case is the OFAC 50 Percent Rule — blocked if listed, or if blocked
+parties in AGGREGATE own ≥ 50%, recursively — where the entity that matters is on no list and no
+fixed-depth query can be correct for all data.
+
+### 13.1 Params, and anchoring a rule
+
+A rule set may declare **params** in the same vocabulary as view params (type / `default` /
+`description`), referenced as `$name` in any body:
+
+```yaml
+params:
+  minStake: { type: int, default: 50, description: "Aggregate percentage at which status propagates" }
+```
+
+A query that merely MATCHes the derived label evaluates the rules **implicitly, on defaults** —
+so a rule set meant for implicit evaluation should default every param. Anchoring a rule set to
+one entity is nothing special: declare the key as a param (`{officerId: $officer}`). Param names
+may not shadow the engine's reserved names or the scope pair (`userId`, `worldId`).
+
+### 13.2 What a rule may say — the validated fragment
+
+Validation at install time enforces the fragment that makes hosted rules safe — each restriction
+is a leg of the guarantee that evaluation terminates:
+
+| You may | You may not |
+| --- | --- |
+| conclude a label, with derived properties | write the graph (`CREATE`/`MERGE`/`SET`/`DELETE` in a body) |
+| reference the derived label positively — recursion | reference it under `NOT` (non-monotone self-reference) |
+| aggregate in recursion with `sum` / `count` / `max` / `collect` | use `min` / `avg` / percentiles inside recursion |
+| reference other labels, views and virtual joins as usual | `RETURN` in a body — the head is the projection |
+| reference declared params as `$name` | reference a param the set does not declare |
+
+A rule set that breaks the fragment fails validation with a message naming the rule and the
+property it broke; it never half-installs. A conforming set is guaranteed to terminate: rules can
+only label nodes that exist, membership only grows, and a growing subset of a finite set must
+stop growing.
+
+### 13.3 Conclusions are computed, never stored — and they carry their why
+
+Derived facts are an overlay: queries see conclusions consistent with the data at the moment they
+ask, nothing persists, and removing the realm removes the label with nothing to clean up. Every
+membership records its **firing chain** — which rule concluded it, in which round, with which
+values, and how values grew as membership grew. That trace is the mechanical object an
+explanation renders rather than reconstructs: "blocked because A (30%) and B (25%) together hold
+55%" is read off the chain, not inferred after the fact. Rule bodies pass the same per-user
+scoping as every query, so a rule can never read what its author's own query could not.
+
+### 13.4 Guidance
+
+- **Ship the projection view with the rule set.** Referencing the derived label is what triggers
+  evaluation, so a small view (`MATCH (p:PhoenixSuccessor) WHERE p.phoenixDepth >= $minDepth
+  RETURN …`) is how the label reaches every surface — the console, apps, the SQL door — with no
+  client work. realm-gov-uk's `views/phoenix-succession.yml` is the model.
+- **Rules conclude over data present in the graph.** A realm whose facts are producer-fetched
+  feeds its rules through promoted/stored anchors (a watchlist), not through live fetches inside
+  the fixpoint. Say the data contract in the rule-set description.
+- Derived labels participate in visibility/tenancy like any label a query names.
+- Name derived properties from the head and prefix them for the realm (`phoenixDepth`, not
+  `depth`) — the label's vocabulary outlives the file it was declared in.
+
+## 14. The contract, in one line
 
 > **Bind a real anchor; declare how a label is fetched; the engine probes, fetches once per
 > producer, materializes transiently, runs your Cypher over real + virtual together, and rolls
