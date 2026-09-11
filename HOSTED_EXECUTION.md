@@ -260,7 +260,7 @@ The provider itself is trusted with that credential: rejecting common echoes can
 that a malicious provider has not transformed it into other response data. Revocation cannot
 undo a request already accepted by the provider.
 
-The reference profile supports:
+The default reference profile supports:
 
 | Declaration | Support |
 | --- | --- |
@@ -293,6 +293,43 @@ neither a general credential lookup nor complete OpenAPI schema validation. Capt
 handler producers can use the same approved API receiver. Graph-backed lens integration
 remains open.
 
+### Local development API destinations
+
+A host may additionally support an operator-enabled local development destination profile
+for captured REST operations and persisted GraphQL queries. Public HTTPS on port 443 remains
+the default. A Realm declaration cannot enable the local profile: the operator must configure
+an independent allowlist of exact local origins, which is empty by default. An empty list
+refuses every local destination. Entries have no wildcards, host aliases, subnet ranges or
+port ranges.
+
+A local origin must be exactly `http://127.0.0.1:<port>`, with an explicit decimal port from
+1024 through 65535. The origin contains no path (including a trailing slash), query string,
+fragment or userinfo. An operation or GraphQL endpoint may append its captured fixed path,
+subject to its existing path-validation rules. Neither the guest nor an operation argument
+may replace the origin, choose another port, override the URL or supply a redirect target.
+The transport must connect directly to that literal address and port and must not follow
+redirects.
+
+The host must require the exact declared origin to be in the operator's current allowlist
+when admitting an owner operation grant, before every dispatch and before returning data.
+A different port is a different origin and needs its own operator entry. Removing an entry
+refuses later dispatches and any in-flight data return, even while the owner grant remains.
+Operator approval alone grants no operation access: the owner still approves the exact
+captured operation, artifact digest, installation revision and current wallet value. All
+retained handler, consumer and operation checks, wallet binding, revocation, credential
+redaction, request/response bounds and refusal behavior continue to apply. Removing either
+authority cannot undo a request already accepted by the service.
+
+The host must refuse `localhost`, shortened or alternative IPv4 forms such as `127.1`, IPv6
+loopback aliases such as `[::1]`, userinfo, omitted ports, ports 0 and 80, any non-allowlisted
+port, other loopback addresses and arbitrary private addresses such as `10.0.0.1`. DNS names
+that resolve to loopback are also refused. This profile authorizes no public tunnel, general
+forwarding proxy, TLS verification bypass or environment-token fallback.
+
+Loopback HTTP carries credentials and data in plaintext on the host. The operator must
+select an explicitly trusted local service before approving its exact origin; the same
+provider trust and credential-disclosure limitations as the public profile apply.
+
 ### Write operations
 
 A captured `apis/apis.yml` entry may also declare `write-operation-ids`, naming OpenAPI
@@ -307,7 +344,7 @@ A Realm declares at most 32 API entries. An entry's read `operation-ids` list mu
 nonempty even when it also declares writes, and at most 64 write ids are accepted per entry,
 within the same 128-operations-per-Realm ceiling the read profile already enforces. A write id cannot also appear among the read
 ids, and the write list is checked against the same vendored document, the same
-destination, port and TLS rules as a read operation. A request body, when present, is
+destination profile as a read operation. A request body, when present, is
 declared as an OpenAPI `requestBody` object holding only a `content` key — no `required` or
 `description` alongside it — whose sole entry carries only `application/json` content, whose
 own schema is either an inline object or a reference local to the vendored document's own
@@ -424,8 +461,8 @@ operation's contract; they do not grant permission or prove receiver availabilit
 
 ## Me captured GraphQL operation profile
 
-A captured Realm may declare `graphql/operations.yml` (version 1), naming one fixed HTTPS
-endpoint and a fixed set of persisted query documents the Realm ships. There is no live
+A captured Realm may declare `graphql/operations.yml` (version 1), naming one fixed endpoint
+(HTTPS by default) and a fixed set of persisted query documents the Realm ships. There is no live
 query text, fragment, operation name or endpoint override on the call path: every document,
 its variable schema and the destination all come from the manifest, never from the caller:
 
@@ -442,11 +479,14 @@ operations:
       - {name: id, type: string, required: true, max-length: 64}
 ```
 
-The endpoint is a single fixed HTTPS origin pinned in the manifest: host present, no user
+The default endpoint uses a single fixed HTTPS origin pinned in the manifest: host present, no user
 info, port 443 or the default, no query string, fragment, percent-encoded path segment or
 `.`/`..` traversal segment, and no `{`/`}` placeholder that could turn it into a template —
 reaching it follows the same no-redirect rule an ordinary captured API destination already
-follows. Authentication is a bearer token or an API key in a named header, drawn from the
+follows. A host supporting the [local development profile](#local-development-api-destinations)
+may instead admit an endpoint at an operator-allowlisted literal loopback origin, retaining
+all the endpoint path restrictions above and the local profile's grant, dispatch and data-return
+checks. Authentication is a bearer token or an API key in a named header, drawn from the
 owner's wallet the same way an ordinary captured API operation's `token-env` is, plus up to
 16 fixed `X-` headers. At most 32 operations are declared per Realm, each with at most 32
 variables; a variable is one of four scalar types — string, integer, number or boolean —
@@ -472,7 +512,8 @@ document text itself never varies per call and is never built from a guest-suppl
 fragment.
 
 The host accepts up to 16 fixed `X-` headers, each bounded to printable ASCII, and a bearer
-`Authorization` header. The host refuses: an endpoint outside the fixed HTTPS shape above;
+`Authorization` header. The host refuses: an endpoint outside the applicable fixed destination
+profile above;
 more than 16 fixed headers, or a fixed header outside that shape; an API-key header whose
 name collides with a fixed header or with a small set of reserved authentication header
 names; more than 32 operations per
