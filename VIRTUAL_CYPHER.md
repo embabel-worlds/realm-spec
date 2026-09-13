@@ -1879,12 +1879,48 @@ has no voice and no word count:
 | `voice` | the PROSE reductions | register/style ("second person, warm") |
 | `wordcount` | the PROSE reductions | a target length — a prompt-level target, never a mid-sentence cut |
 | `punctuation` | the PROSE reductions | `'plain'` (the only value): the result never contains a semicolon — the ban is enforced after the model writes, not merely requested, so it holds on every run |
+| `sample` | the HOLISTIC judgments (`score`, `classify`) | `{size, subset}` — how much of the group reaches the model, and which part |
 
 `confidence`, `fresh` and `materialize` are EDGE keys (a generative floor, a producer's cache) and an
 aggregation has neither, so they are rejected here rather than accepted and ignored. A prose key on a
 non-prose function, an unknown key, and a `{realm: {…}}` map are all rejected the same way: warned
 about, never silently inert. Because a map is a value the map cannot be confused with an instruction —
 `summarize(n.body, {ai: {voice:'noir'}})` steers, it does not summarize toward the word "noir".
+
+The map NESTS: `sample` groups two keys that are one decision, and the interior is ordinary Cypher
+(quoted or back-ticked keys, strings containing braces, any depth) because the real parser reads it,
+not a scanner. A trailing map carrying NEITHER `ai` nor `realm` is not steering at all — it stays the
+caller's own positional argument.
+
+#### `sample` — how much of a group a holistic judgment reads
+
+`score` and `classify` reduce a group to ONE number or ONE label, so their evidence must fit a single
+model call — unlike `summarize`, `themes`, `relevant` or `extract`, which fold a whole group in
+batches. They therefore read a bounded sample of the group, and **say what they left out**: a group
+larger than the sample returns a `PARTIAL_RESULT` note naming the counts and the strategy, so a
+number over 40 of 500 items never renders as a number over all 500.
+
+```cypher
+MATCH (t:ResearchTopic)-[:HAS_NEWS]->(n:NewsItem)
+RETURN t.name,
+       score(n.description, 'relevance to enterprise AI',
+             {ai: {sample: {size: 120, subset: 'longest'}}}) AS fit
+```
+
+| Key | Effect |
+|---|---|
+| `size` | items that reach the model. Capped at 200 — the evidence has to fit one call — and clamped with a warning rather than refused. Omit it to keep the function's own default |
+| `subset` | which items: `first` (the default), `last`, `longest`, `random`. Omit it to keep `first` |
+
+Choosing a `subset` is not a formality. `first` and `last` are only as meaningful as the group's
+ORDER, which is the engine's unless the query put an `ORDER BY` before the clause that groups —
+so **`longest` is the order-independent choice**, and usually the better one: the longest items carry
+the most evidence per call. `random` is SEEDED from the call's own criterion, so the same question over
+the same group always reads the same items; an unseeded spread would make identical queries disagree
+with nothing in the result to explain why.
+
+`sample` on a folding reduction is rejected like any inapplicable key — capping `summarize` would
+quietly throw away evidence the author expected folded.
 
 #### `cluster` — groups with sizes you can trust
 
