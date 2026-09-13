@@ -2411,11 +2411,13 @@ RETURN p
 
 ---
 
-## 13. Derived labels — DERIVE rules
+## 13. Derived labels and relationships — DERIVE rules
 
 A **rule set** defines a **derived label**: a label that exists on no stored node, whose
 membership is CONCLUDED from data by rules — including rules that refer to the label they are
-defining. That self-reference is the point: it expresses propagation no single query can —
+defining. A rule set may equally define a **derived relationship** — an edge whose existence is
+a conclusion (§13.4); everything in this section reads the same for both, with membership a
+node for a label and an ordered pair for a relationship. That self-reference is the point: it expresses propagation no single query can —
 ownership chains, phoenix succession, status that feeds back into further status. Where a view
 (§8) saves *one* query, a rule set is *many unordered clauses of one definition*, evaluated to a
 least fixpoint. A view cannot reference itself; a rule may.
@@ -2446,16 +2448,18 @@ rules:
 
 Each rule is a **head and a body** — read it as an implication:
 
-- **`derive`** is a node pattern naming what the rule concludes: which body variable becomes a
-  member, and (optionally) derived properties computed from body bindings. Its one label must be
-  the rule set's `derives`. Quote it: property maps contain `: `, which YAML would otherwise read
+- **`derive`** is a node pattern — or, for a derived relationship, a relationship pattern
+  (§13.4) — naming what the rule concludes: which body variable becomes a member, and
+  (optionally) derived properties computed from body bindings. Its one label (or relationship
+  type) must be the rule set's `derives`. Quote it: property maps contain `: `, which YAML would otherwise read
   as a nested mapping.
 - **`from`** is ordinary read-only Virtual Cypher that BINDS variables and stops — **no
   RETURN**. The head is the projection; the host constructs the runnable query from the parsed
   head, and both productions are parsed by the real Cypher parser (the same §8.1 stance: no new
   grammar in queries, definition is metadata).
 
-**Semantics in one sentence: a node carries the label if and only if some rule concludes it.**
+**Semantics in one sentence: a node carries the label — a pair of nodes carries the
+relationship — if and only if some rule concludes it.**
 Rules are unordered clauses — reordering them cannot change the result — and evaluation runs to a
 fixpoint, so a member concluded by one rule can satisfy another rule's body; the second rule
 above chains through its own conclusions, which is how a depth-unbounded pattern is expressed in
@@ -2486,16 +2490,19 @@ is a leg of the guarantee that evaluation terminates:
 
 | You may | You may not |
 | --- | --- |
-| conclude a label, with derived properties | write the graph (`CREATE`/`MERGE`/`SET`/`DELETE` in a body) |
+| conclude a label or a relationship, with derived properties | write the graph (`CREATE`/`MERGE`/`SET`/`DELETE` in a body) |
 | reference the derived label positively — recursion | reference it under `NOT` (non-monotone self-reference) |
 | aggregate in recursion with `sum` / `count` / `max` / `collect` | use `min` / `avg` / percentiles inside recursion |
 | reference other labels, views and virtual joins as usual | `RETURN` in a body — the head is the projection |
 | reference declared params as `$name` | reference a param the set does not declare |
+| conclude the same kind in every rule of a set | mix a node head and a relationship head — one fixpoint cannot be both |
 
 A rule set that breaks the fragment fails validation with a message naming the rule and the
 property it broke; it never half-installs. A conforming set's MEMBERSHIP is guaranteed to
-terminate: rules can only label nodes that exist, membership only grows, and a growing subset of
-a finite set must stop growing.
+terminate: rules can only conclude over nodes that exist, membership only grows, and a growing
+subset of a finite set must stop growing. For a relationship set the finite set is the *square*
+of the node count, which is why it carries its own budget (`maxPairs`, §13.4) on top of the
+argument.
 
 That argument is about membership, and it does not extend to a derived NUMERIC PROPERTY defined
 in terms of its own value on a neighbour. `phoenixDepth` above is one: it settles because
@@ -2507,7 +2514,7 @@ the rule that stamps it; it never truncates silently. Note that the aggregate is
 this — `max` cannot shrink as membership grows, so the fragment admits it, while a grounded `min`
 descending to a floor would converge and is refused; what bounds such a value is groundedness,
 which lives in your data and not in the rule. **Conclude membership in the rule set and compute a
-distance in the projection view** (§13.4), where `min(length(p))` is finite because a path may not
+distance in the projection view** (§13.5), where `min(length(p))` is finite because a path may not
 repeat a relationship.
 
 ### 13.3 Conclusions are computed, never stored — and they carry their why
@@ -2520,7 +2527,63 @@ explanation renders rather than reconstructs: "blocked because A (30%) and B (25
 55%" is read off the chain, not inferred after the fact. Rule bodies pass the same per-user
 scoping as every query, so a rule can never read what its author's own query could not.
 
-### 13.4 Guidance
+### 13.4 Derived relationships — an edge whose existence is a conclusion
+
+A head may be a **relationship pattern**; the rule set then defines a derived relationship type,
+named by `derives:` exactly as a label would be:
+
+```yaml
+# rules/shared-failures.yml
+name: gov-uk/shared-failures
+derives: SHARES_FAILURES
+description: >-
+  Two officers are related when the register shows both appointed at two or more of the same
+  now-dissolved companies; `failures` counts the companies they share.
+rules:
+  - derive: "(a)-[:SHARES_FAILURES {failures: n}]->(b)"
+    from: |
+      MATCH (a:Officer)-[:APPOINTED_AT]->(c:Company {status: 'dissolved'})<-[:APPOINTED_AT]-(b:Officer)
+      WHERE a.officerId < b.officerId
+      WITH a, b, count(DISTINCT c.companyNumber) AS n
+      WHERE n >= 2
+```
+
+The head's shape is validated the way a node head's is, and each restriction is a leg of the
+same guarantee:
+
+- **Exactly one relationship, directed.** `(a)<-[:T]-(b)` is accepted and normalised by swapping
+  the endpoints; an undirected head is refused — a derived edge has to be written in one
+  direction.
+- **Endpoints are two bare, DISTINCT variables the body binds.** A label on an endpoint is
+  refused: the body binds the variables, so a label there constrains nothing. A head naming the
+  same variable twice is refused.
+- **Membership is the ordered pair**, and a later round that re-concludes a pair UPDATES its
+  properties rather than laying a parallel edge — the second clause of a recursive set settles
+  values exactly as a derived label's properties settle.
+- **One set concludes one kind.** Label rules and relationship rules are different fixpoints;
+  mixing them in one set is refused (they remain free to reference each other across sets — a
+  label rule may match a derived relationship, and vice versa).
+
+Once concluded, the edge is ordinary: a later rule recurses over it, a query traverses it, and
+the schema declares the relationship — with the endpoint kinds its bodies bind — before a single
+pair exists, exactly as a derived label is declared before a single member is.
+
+**`maxPairs` is the budget that node sets never needed.** Node membership is bounded by the node
+count, and the fragment's own argument terminates it. Pair membership is bounded by the square of
+the node count, so an under-constrained body is quadratic in time and in transient writes long
+before `maxRounds` would notice. Exceeding `maxPairs` (default 250 000) fails loudly rather than
+returning a truncated relation — a cross join is the first mistake an edge rule's author makes,
+and a loud refusal is the correction; a silent truncation would be a wrong answer wearing a right
+one's shape. The setting is ignored by a set that derives a label.
+
+**A derived relationship is not transitive closure.** A path already in the graph needs no rule —
+`*1..n` traverses it. Derive an edge when its *existence is a conclusion* no traversal states:
+two officers related because they share two or more failed companies; a supplier `EXPOSED_TO` a
+sanctioned party once the aggregated stake crosses a threshold. If the rule's body is nothing but
+a path over existing edges with no aggregation, threshold, or judgment, write the path in the
+query instead.
+
+### 13.5 Guidance
 
 - **Ship the projection view with the rule set.** Referencing the derived label is what triggers
   evaluation, so a small view (`MATCH (p:PhoenixSuccessor) WHERE p.phoenixDepth >= $minDepth

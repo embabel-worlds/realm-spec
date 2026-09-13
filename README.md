@@ -45,7 +45,7 @@ realm-name/
 │   └── my-reference.yml
 ├── views/                # Named Cypher views (YAML, optional) — appear in the console Views list
 │   └── my-views.yml
-├── rules/                # DERIVE rule sets (YAML, optional) — derived labels, one rule set per file
+├── rules/                # DERIVE rule sets (YAML, optional) — derived labels/relationships, one rule set per file
 │   └── my-rules.yml
 ├── lenses/               # Named focused experiences (YAML, optional) — CypherScript/fixed/anchor/module
 │   └── my-lens.yml

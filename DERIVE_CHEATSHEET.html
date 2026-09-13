@@ -138,7 +138,7 @@
 </head>
 <body>
 <header>
-  <h1>DERIVE rules <small>derived labels by fixpoint · queries stay Virtual Cypher — <a href="VIRTUAL_CYPHER_CHEATSHEET.html">that sheet</a> still applies</small></h1>
+  <h1>DERIVE rules <small>derived labels and relationships by fixpoint · queries stay Virtual Cypher — <a href="VIRTUAL_CYPHER_CHEATSHEET.html">that sheet</a> still applies</small></h1>
   <label class="search">
     <input id="q" type="search" placeholder="Filter — try &quot;refused&quot;, &quot;params&quot;, &quot;why&quot;" aria-label="Filter the cheat sheet">
     <kbd>/</kbd>
@@ -217,9 +217,12 @@ rules:
       <div class="grid">
     <section data-tags="head yaml rules">
       <h2>The head — <code>derive:</code></h2>
-      <p class="lede">One node pattern: a variable (which body binding becomes the member), exactly one label (the set's own <code>derives</code>), and optional properties computed from body bindings.</p>
-      <pre><code>derive: "(e:Blocked {blockedStake: stake})"</code></pre>
+      <p class="lede">One node pattern: a variable (which body binding becomes the member), exactly one label (the set's own <code>derives</code>), and optional properties computed from body bindings. Or one RELATIONSHIP pattern — the set then derives an edge, and membership is the ordered pair.</p>
+      <pre><code>derive: "(e:Blocked {blockedStake: stake})"
+derive: "(a)-[:SHARES_FAILURES {failures: n}]-&gt;(b)"</code></pre>
       <div class="rule must"><b>quote</b><span>Always quote the head: property maps contain <code>: </code>, which YAML silently reads as a nested mapping. Same trap for bodies — use a block scalar (<code>from: |</code>).</span></div>
+      <div class="rule must"><b>edge</b><span>An edge head is DIRECTED, and its endpoints are two bare, distinct variables the body binds — no labels there (the body binds them; a label would constrain nothing). Re-concluding a pair UPDATES its properties, never lays a parallel edge.</span></div>
+      <div class="rule care"><b>not a path</b><span>A path already in the graph needs no rule — <code>*1..n</code> traverses it. Derive an edge when its EXISTENCE is a conclusion: a threshold crossed, an aggregate reached.</span></div>
       <div class="rule care"><b>name</b><span>Prefix derived property names for the realm (<code>phoenixDepth</code>, not <code>depth</code>) — the label&#39;s vocabulary outlives the file.</span></div>
     </section>
 
@@ -267,7 +270,10 @@ rules:
         <tr><td><code>min</code>/<code>avg</code>/percentiles inside recursion</td><td>they can shrink as membership grows; <code>sum</code>/<code>count</code>/<code>max</code>/<code>collect</code> cannot</td></tr>
         <tr><td><code>RETURN</code> in a body</td><td>the head is the projection</td></tr>
         <tr><td>An undeclared <code>$param</code></td><td>refused at install, not at first evaluation</td></tr>
-        <tr><td>A head that is a path, unlabelled, or variable-less</td><td>a rule concludes exactly one node</td></tr>
+        <tr><td>A head that is a path, unlabelled, or variable-less</td><td>a rule concludes exactly one node or one edge</td></tr>
+        <tr><td>An undirected edge head, a labelled endpoint, or one variable twice</td><td>a derived edge is written in one direction, between two bindings the body made</td></tr>
+        <tr><td>A set mixing a node head with an edge head</td><td>one fixpoint cannot be both nodes and pairs</td></tr>
+        <tr><td>Pair membership past <code>maxPairs</code> (default 250&#8239;000)</td><td>pairs are bounded by the SQUARE of the node count — an under-constrained body fails loudly, never truncates</td></tr>
       </table>
       <div class="rule must"><b>loud</b><span>Refusals name the rule and the property it broke, at validate/install time. A rule set never half-installs, and a fixpoint that cannot converge fails loudly, never truncates.</span></div>
       <div class="rule never"><b>never</b><span>A distance derived through its own value — <code>depth = 1 + max(neighbour depth)</code> — on data that can contain a CYCLE. Membership terminates; that value has no ceiling, and the round cap is what catches it. Conclude membership in the rule set, compute the distance in the projection view with <code>min(length(p))</code>.</span></div>
@@ -278,8 +284,8 @@ rules:
 
   <details class="theme" open data-theme-tags="use views rest query">
     <summary class="theme-head">
-      <span class="theme-name">Using a derived label</span>
-      <span class="theme-lede">It is just a label. That is the whole interface.</span>
+      <span class="theme-name">Using a derived label or relationship</span>
+      <span class="theme-lede">It is just a label — or just an edge. That is the whole interface.</span>
       <span class="theme-count"></span>
     </summary>
     <div class="theme-body">
