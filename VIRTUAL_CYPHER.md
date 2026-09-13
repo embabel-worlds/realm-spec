@@ -1507,6 +1507,19 @@ ignored. Its keys:
   **graph-cached** aggregate (§5.5) it is not free text at all: it quantizes to the nearest persisted
   BAND (gist ~40 / standard ~200 / long ~600), so sized requests stay cacheable — 250 hits the same
   committed node the directive-free ask created.
+- **`text: {chars, keep, clean}`** — how much of each ROW's text a per-row judgment reads
+  (`ai.relevant` / `ai.score` / `ai.classify`), which part of it, and whether markup is stripped first.
+  `keep: 'around'` reads the passages nearest the criterion rather than the opening — on a FILTER that
+  is the difference between a degraded answer and a row dropped because its deciding sentence sat too
+  far in. Markup is stripped by default; `clean: 'none'` keeps it. Same map, same keys, as §7.7.
+- **`sample: {size, subset}`** — on a **generative** edge, how many ANCHORS are rendered into the one
+  prompt that seeds the generation, and which of them. A generative edge is exempt from `maxAnchors`
+  (it makes no per-anchor call — every anchor goes into a single prompt), so the prompt is what bounds
+  it: 200 by default, raisable to 1000, `subset` one of `first` (the default) / `last` / `longest` /
+  `random`. It matters more here than it reads: the generation is seeded by the anchors in the prompt
+  **and by no others**, so the rest of a larger set is not thinly covered, it is absent — which is why
+  a bounded prompt now returns a `PARTIAL_RESULT` note saying how many anchors of how many it was
+  seeded from. The same key, spelled the same way, bounds a holistic aggregation's evidence (§7.7).
 
 **Precedence:** query directive → the realm edge's own declaration (§5.3 generator, aggregate `reduce`)
 → the deployment default. The directives apply to **generative** edges (the generator call) and
@@ -1816,7 +1829,12 @@ What this costs, and the one rule it imposes:
 - The value is computed BEFORE the query runs, so a query that filters on an aggregation pays for it
   whether or not the filter keeps anything. Narrow the rows FIRST — a `WHERE` before the aggregating
   `WITH` — and only groups that survive are computed. A query whose filter would need more than a few
-  hundred model calls is REFUSED with the count, rather than sampled quietly.
+  hundred model calls is REFUSED with the count, rather than sampled quietly. The refusal names the
+  cap it hit, and a query that MEANS to spend that much says so: `{ai: {maxGroups: 600}}` raises it
+  (up to 2000 — past that, compute the value once and persist it), and a smaller number LOWERS it,
+  which is how a shipped view holds its own spending line. This is a cost guard, so it is the
+  author's to set; the completeness gate on a truncated fetch is a correctness guard and has no
+  such override, by design.
 - **The clause must carry the node the value belongs to.** `WITH e, classify(e.member, …) AS gender`
   works; `WITH e.name AS name, classify(e.member, …) AS gender` is refused, because an aggregate value
   belongs to a group and a group needs an identity to attach it to. The refusal says so and names the
@@ -1879,12 +1897,90 @@ has no voice and no word count:
 | `voice` | the PROSE reductions | register/style ("second person, warm") |
 | `wordcount` | the PROSE reductions | a target length — a prompt-level target, never a mid-sentence cut |
 | `punctuation` | the PROSE reductions | `'plain'` (the only value): the result never contains a semicolon — the ban is enforced after the model writes, not merely requested, so it holds on every run |
+| `sample` | the HOLISTIC judgments (`score`, `classify`) | `{size, subset}` — how much of the group reaches the model, and which part |
+| `text` | EVERY reduction | `{chars, keep, clean}` — how much of each ITEM reaches the model, which part, and what is stripped first |
+| `maxGroups` | a FILTERABLE aggregation | the group cap this query intends to spend, up to 2000 |
 
 `confidence`, `fresh` and `materialize` are EDGE keys (a generative floor, a producer's cache) and an
 aggregation has neither, so they are rejected here rather than accepted and ignored. A prose key on a
 non-prose function, an unknown key, and a `{realm: {…}}` map are all rejected the same way: warned
 about, never silently inert. Because a map is a value the map cannot be confused with an instruction —
 `summarize(n.body, {ai: {voice:'noir'}})` steers, it does not summarize toward the word "noir".
+
+The map NESTS: `sample` groups two keys that are one decision, and the interior is ordinary Cypher
+(quoted or back-ticked keys, strings containing braces, any depth) because the real parser reads it,
+not a scanner. A trailing map carrying NEITHER `ai` nor `realm` is not steering at all — it stays the
+caller's own positional argument.
+
+#### `sample` — how much of a group a holistic judgment reads
+
+`score` and `classify` reduce a group to ONE number or ONE label, so their evidence must fit a single
+model call — unlike `summarize`, `themes`, `relevant` or `extract`, which fold a whole group in
+batches. They therefore read a bounded sample of the group, and **say what they left out**: a group
+larger than the sample returns a `PARTIAL_RESULT` note naming the counts and the strategy, so a
+number over 40 of 500 items never renders as a number over all 500.
+
+```cypher
+MATCH (t:ResearchTopic)-[:HAS_NEWS]->(n:NewsItem)
+RETURN t.name,
+       score(n.description, 'relevance to enterprise AI',
+             {ai: {sample: {size: 120, subset: 'longest'}}}) AS fit
+```
+
+| Key | Effect |
+|---|---|
+| `size` | items that reach the model. Capped at 200 — the evidence has to fit one call — and clamped with a warning rather than refused. Omit it to keep the function's own default |
+| `subset` | which items: `first` (the default), `last`, `longest`, `random`. Omit it to keep `first` |
+
+Choosing a `subset` is not a formality. `first` and `last` are only as meaningful as the group's
+ORDER, which is the engine's unless the query put an `ORDER BY` before the clause that groups —
+so **`longest` is the order-independent choice**, and usually the better one: the longest items carry
+the most evidence per call. `random` is SEEDED from the call's own criterion, so the same question over
+the same group always reads the same items; an unseeded spread would make identical queries disagree
+with nothing in the result to explain why.
+
+`sample` on a folding reduction is rejected like any inapplicable key — capping `summarize` would
+quietly throw away evidence the author expected folded.
+
+#### `text` — how much of each ITEM is read, and which part
+
+Where `sample` chooses the ITEMS, `text` chooses what each of them contributes. Every reduction cuts a
+long item to a per-item budget; this makes the budget, the part kept, and the cleaning explicit.
+
+```cypher
+RETURN score(n.body, 'relevance to my Series A funding round',
+             {ai: {text: {chars: 2000, keep: 'around'}}}) AS fit
+```
+
+| Key | Effect |
+|---|---|
+| `chars` | characters of each item that reach the model (capped at 8000 — a per-item budget multiplies by the sample). Omit to keep the reduction's own default |
+| `keep` | which part survives: `head` (the default), `tail`, `ends` (both, with a visible elision), `around` |
+| `clean` | a CLEANER NAME, or `auto` (the default — every cleaner that detects its own noise) or `none`. Several compose: `'html,quoted-reply'` |
+
+**`around` reads the passages nearest your criterion**, and it is the one to reach for on documents.
+Every reduction that cuts text is holding the criterion it is cutting it for — a rubric, a label set, a
+relevance criterion — so "the first N characters" can be "the N characters nearest the question" at no
+extra cost. On `ai.relevant`, where the judgment DROPS rows, that is the difference between a degraded
+answer and a row wrongly excluded because its deciding sentence sat in paragraph three.
+
+**Markup is stripped by default.** A field carrying HTML spends most of a character budget on tags, so
+the sentence that decides the answer is the one that does not fit; `clean: 'none'` keeps the markup for
+the rare item whose markup IS the subject.
+
+**Cleaning is a named strategy, not a fixed list.** `html` is the one the engine ships; a world adds
+another by registering a cleaner — an email's quoted reply chain, a CMS field's shortcodes, a log's
+escape codes — and it is then available to every reduction and every per-row judgment by name, with
+nothing in the query language to change. `auto` runs whichever of them recognise their own noise in the
+item; naming one runs it whether or not it recognised anything, which is the escape hatch for a source
+the detector is deliberately too conservative for. A name that is registered nowhere cleans with
+NOTHING and says so — a typo must neither silently clean with something else nor fail the query.
+
+An item cut to its budget returns a `PARTIAL_RESULT` note naming the part read and how many items were
+cut — cleaning alone does not, because removing markup loses nothing the model could have used.
+
+The same `{ai: {text: {…}}}` map applies on a virtual EDGE, where it bounds what the per-row judgments
+read: `WHERE ai.relevant(n, '…')`, `ORDER BY ai.score(n, '…')`, `RETURN ai.classify(n, '…')` (§7.3–7.5).
 
 #### `cluster` — groups with sizes you can trust
 
