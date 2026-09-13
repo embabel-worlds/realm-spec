@@ -1507,6 +1507,14 @@ ignored. Its keys:
   **graph-cached** aggregate (§5.5) it is not free text at all: it quantizes to the nearest persisted
   BAND (gist ~40 / standard ~200 / long ~600), so sized requests stay cacheable — 250 hits the same
   committed node the directive-free ask created.
+- **`sample: {size, subset}`** — on a **generative** edge, how many ANCHORS are rendered into the one
+  prompt that seeds the generation, and which of them. A generative edge is exempt from `maxAnchors`
+  (it makes no per-anchor call — every anchor goes into a single prompt), so the prompt is what bounds
+  it: 200 by default, raisable to 1000, `subset` one of `first` (the default) / `last` / `longest` /
+  `random`. It matters more here than it reads: the generation is seeded by the anchors in the prompt
+  **and by no others**, so the rest of a larger set is not thinly covered, it is absent — which is why
+  a bounded prompt now returns a `PARTIAL_RESULT` note saying how many anchors of how many it was
+  seeded from. The same key, spelled the same way, bounds a holistic aggregation's evidence (§7.7).
 
 **Precedence:** query directive → the realm edge's own declaration (§5.3 generator, aggregate `reduce`)
 → the deployment default. The directives apply to **generative** edges (the generator call) and
