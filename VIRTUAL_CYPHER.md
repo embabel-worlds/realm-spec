@@ -1816,7 +1816,12 @@ What this costs, and the one rule it imposes:
 - The value is computed BEFORE the query runs, so a query that filters on an aggregation pays for it
   whether or not the filter keeps anything. Narrow the rows FIRST — a `WHERE` before the aggregating
   `WITH` — and only groups that survive are computed. A query whose filter would need more than a few
-  hundred model calls is REFUSED with the count, rather than sampled quietly.
+  hundred model calls is REFUSED with the count, rather than sampled quietly. The refusal names the
+  cap it hit, and a query that MEANS to spend that much says so: `{ai: {maxGroups: 600}}` raises it
+  (up to 2000 — past that, compute the value once and persist it), and a smaller number LOWERS it,
+  which is how a shipped view holds its own spending line. This is a cost guard, so it is the
+  author's to set; the completeness gate on a truncated fetch is a correctness guard and has no
+  such override, by design.
 - **The clause must carry the node the value belongs to.** `WITH e, classify(e.member, …) AS gender`
   works; `WITH e.name AS name, classify(e.member, …) AS gender` is refused, because an aggregate value
   belongs to a group and a group needs an identity to attach it to. The refusal says so and names the
@@ -1880,6 +1885,7 @@ has no voice and no word count:
 | `wordcount` | the PROSE reductions | a target length — a prompt-level target, never a mid-sentence cut |
 | `punctuation` | the PROSE reductions | `'plain'` (the only value): the result never contains a semicolon — the ban is enforced after the model writes, not merely requested, so it holds on every run |
 | `sample` | the HOLISTIC judgments (`score`, `classify`) | `{size, subset}` — how much of the group reaches the model, and which part |
+| `maxGroups` | a FILTERABLE aggregation | the group cap this query intends to spend, up to 2000 |
 
 `confidence`, `fresh` and `materialize` are EDGE keys (a generative floor, a producer's cache) and an
 aggregation has neither, so they are rejected here rather than accepted and ignored. A prose key on a
