@@ -2397,9 +2397,22 @@ is a leg of the guarantee that evaluation terminates:
 | reference declared params as `$name` | reference a param the set does not declare |
 
 A rule set that breaks the fragment fails validation with a message naming the rule and the
-property it broke; it never half-installs. A conforming set is guaranteed to terminate: rules can
-only label nodes that exist, membership only grows, and a growing subset of a finite set must
-stop growing.
+property it broke; it never half-installs. A conforming set's MEMBERSHIP is guaranteed to
+terminate: rules can only label nodes that exist, membership only grows, and a growing subset of
+a finite set must stop growing.
+
+That argument is about membership, and it does not extend to a derived NUMERIC PROPERTY defined
+in terms of its own value on a neighbour. `phoenixDepth` above is one: it settles because
+appointment dates strictly increase, so the chain it climbs cannot close. On CYCLIC data — mutual
+blocks in a tracker, cross-holdings in an ownership graph, dependency cycles in a registry — two
+members lift each other by one every round and there is no ceiling for the fixpoint to stop at.
+The evaluation then fails loudly at its round cap, naming the property that would not settle and
+the rule that stamps it; it never truncates silently. Note that the aggregate is not what decides
+this — `max` cannot shrink as membership grows, so the fragment admits it, while a grounded `min`
+descending to a floor would converge and is refused; what bounds such a value is groundedness,
+which lives in your data and not in the rule. **Conclude membership in the rule set and compute a
+distance in the projection view** (§13.4), where `min(length(p))` is finite because a path may not
+repeat a relationship.
 
 ### 13.3 Conclusions are computed, never stored — and they carry their why
 
@@ -2417,6 +2430,11 @@ scoping as every query, so a rule can never read what its author's own query cou
   evaluation, so a small view (`MATCH (p:PhoenixSuccessor) WHERE p.phoenixDepth >= $minDepth
   RETURN …`) is how the label reaches every surface — the console, apps, the SQL door — with no
   client work. realm-gov-uk's `views/phoenix-succession.yml` is the model.
+- **A distance belongs in the projection view, not in the fixpoint.** Chain length, depth and
+  shortest route are what authors most often reach for as derived properties, and on cyclic data a
+  property that recurses through its own value does not settle (§13.2). Conclude membership in the
+  rule set; measure in the view — `MATCH p = (c:Exposed)-[:DEPENDS_ON*1..10]->(v) … min(length(p))`
+  is bounded whatever the data does.
 - **Rules conclude over data present in the graph.** A realm whose facts are producer-fetched
   feeds its rules through promoted/stored anchors (a watchlist), not through live fetches inside
   the fixpoint. Say the data contract in the rule-set description.

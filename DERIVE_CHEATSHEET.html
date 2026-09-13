@@ -270,6 +270,7 @@ rules:
         <tr><td>A head that is a path, unlabelled, or variable-less</td><td>a rule concludes exactly one node</td></tr>
       </table>
       <div class="rule must"><b>loud</b><span>Refusals name the rule and the property it broke, at validate/install time. A rule set never half-installs, and a fixpoint that cannot converge fails loudly, never truncates.</span></div>
+      <div class="rule never"><b>never</b><span>A distance derived through its own value — <code>depth = 1 + max(neighbour depth)</code> — on data that can contain a CYCLE. Membership terminates; that value has no ceiling, and the round cap is what catches it. Conclude membership in the rule set, compute the distance in the projection view with <code>min(length(p))</code>.</span></div>
     </section>
       </div>
     </div>
