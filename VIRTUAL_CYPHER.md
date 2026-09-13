@@ -1956,7 +1956,7 @@ RETURN score(n.body, 'relevance to my Series A funding round',
 |---|---|
 | `chars` | characters of each item that reach the model (capped at 8000 — a per-item budget multiplies by the sample). Omit to keep the reduction's own default |
 | `keep` | which part survives: `head` (the default), `tail`, `ends` (both, with a visible elision), `around` |
-| `clean` | `auto` (the default — markup stripped when the item looks like markup), `html` (always), `none` |
+| `clean` | a CLEANER NAME, or `auto` (the default — every cleaner that detects its own noise) or `none`. Several compose: `'html,quoted-reply'` |
 
 **`around` reads the passages nearest your criterion**, and it is the one to reach for on documents.
 Every reduction that cuts text is holding the criterion it is cutting it for — a rubric, a label set, a
@@ -1967,6 +1967,14 @@ answer and a row wrongly excluded because its deciding sentence sat in paragraph
 **Markup is stripped by default.** A field carrying HTML spends most of a character budget on tags, so
 the sentence that decides the answer is the one that does not fit; `clean: 'none'` keeps the markup for
 the rare item whose markup IS the subject.
+
+**Cleaning is a named strategy, not a fixed list.** `html` is the one the engine ships; a world adds
+another by registering a cleaner — an email's quoted reply chain, a CMS field's shortcodes, a log's
+escape codes — and it is then available to every reduction and every per-row judgment by name, with
+nothing in the query language to change. `auto` runs whichever of them recognise their own noise in the
+item; naming one runs it whether or not it recognised anything, which is the escape hatch for a source
+the detector is deliberately too conservative for. A name that is registered nowhere cleans with
+NOTHING and says so — a typo must neither silently clean with something else nor fail the query.
 
 An item cut to its budget returns a `PARTIAL_RESULT` note naming the part read and how many items were
 cut — cleaning alone does not, because removing markup loses nothing the model could have used.
