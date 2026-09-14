@@ -61,6 +61,7 @@ checkout is mounted.
 | query the graph from a code_mode script or skill | `gateway.kg.query` | "CypherScript" |
 | query the graph from a WASM HANDLER | `ctx.cypher.query` — see the warning under CypherScript | "CypherScript" |
 | hand-authored gateway methods / **verbs** | `src/api/*.ts` + `tests/` | "`src/` and `tests/`" |
+| prove the answer surface survives the author | `tests/questions.yml` + `tests/verify.sh` | "`tests/`" — REQUIRED once anything takes words from a person |
 | an MCP server (last resort — prefer `apis/` for anything API-backed) | `mcp/` | "`mcp/`" |
 | a slash command | `commands/` | "`commands/`" |
 | inbound events → typed `Signal`s | `events/` (webhook + poll) | "`events/`" |
@@ -186,6 +187,39 @@ Read the WARNINGS in every response, not just the rows. A `PRODUCER_ERROR` / `FI
 `INCOMPLETE_TRAVERSAL` note is the host telling you the answer is not what it appears to be — a
 0-row result with a warning is a broken realm, not an empty source.
 
+### If anyone types WORDS at your realm, ship `tests/questions.yml`
+
+Running every view proves the realm answers when called BY NAME. It says nothing about the form
+most users actually meet it in — a question in their own words. Those are different code paths:
+a realm whose every view returns rows while its natural-language questions return zero, or
+answer confidently from the wrong join, is not done.
+
+**Judgment call, one hard trigger.** A realm that is verbs, handlers or enrichment — called by
+code, never typed at — needs no battery. The moment any surface takes words from a person it is
+REQUIRED: an `apps/` page with a free-text ask, a `skills/`/`focuses/`/chat surface, views meant
+to be reached by asking rather than by name, or a user who says they want to ask this realm
+questions. **If you cannot tell, ask the user** — "will people type questions at this, or only
+call it?" — rather than guessing.
+
+Two halves, and the second is the one that finds fabrication:
+
+1. **What it CAN answer.** One entry per question a person would really type. Reconcile figures
+   with `matchesView: {name, column}` — the ask's number must equal the named view's, so the
+   realm checks itself and the test survives data changes. `nonEmpty` is a floor, not an
+   assertion: it once passed 72 rows of unrelated config as an answer to "how many places am I
+   watching".
+2. **What it CANNOT.** Questions whose answer the sources do not carry — a measure nobody
+   publishes, the wrong granularity, a population the data never describes. Ask each one
+   SEVERAL times: generation is stochastic, a fabrication that shows one run in five is still a
+   fabrication, and one green run proves almost nothing. Check every response mechanically
+   against `GET /api/v1/admin/kg/schema` — a property no label declares, or an answer column
+   claiming a word the query never selects, is a fabrication and fails the run. Reading the
+   queries by eye does not work; the failure mode is a query that looks entirely reasonable.
+
+Every question that ever disappointed a user becomes a permanent entry. When the battery fails,
+fix the REALM first — a missing view, a description that does not carry the asking vocabulary, a
+`types/` `examples:` steer for a path the generator keeps missing — before blaming the model.
+
 ### Cost declarations: `maxAnchors` is about the SOURCE, not the number
 
 `maxAnchors` bounds how many nodes may drive one fetch. Its default assumes a **per-anchor**
@@ -209,3 +243,6 @@ the rows you will show, *then* resolve their names — not the other way round.
 - **Naming**: lowercase-hyphenated ids, UpperCamelCase type names.
 - **An untested view is an unshipped view.** Declarative capabilities are only proven by a live
   run against the real source — see "The declarative half has no unit tests".
+- **A realm people ask in words ships `tests/questions.yml`.** Views passing by name proves a
+  different code path from the one users meet. Include the adversarial half — what the realm
+  cannot answer, asked repeatedly — because that is where a generator invents.
