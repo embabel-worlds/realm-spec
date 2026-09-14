@@ -570,7 +570,7 @@ producers:
     keyAs: abn                # the join's recordKeyField
     rowIdAs: recordKey        # OPTIONAL synthesized per-row id — see below
     userAgent: browser        # some publishers 403 a bare client
-    fileCacheSeconds: 21600
+    fileCacheSeconds: 21600    # TABULAR ONLY — see the note below
     maxRows: 200000
     maxRowsPerKey: 500
     project:
@@ -585,6 +585,13 @@ producers:
 - **One copy per deployment, not per world or per key.** The file is cached by resolved URL and
   revalidated conditionally, so an unchanged register is not re-transferred. A batch of anchor
   keys reads one file.
+- **`fileCacheSeconds` is THIS producer's, and an unknown field voids the whole file.** It caches a
+  downloaded document, so it exists only on `tabular`. A `remote` producer caches with
+  `cache: { kind: ttl, seconds: … }` alone. Putting it on a remote producer is not ignored and is
+  not a warning: the file fails to parse, so **every producer declared in it silently ceases to
+  exist**, and the only symptom is `Unknown producer '<name>' in plan` when a query finally needs
+  one — surviving a refresh and a restart, because nothing is stale. Check each field against the
+  producer's own `kind`; the realm's problem list names the file when a host records it there.
 - **A banner above the header does not become the schema.** With `headerRow: auto` (the default)
   the header is detected by column shape, so the "Generated on …" lines these exports carry are
   skipped rather than parsed as column names.
@@ -1782,6 +1789,24 @@ RETURN regress([d.medianPay, d.avgPrice, d.density], d.crimeRatePer1000, d.name)
   `dropped` — a thin join cannot masquerade as a strong signal.
 - Grouping is the ordinary implicit GROUP-BY: `RETURN d.region, regress(…)` fits one model per
   region; drop the key for one fit over the whole group.
+- **They belong in the RETURN**, where an aggregation is finalized. Written into a `WITH` they
+  type-check, compute nothing, and hand back **null** — which reads as "no association" when it
+  means "not computed". Two forms of the same mistake, both silent:
+
+  ```cypher
+  WITH pt, collect(…) AS seats, correlate(pay, sigs) AS r   // null: a WITH does not finalize
+  RETURN correlate([x IN seats | x.pay], [x IN seats | x.sigs])  // null: these are AGGREGATES
+                                                                 // over rows, not list functions
+  ```
+
+  Both are fixed the same way — accumulate the rows and let the RETURN reduce them:
+
+  ```cypher
+  WITH pt, toFloat(cp.annualPay) AS pay, toFloat(cs.signatures) AS sigs
+  RETURN pt.action AS petition, correlate(pay, sigs) AS payVsSignatures
+  ```
+
+  If a view needs both a collected list and a coefficient, that is two views, not one clause.
 
 **Ingested document content is aggregable.** When the accumulated row expression is an ingested
 document's `content` (or `text`) — `holds(d.content, '…')`, `summarize(d.text, '…')` on a matched
