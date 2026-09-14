@@ -160,7 +160,10 @@ credential in the path exactly once and in no header). A bearer credential goes 
 declared scheme word (host test: CapturedApiCredentialsTest.a bearer credential the realm
 declared a scheme for goes out under that word), or under the usual one when none is declared
 (host test: CapturedApiCredentialsTest.a bearer credential with no declared scheme goes out
-under the usual word). A socket channel may declare a handshake whose named reply field
+under the usual word). The api document has to agree: its http security scheme is the declared
+word, or the usual one when none is declared, and a document that spells another word is refused
+at install in either direction (host test: CapturedApiContractTest.a document whose scheme is
+not the word the credential declared refuses, in either direction). A socket channel may declare a handshake whose named reply field
 supplies the url it connects to (host test: WebSocketTransportTest.a declared handshake
 supplies the url the socket connects to); the handshake goes out under the channel's own
 credential rather than the one serving the named operation (host test:
