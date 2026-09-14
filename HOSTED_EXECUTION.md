@@ -54,6 +54,30 @@ A source supplies its name, partition stream and event type. A consumer supplies
 and a captured `namespace.function` handler. Neither declaration supplies credentials or
 selects an owner World. Consumer names identify independent cursors.
 
+A Realm whose channels are generated carries four further declaration files, and a consumer
+file is held to the same rules whether the host reads it at installation or at run time: a key the
+host owns is refused at both (host test: CapturedConsumerReaderParityTest.a key the host owns
+is refused by both), so is a handler the Realm never declared (host test:
+CapturedConsumerReaderParityTest.a handler the realm never declared is refused by both), and a
+conforming consumer is accepted at both (host test: CapturedConsumerReaderParityTest.a
+conforming consumer is accepted by the scan and by the manifest). A consumer file carrying a
+YAML tag or anchor is refused, and the same file without them is read (host test:
+CapturedConsumerDeclarationsTest.each shape hazard's conforming twin is read). `channels/<name>.yml` declares one channel: its transport, endpoint, credential
+and handler (host test: CapturedChannelDeclarationsTest.every vendored channel parses through the
+scan). `sources/<name>.yml` names the channel a source draws its events from (host test:
+CapturedRealmChannelSourcesTest.a channel realm's own sources resolve through the publication
+catalog). `consumers/<name>.yml` names the source and the handler (host test:
+CapturedConsumerReaderParityTest.a conforming consumer is accepted by the scan and by the
+manifest), and says whether that consumer speaks to the assistant, which is dispatched as
+declared (host test: CapturedRealmChannelConsumersAssistantTest.a consumer declared in
+consumers yml is dispatched and carries the assistant flag it declared). `credentials.yml` is a
+non-empty list of declared credentials (host test: CapturedCredentialDeclarationsTest.the file
+is a list, and not an empty one). A source name the Realm's `data-pipes.yml` already claims is
+refused (host test: CapturedConsumerReaderParityTest.a source name the realm's data pipes
+already claim is refused by both), and one unreadable file refuses its own scan without leaking
+its contents (host test: CapturedChannelDeclarationsTest.the refusal carries nothing out of the
+file it could not read).
+
 Source approval grants publication. Consumer approval grants access to one exact source
 reference and requires separate handler approval. Host-source references bind a World,
 provider registration, source revision and stream. Realm-source references bind a World,
@@ -95,6 +119,387 @@ trailing JSON and invalid Unicode. This callback route requires a retained captu
 invocation; the owner-authenticated and delegated-bearer ingress routes below append to the
 same journal through their own authenticated identity instead, with no captured guest
 invocation in the loop. There is no generic HTTP publication tool.
+
+## Channels
+
+A channel declaration names exactly one transport — a live socket, a polled endpoint, or an
+inbound webhook — and the host refuses any other (host test: CapturedChannelDeclarationsTest.a
+transport the host cannot carry is refused). It names the captured handler its frames are
+delivered to (host test: CapturedChannelDeclarationsTest.a channel naming no handler is
+refused), spelled as a namespaced verb (host test: CapturedChannelDeclarationsTest.a handler
+that is not a namespaced verb is refused), and that handler must be one the Realm's own
+inventory declares (host test: CapturedChannelDeclarationsTest.a channel handing frames to a
+handler the realm never declared is refused). It names a credential the Realm also declares
+(host test: CapturedChannelDeclarationsTest.a channel naming a credential the realm never
+declared is refused) and never says where the secret lives (host test:
+CapturedChannelDeclarationsTest.a signature may not say where the secret lives). Host-owned
+fields are refused in a declaration (host test: CapturedChannelDeclarationsTest.every
+host-owned key is refused on a channel), as are unknown keys (host test:
+CapturedChannelDeclarationsTest.a key the host does not know is refused) and keys belonging to
+another transport (host test: CapturedChannelDeclarationsTest.a key belonging to another
+transport is refused). An outbound channel declares a reachable provider origin; loopback and
+bare addresses refuse (host test: CapturedChannelDeclarationsTest.this machine and a bare
+address are refused on a websocket), only the scheme that transport speaks is accepted (host
+test: CapturedChannelDeclarationsTest.only the scheme the transport speaks is accepted), and
+the url may carry one credential placeholder in its path or query (host test:
+CapturedChannelDeclarationsTest.a url may carry one credential placeholder in its path or
+query) and nothing else in braces (host test: CapturedChannelDeclarationsTest.a url carrying
+anything else in braces is refused). One file declares one channel name (host test:
+CapturedChannelDeclarationsTest.two files claiming one channel name refuse each other), the
+file is at most 64 KiB (host test: CapturedChannelDeclarationsTest.a file over 64 KiB is
+refused unread), and a symlink is refused however good the file it points at (host test:
+CapturedChannelDeclarationsTest.a symlink is refused however good the file it points at).
+
+The host attaches the bound credential, and a socket carries it on the upgrade (host test:
+WebSocketTransportTest.the upgrade carries the bearer credential and the handler is told the
+channel opened); a polled endpoint carries it on the request (host test:
+LongPollTransportTest.the request carries the bearer credential and the response body reaches
+the handler), or, where the declaration says the credential travels in the path, exactly once
+in the path and in no header (host test: LongPollTransportTest.a declared placeholder puts the
+credential in the path exactly once and in no header). A bearer credential goes out under the
+declared scheme word (host test: CapturedApiCredentialsTest.a bearer credential the realm
+declared a scheme for goes out under that word), or under the usual one when none is declared
+(host test: CapturedApiCredentialsTest.a bearer credential with no declared scheme goes out
+under the usual word). A socket channel may declare a handshake whose named reply field
+supplies the url it connects to (host test: WebSocketTransportTest.a declared handshake
+supplies the url the socket connects to); the handshake goes out under the channel's own
+credential rather than the one serving the named operation (host test:
+CapturedTransportHandshakeCallerTest.the handshake goes out under the channel's own credential,
+not the api entry's), and borrowing that operation does not borrow its approval (host test:
+CapturedTransportHandshakeCallerTest.borrowing the entry does not borrow its approval). A reply
+missing the declared field refuses rather than connecting somewhere unnamed (host test:
+CapturedTransportHandshakeCallerTest.a reply without the declared field refuses rather than
+connecting somewhere unnamed), and a handshake url outside the operator's allowed origins is
+refused (host test: WebSocketTransportTest.a handshake url at an origin the operator never
+allowed is refused). Redirects are never followed (host test: WebSocketTransportTest.a redirect
+on the upgrade is refused rather than followed; host test: LongPollTransportTest.a redirect is
+not followed, whatever origin it points at).
+
+An inbound channel is served at an address the host mints at approval, and the address shown to
+the owner is the one the host serves (host test: CapturedChannelIngressControllerTest.the
+address an owner is given is the one this endpoint is served on; host test:
+CapturedChannelIngressServedPathTest.the ingress endpoint is served under the versioned
+prefix). A request is dispatched only after its declared signature verifies against the bound
+secret (host test: CapturedChannelIngressControllerTest.a request signed with the bound hmac
+secret is dispatched and answered with a count; host test:
+CapturedChannelIngressControllerTest.a request signed with the bound public key is dispatched);
+a body changed after signing is refused (host test: CapturedChannelIngressControllerTest.a body
+changed after signing is refused and nothing is dispatched) and a timestamp outside the
+declared window is refused (host test: CapturedChannelIngressControllerTest.a timestamp outside
+the window is refused and nothing is dispatched). An inbound channel may declare a verification
+reply, which the host answers itself after the signature check, dispatching nothing — either
+echoing a named field (host test: CapturedChannelIngressControllerTest.the host answers an echo
+check itself and dispatches nothing) or returning a declared constant (host test:
+CapturedChannelIngressControllerTest.the host answers a constant check itself and dispatches
+nothing). A badly signed check is refused like any other request (host test:
+CapturedChannelIngressControllerTest.a badly signed check is refused like any other request and
+answers nothing), an ordinary event at such a channel is still dispatched (host test:
+CapturedChannelIngressControllerTest.an ordinary event at a channel that declares a check is
+still dispatched), a verification reply is refused on the outbound transports (host test:
+CapturedChannelDeclarationsTest.a verification on a websocket is refused; host test:
+CapturedChannelDeclarationsTest.a verification on a long-poll is refused), and a constant
+answer over a kilobyte is refused at declaration (host test: CapturedChannelDeclarationsTest.a
+constant answer over a kilobyte of canonical json is refused). The host's own authority headers
+never reach the guest (host test: CapturedChannelIngressControllerTest.the host's own authority
+headers never reach the guest), and the receipts answered back are the publications the handler
+actually made (host test: WebhookTransportTest.the receipts answered back are what the handler
+published).
+
+A dispatch hands the guest the frame, the cursor the last dispatch left, and the headers the
+transport carried (host test: CapturedChannelDispatcherTest.the guest gets the frame, the
+cursor it left, and the headers the transport carried); where there is no cursor yet and the
+transport carried no headers, neither is handed over (host test:
+CapturedChannelDispatcherTest.a first dispatch carries no cursor and no headers at all).
+Control frames reach the guest as an open and a close carrying the host's own reason and
+nothing else (host test: CapturedChannelDispatcherTest.control frames reach the guest as open
+and as close with our own reason and nothing else), and every close reason is a tag from the
+host's own list (host test: CapturedChannelFramesTest.every close reason is a tag from the
+host's own list). A keepalive tick is its own kind of control frame, distinguishable from a
+real open (host test: CapturedChannelFramesTest.a keepalive is its own kind, so a handler can
+tell a tick from a real socket open), reaches the guest as such (host test:
+CapturedChannelDispatcherTest.a keepalive frame is handed to the guest as its own control
+frame), runs on its own declared schedule while the connection is open (host test:
+WebSocketTransportTest.the keepalive ticks on its own schedule while the connection is open),
+and costs nothing against the frame budget because the host authored all of it (host test:
+CapturedChannelFramesTest.a keepalive costs nothing against the frame budget, because every
+part of it is ours). Binary frames are dropped and counted, never handed to a handler (host
+test: CapturedChannelDispatcherTest.a binary frame is dropped and counted, and no handler ever
+sees it). A cursor the handler returns is kept along with the parameter name it asked for (host
+test: CapturedChannelDispatcherTest.a cursor the handler returned is kept, along with the
+parameter it named) and is sent on the next request under that name (host test:
+LongPollTransportTest.the second request carries the cursor the handler kept, under the name it
+asked for); a handler that threw leaves the cursor where it was (host test:
+CapturedChannelDispatcherTest.a handler that threw leaves the cursor exactly where it was), and
+the cursor a handler is given is the one read before it ran (host test:
+CapturedChannelDispatcherTest.the cursor the handler was given is the one read before it ran).
+Each installation and each channel keeps its own cursor (host test:
+CapturedChannelCursorStoreTest.each installation and each channel keeps its own cursor), and a
+replacement is whole or not at all (host test: CapturedChannelCursorStoreTest.a replacement is
+whole, leaves no temporary behind, and never mixes two values).
+
+Reconnect backoff doubles from one second and stops at five minutes (host test:
+CapturedChannelReconnectPolicyTest.backoff doubles from one second and stops at five minutes),
+jitter only shortens a wait and never past the floor (host test:
+CapturedChannelReconnectPolicyTest.jitter only shortens a wait, and never past the floor), and
+an operator's configured limits replace those defaults (host test:
+CapturedChannelReconnectPolicyTest.the operator's limits replace the defaults). A provider
+close reconnects, and the reopened channel carries the cursor the last dispatch kept (host
+test: WebSocketTransportTest.a provider close reconnects, and the reopened channel carries the
+cursor the last dispatch kept). A socket handler may ask the host to end the connection: it
+ends after the handler in flight returns, and the guest sees a close carrying the reason
+`guest` followed by a fresh open (host test: WebSocketTransportTest.a guest close ends the
+connection after the handler returns, and the guest sees close guest then a fresh open; host
+test: CapturedChannelFramesTest.a guest-requested close carries the reason guest and nothing
+else). That request reaches only the channel's own live connection and refuses on anything else
+(host test: WebSocketTransportTest.a guest stream op reaches the channel's own running
+websocket and refuses on anything else). A polled endpoint may not poll faster than the
+operator's floor, whatever interval the Realm declared (host test: LongPollTransportTest.a
+realm cannot poll faster than the floor, whatever interval it declared); a 429 or a 5xx
+dispatches nothing and waits out the backoff (host test: LongPollTransportTest.a 429 dispatches
+nothing and the next request waits out the backoff; host test: LongPollTransportTest.a 5xx
+dispatches nothing and the next request waits out the backoff), while a 401 or a 403 closes the
+channel with an error, tells the owner the status, and stops polling (host test:
+LongPollTransportTest.a 401 closes the channel with an error, tells the owner the status, and
+stops polling; host test: LongPollTransportTest.a 403 closes the channel the same way a 401
+does).
+
+Budgets are per source per rolling minute, and two sources or two installations never spend
+each other's (host test: CapturedChannelBudgetsTest.two sources and two installations never
+spend each other's budget). The six hundred and first frame in a minute is dropped and the
+cursor holds at the six hundredth (host test: CapturedChannelBudgetsTest.the six hundred and
+first frame in a minute is dropped and the cursor holds at the six hundredth); each window
+costs the owner one visible problem and no more (host test: CapturedChannelBudgetsTest.the
+window rolls, and each window costs the owner one problem and no more). An over-budget frame
+never reaches the handler and never moves the cursor (host test:
+CapturedChannelDispatcherTest.an over budget frame never reaches the handler and never moves
+the cursor). A frame over the size limit is dropped without spending a slot in the rate window
+(host test: CapturedChannelBudgetsTest.a frame over the size limit is dropped without spending
+a slot in the rate window), publications carry their own budget and their own drop reason (host
+test: CapturedChannelBudgetsTest.publishes have their own budget and their own drop reason),
+and two sources or two installations never spend each other's budget (host test:
+CapturedChannelBudgetsTest.two sources and two installations never spend each other's budget).
+A polled response past the frame cap is dropped rather than handed to a guest (host test:
+LongPollTransportTest.a response past the frame cap is dropped rather than handed to a guest),
+and an inbound body over the cap is refused before anything is looked up (host test:
+CapturedChannelIngressControllerTest.a body over the cap is refused before anything is looked
+up) while a body at the cap is still verified and dispatched (host test:
+CapturedChannelIngressControllerTest.a body at the cap is still verified and dispatched).
+Repeated drops of one kind are counted every time but told to the owner once (host test:
+CapturedChannelDispatcherTest.a second binary frame in the same window is counted again but
+told to the owner once).
+
+Egress is bounded by the declared origin: a channel pointed at an origin the operator never
+allowed refuses at start, before any connection (host test: LongPollTransportTest.a channel
+pointed at an origin the operator never allowed refuses out of start; host test:
+WebSocketTransportTest.an origin the operator never allowed is refused before any socket
+opens). Guest-authored outbound bytes may carry the credential placeholder, which the host
+substitutes on the way out, leaving the guest's own text unchanged (host test:
+WebSocketTransportTest.an identify frame goes out with the credential substituted and the
+guest's own text unchanged); an outbound frame holding the credential anywhere else is refused
+and never written (host test: WebSocketTransportTest.a frame holding the credential anywhere
+else is refused and never written to the socket), including in an encoded form (host test:
+WebSocketTransportTest.a frame holding the base64 of the credential is refused and never
+written to the socket), and a cursor parameter name that spells the credential refuses the
+request rather than sending it (host test: LongPollTransportTest.a parameter name that spells
+the credential refuses the request rather than sending it). Inbound content is scanned the same
+way: a provider response that says the credential back is dropped whole rather than handed to a
+guest (host test: WebSocketTransportTest.a provider that says the bearer back has the frame
+dropped rather than handed to a guest; host test: LongPollTransportTest.a response that carries
+the credential is dropped whole and polling continues), encoded forms included (host test:
+WebSocketTransportTest.a provider that says the bearer back encoded has that frame dropped
+too). Frame content is guest text and reaches no log line (host test: WebSocketTransportTest.a
+text frame reaches the handler and its content reaches no log line), including the content of a
+refused request (host test: CapturedChannelIngressControllerTest.a canary in a refused body
+reaches no log line). The publications a dispatch reports are the host's own count, not the
+handler's word for it (host test: CapturedChannelDispatcherTest.the publications a run reports
+are the host's count, not the handler's word for it), and a count the handler writes into its
+own result is not the reported one (host test: CapturedChannelDispatcherTest.a count a handler
+writes into its own result is not the count the host reports).
+
+## Credentials
+
+A Realm declares the credentials it needs by purpose — kind, provider, description and docs
+link — and never says what the secret is or where it lives (host test:
+CapturedCredentialDeclarationsTest.a credential never says what the secret is or where it
+lives). Five kinds are accepted (host test: CapturedCredentialDeclarationsTest.all five kinds
+are accepted) and anything else is refused (host test: CapturedCredentialDeclarationsTest.a
+kind the host cannot ask for is refused). Only an authorization-flow credential carries scopes
+(host test: CapturedCredentialDeclarationsTest.only an oauth2 credential is scoped), and it
+names at least one (host test: CapturedCredentialDeclarationsTest.an oauth2 credential names at
+least one scope). A bearer credential may name the scheme word its token is sent under (host
+test: CapturedCredentialDeclarationsTest.a bearer credential may name the scheme its token is
+sent under), and a scheme the host would not put in a header is refused (host test:
+CapturedCredentialDeclarationsTest.a scheme the host would not put in a header is refused). Two
+entries may not claim one id (host test: CapturedCredentialDeclarationsTest.two entries may not
+claim one id), a docs link the host would not show a person is refused (host test:
+CapturedCredentialDeclarationsTest.a docs link the host will not put in front of a person is
+refused), and a credential nothing in the Realm references refuses the whole list (host test:
+CapturedCredentialDeclarationsTest.a credential nothing references refuses the list).
+
+The owner binds each declared credential: the owner's view is the list the Realm asked for,
+showing nothing bound yet (host test: CapturedCredentialOwnerServiceTest.the declared list is
+what the realm asked for and says nothing is bound yet). A pasted secret is filed in the
+owner's wallet under a derived key, and the grant holds only that key (host test:
+CapturedCredentialOwnerServiceTest.a pasted secret is filed in the wallet under a derived key
+and the grant holds only the key); an existing wallet item may be bound only when its shape
+matches the declared kind (host test: CapturedCredentialOwnerServiceTest.an existing wallet
+item can be bound only when its shape matches the declared kind); an authorization-flow
+credential is refused as not yet implemented and names the follow-up (host test:
+CapturedCredentialOwnerServiceTest.an oauth2 credential is refused as not implemented and names
+the follow-up). A binding survives a restart (host test: CapturedCredentialOwnerServiceTest.a
+binding survives the authority being read back off disk), and concurrent binds leave exactly
+one winner with no orphaned secret (host test: CapturedCredentialOwnerServiceTest.eight callers
+binding the same credential produce one winner and no orphaned secret). A pasted secret reaches
+the wallet and nowhere else (host test: CapturedCredentialOwnerControllerTest.a pasted secret
+reaches the wallet and nowhere else), and a failure after storage leaks it no further than a
+refusal does (host test: CapturedCredentialOwnerControllerTest.a failure with the secret
+already stored leaks it no further than a refusal does).
+
+Nothing starts before binding: no transport is constructed while a credential is unbound, and
+one is built once it is bound (host test: CapturedChannelServiceTest.nothing is constructed
+while a credential is unbound and one is built once it is bound). Readiness names what is
+missing (host test: CapturedChannelReadinessTest.a granted source with one credential still
+unbound is not ready and names the credential), a grant carrying no wallet key is not a binding
+(host test: CapturedChannelReadinessTest.a credential grant carrying no wallet key is not a
+binding), each channel waits on its own credential and not another's (host test:
+CapturedChannelReadinessTest.each channel waits on its own credential and not on another
+channel's), and a granted source with a bound credential is ready (host test:
+CapturedChannelReadinessTest.a granted source and a bound credential is ready). An unapproved
+source blocks the channel even when every credential is bound (host test:
+CapturedChannelServiceTest.an unapproved source blocks the channel even when every credential
+is bound).
+
+Rebinding rotates: the running transport is stopped with a rotation reason and a fresh one
+starts (host test: CapturedChannelServiceTest.a rebind stops the running transport with
+rotation and starts a fresh one); the revision advances and the replaced secret is dropped
+(host test: CapturedCredentialOwnerServiceTest.a rebind bumps the revision drops the secret it
+replaced and leaves an owner's own item alone). A rotation waits for the frame already inside
+the handler before it dispatches the close (host test: WebSocketTransportTest.a rotation waits
+for the frame already inside the handler before it dispatches close), comes to rest, and a
+later start reads whatever value the binding now names (host test: LongPollTransportTest.a
+rotation comes to rest, and a later start reads the credential the supplier now holds). An
+inbound channel rebinds only after the request in flight is out (host test:
+WebhookTransportTest.a rotation overlapping an in-flight request rebinds only after that
+request is out), and a request signed with the credential the owner rebound away from is
+refused (host test: CapturedChannelIngressControllerTest.a request signed with the credential
+the owner rebound away from is refused).
+
+Revocation closes and does not reopen: revoking the source closes the channel as revoked and no
+later pass reopens it (host test: CapturedChannelServiceTest.revoking the source closes the
+channel as revoked and no later pass reopens it); revoking the installation closes its channels
+on the next reconcile (host test: CapturedChannelServiceTest.revoking the installation closes
+its channels on the next reconcile and nothing reopens them); revoking a credential drops the
+grant and the secret the host filed, and cannot be done twice (host test:
+CapturedCredentialOwnerServiceTest.revoking drops the grant and the secret the host filed and
+cannot be done twice). A revocation arriving while a rotation is still draining is permanent
+(host test: WebSocketTransportTest.a revocation while a rotation is still draining is permanent
+and no later start reopens), an inbound revoke finishes the request in flight and refuses every
+one after it (host test: WebhookTransportTest.a revoke overlapping a request finishes that one
+and refuses every one after it), and a channel with no credential bound refuses every request
+(host test: CapturedChannelIngressControllerTest.a channel with no credential bound refuses
+every request).
+
+The host, not the guest, puts the value on the wire: an outbound frame goes out with the
+credential substituted while the guest's own text is unchanged (host test:
+WebSocketTransportTest.an identify frame goes out with the credential substituted and the
+guest's own text unchanged), the host's own authority headers never reach the guest (host test:
+CapturedChannelIngressControllerTest.the host's own authority headers never reach the guest),
+and an outbound request that would echo a path credential back is refused rather than sent
+(host test: CapturedApiCredentialsTest.a path credential echoed raw in an outbound header is
+refused). The host reads whichever wallet item the grant names at the moment it is needed (host
+test: CapturedChannelServiceTest.the credential supplier reads whichever wallet item the grant
+names, now), and a read that fails costs that attempt without putting anything it said into a
+log (host test: LongPollTransportTest.a supplier that throws costs that poll and nothing of
+what it said is logged). Where a declaration says the credential travels in a request path, the
+host substitutes it at the declared placeholder and nowhere else (host test:
+CapturedApiCredentialsTest.an api credential that travels in the path lands where the
+placeholder was and nowhere else); a url with no placeholder, or with two, refuses rather than
+guessing (host test: CapturedApiCredentialsTest.a url with no placeholder, or with two, refuses
+rather than guessing); a url that already holds the credential refuses rather than sending it
+twice (host test: CapturedApiCredentialsTest.a url that already holds the credential refuses
+rather than sending it twice); and a url whose decoding would spell the credential a second
+time out of one insertion refuses (host test: CapturedApiCredentialsTest.a url whose decoding
+spells the credential a second time out of one insertion refuses). An outbound request that
+echoes the credential nowhere else is admitted (host test: CapturedApiCredentialsTest.an
+outbound request that echoes the path credential nowhere is admitted), while an echo in a
+header (host test: CapturedApiCredentialsTest.a path credential echoed raw in an outbound
+header is refused), in a header name (host test: CapturedApiCredentialsTest.a path credential
+echoed in an outbound header name is refused), or in the body under any supported encoding
+(host test: CapturedApiCredentialsTest.a path credential base64'd twice in the request body is
+refused) is refused. The scan has a documented depth (host test: CapturedApiCredentialsTest.the
+documented four-round decode depth is pinned — four-times-encoded is caught, five-times is not)
+and a documented limit (host test: CapturedApiCredentialsTest.splitting the credential across
+two separate strings is the documented limit, not caught here), and a request that would spend
+the whole work allowance is refused rather than admitted (host test:
+CapturedApiCredentialsTest.a body that spends the whole work allowance is refused rather than
+admitted).
+
+## The assistant call
+
+A consumer may declare that it speaks to the owner's assistant, and the owner grants that one
+consumer at a time (host test: CapturedCredentialOwnerServiceTest.a consumer that asked for the
+assistant can be granted and taken back). A consumer that never asked cannot be granted one
+(host test: CapturedCredentialOwnerServiceTest.a consumer that never asked for the assistant
+cannot be granted one), and the owner can see and withdraw the grant from the same surface as
+the other approvals (host test: CapturedCredentialOwnerControllerTest.the assistant endpoints
+grant and take back one consumer). A call from a consumer with no grant is refused and no
+session is ever created (host test: CapturedAssistantChatTest.a consumer with no assistant
+grant is refused and no session is ever created), and so is a call from a sender the owner has
+not paired (host test: CapturedAssistantChatTest.an unpaired sender is refused and no session
+is ever created). A refusal is returned to the guest as a code (host test:
+CapturedAssistantChatTest.the gateway hands a refusal code out and answers nothing) and never
+rides in an exception message (host test: CapturedAssistantChatTest.a refusal code never
+reaches the exception message), so a Realm can answer with its own pairing hint. A call from a
+paired sender returns the assistant's final message and nothing else (host test:
+CapturedAssistantChatTest.a paired sender is answered with the assistants last message); a
+session evicted mid-turn still answers, and the next call gets a fresh one (host test:
+CapturedAssistantChatTest.a session evicted while its chat is mid-turn still answers, and the
+next call gets a fresh one). Withdrawing the grant refuses the call in flight and everything
+after it (host test: CapturedAssistantChatTest.a revoke landing mid-turn refuses the call in
+flight and everything after it), while unpairing a sender lets the turn in flight finish and
+stops the next one (host test: CapturedAssistantChatTest.an unpair landing mid-turn lets that
+turn finish and stops the next one). What a sender wrote never reaches a log line, a meter or a
+span (host test: CapturedAssistantChatTest.what a sender wrote never reaches a log line, a
+meter or a span).
+
+## Pairing
+
+The owner mints a pairing code for a granted consumer; it has the pairing shape and is never
+readable again (host test: CapturedAssistantOwnerControllerTest.a minted code has the pairing
+shape and is never readable again). A consumer the owner has not let answer cannot be given a
+code (host test: CapturedAssistantOwnerControllerTest.a consumer the owner has not let answer
+cannot be given a code), and a code minted for one installation is not there to claim on
+another (host test: CapturedAssistantChatTest.a code minted for another installation is not
+there to claim on this one). Redeeming a code pairs the thread it arrived on (host test:
+CapturedAssistantChatTest.a code pairs the thread it arrived on and answers Paired), persists
+the binding (host test: CapturedAssistantChatTest.a first redemption through the gateway
+persists the binding and returns Paired to the guest), and works exactly once (host test:
+CapturedAssistantChatTest.a code works exactly once). Minting again invalidates the code the
+owner walked away from (host test: CapturedAssistantChatTest.minting again kills the code the
+owner walked away from), a redemption that stalls until the code expires binds nothing (host
+test: CapturedAssistantChatTest.a redemption stalled inside the claim until the code expires
+binds nothing), and senders racing one code produce exactly one binding (host test:
+CapturedAssistantChatTest.eight senders racing the same code produce exactly one binding).
+Pairing does not advance the installation, so a call holding the earlier revision still stands
+(host test: CapturedAssistantChatTest.pairing never moves the installation on, so a call
+holding the old revision still stands), and a sender pairing while the owner is acting does not
+spoil the revision the owner holds (host test: CapturedAssistantOwnerControllerTest.a sender
+pairing under the owner's feet does not spoil the revision they are holding). The owner sees
+the senders a consumer answers and can stop answering one (host test:
+CapturedAssistantOwnerControllerTest.the owner sees the senders a consumer answers, and can
+stop answering one); unpairing a sender who is not paired is a conflict, not a silent success
+(host test: CapturedAssistantOwnerControllerTest.unpairing a sender who is not paired is a
+conflict, not a silent success); a pairing and an unpair colliding either both land or the
+loser is told so (host test: CapturedAssistantChatTest.a pairing and an unpair colliding on the
+swap both land or the loser is told so); and an owner acting on an installation that has moved
+on is told so (host test: CapturedAssistantOwnerControllerTest.an owner acting on an
+installation that has really moved on is told so). Pairings survive a restart (host test:
+CapturedAssistantChatTest.a grant with paired threads survives being read back off disk, and
+one without is unchanged), and the pairing endpoints are served under the versioned prefix
+(host test: CapturedAssistantOwnerServedPathsTest.the pairing endpoints are served under the
+versioned prefix), the declared path alone being no surface at all (host test:
+CapturedAssistantOwnerServedPathsTest.the declared path alone does not resolve, so the
+versioned one is the only surface).
 
 ## Polling positions
 
@@ -231,6 +636,16 @@ and its digest before storing credentials; target approval alone does not make i
 Upgrade and revocation require the current installation and revision. Replacement approval
 invalidates old access before removing its credentials. Revocation requires no database
 connection and remains available when the configured target has been removed.
+
+The legacy `token-env` spelling, which names a wallet entry directly on a captured API
+operation, is deprecated in favour of a declared credential the owner binds, and an entry
+migrated to a declared credential appears in the declared list alongside the native kinds (host
+test: CapturedCredentialDeclarationsTest.the credentials golden carries every kind once, and
+the migrated spelling with them). A declared credential's id is read in either of the two
+spellings the wire carries (host test: CapturedCredentialDeclarationsTest.both spellings the
+wire carries are accepted), and an id the host will not read a credential under is refused
+(host test: CapturedCredentialDeclarationsTest.a name the host will not read a credential under
+is refused).
 
 A private SQLite dependency serves the Realm's own computation or persistence. Its database,
 WAL, snapshots and recovery overhead must fit that Realm's finite budget. It grants no access
