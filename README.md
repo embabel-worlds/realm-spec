@@ -2782,7 +2782,21 @@ World-authored focuses live at `config/focuses/<name>.yml`; realm-shipped focuse
 ## `tests/`
 
 The realm's regression guard — and the artifact that keeps the answer surface honest after the
-author has moved on. Two files, both optional, both plain enough for a USER to edit:
+author has moved on. Both files are plain enough for a USER to edit.
+
+**Whether a realm needs `questions.yml` is a judgment call with one hard trigger.** A realm whose
+surface is verbs, handlers or enrichment — called by code, never typed at — does not need a
+natural-language battery, and inventing one is ceremony. But the moment ANY surface takes words
+from a person, the battery is **required**, not optional:
+
+- the realm ships an `apps/` page with a free-text ask box;
+- it ships a `skills/`, `focuses/` or chat surface where people ask in their own words;
+- its views are meant to be reachable by asking rather than by name;
+- or the user says they want to ask this realm questions.
+
+If you cannot tell which case you are in, **ask the user** — "will people type questions at this,
+or only call it?" — rather than guessing. Guessing low ships an answer surface nobody has ever
+tested in the form users will meet it; guessing high costs a file nobody reads.
 
 ### `tests/questions.yml` — the natural-language battery
 
@@ -2818,14 +2832,31 @@ Expectation kinds: `nonEmpty: true` (rows must come back — the floor); `minRow
 `matchesView: { name, column, args? }` — the top row's figure from the ask must equal the top
 row's figure from invoking the named view (the realm reconciling against itself). Money and
 count questions should always use `matchesView`; generation is stochastic, and "nonzero" once
-passed a 3x-inflated sum.
+passed a 3x-inflated sum. A count question can also reconcile against a list view's ROW COUNT —
+the count form checked against the list form.
+
+**Carry an ADVERSARIAL half, and repeat it.** The battery above asks what the realm CAN answer.
+The other half asks what it cannot — a measure the sources do not carry, at the wrong
+granularity, or about a population the data never describes — because that is where a generator
+stops answering and starts inventing. A correct response there is a typed refusal, an honestly
+named answer, or a flagged one; a query referencing a property no label declares, or an answer
+column claiming a word the query never selects, is a fabrication and fails the run.
+
+Ask each adversarial question SEVERAL times. Generation is stochastic: a fabrication that
+appears one run in five is still a fabrication, and a single green run proves almost nothing.
+Check every response mechanically against the live schema (`GET /api/v1/admin/kg/schema`) rather
+than by reading it — the failure mode is a query that looks entirely reasonable.
 
 ### `tests/verify.sh` — the executable harness
 
 Ground truth to answer surface in one command: reconcile figures against the SOURCE system
 directly where reachable, invoke every view with every parameter, replay the battery above,
-exit nonzero on any drift. Run it after every change to producers, views or types; run money
-questions more than once. A harness that lives in the author's head re-verifies nothing.
+run the adversarial questions N times each, exit nonzero on any drift. Run it after every change
+to producers, views or types; run money questions more than once. A harness that lives in the
+author's head re-verifies nothing.
+
+Scope the view sweep to THIS realm's own views — a world carries other realms' and the host's
+too, and a harness that fails on a neighbour's defect is a harness people learn to ignore.
 
 ## `seed/`
 
