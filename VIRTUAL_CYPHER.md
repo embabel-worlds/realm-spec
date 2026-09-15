@@ -2521,6 +2521,7 @@ is a leg of the guarantee that evaluation terminates:
 | reference other labels, views and virtual joins as usual | `RETURN` in a body — the head is the projection |
 | reference declared params as `$name` | reference a param the set does not declare |
 | conclude the same kind in every rule of a set | mix a node head and a relationship head — one fixpoint cannot be both |
+| declare `requires:` to bring the facts in first (§13.6) | write the graph in a demand — it is read-only like a body |
 
 A rule set that breaks the fragment fails validation with a message naming the rule and the
 property it broke; it never half-installs. A conforming set's MEMBERSHIP is guaranteed to
@@ -2619,12 +2620,70 @@ query instead.
   property that recurses through its own value does not settle (§13.2). Conclude membership in the
   rule set; measure in the view — `MATCH p = (c:Exposed)-[:DEPENDS_ON*1..10]->(v) … min(length(p))`
   is bounded whatever the data does.
-- **Rules conclude over data present in the graph.** A realm whose facts are producer-fetched
-  feeds its rules through promoted/stored anchors (a watchlist), not through live fetches inside
-  the fixpoint. Say the data contract in the rule-set description.
+- **Rules conclude over data present in the graph** — see §13.6, which is the single most important
+  thing to understand before writing a rule set over producer-backed types. Say the data contract in
+  the rule-set description either way.
+- **If the conclusion is plain reachability, use `*1..n` and not a rule.** A path that already
+  exists in the graph needs no fixpoint: the traversal is cheaper, and it reports its own truncation
+  (`INCOMPLETE_TRAVERSAL`, naming the hop it reached) where a rule set would simply answer. A rule
+  earns its keep when the conclusion is NOT reachability — aggregation inside the recursion, a
+  quorum ("cited by three already-influential papers"), a threshold, or a judgement propagated
+  along a path.
 - Derived labels participate in visibility/tenancy like any label a query names.
 - Name derived properties from the head and prefix them for the realm (`phoenixDepth`, not
   `depth`) — the label's vocabulary outlives the file it was declared in.
+
+### 13.6 What a rule set may assume about its facts
+
+**A rule body reads what is already in the graph. It cannot fetch.**
+
+That one sentence decides whether a rule set is sound, and it is the difference between a rule that
+answers and a rule that answers *understatedly*. Three situations, and only the third needs work:
+
+| Your facts | Complete? | What to do |
+|---|---|---|
+| Stored, seeded, promoted, or a materialized view | yes | nothing — write the rules |
+| A producer returning a whole record per anchor | yes | nothing — one fetch is the entire fact set for that anchor |
+| Gathered by WALKING — each hop is another fetch | not by default | declare `requires:` |
+
+The second case is the common producer shape and it is why most rule sets need no thought here: one
+call to a company register returns an officer's *entire* appointment history, so a rule about that
+officer's appointments has everything.
+
+The third case is a dependency tree, a citation graph, an ownership chain — anything where reaching
+depth 3 means three rounds of fetching. Without a declared demand, such a rule set concludes over
+whatever prefix the *consumer's query* happened to materialize, which its author never sees.
+
+**Declare what you need:**
+
+```yaml
+name: npm/reaches-unmaintained
+derives: ReachesUnmaintained
+requires:
+  - materialize: "MATCH (r:Release)-[:HAS_DEPENDENCY*1..$depth]->(:Dependency) RETURN 1"
+    description: "The dependency tree has to exist before 'reaches' means anything."
+params:
+  depth: { type: int, default: 3 }
+rules:
+  - derive: "(d:ReachesUnmaintained)"
+    from: |
+      MATCH (d:Dependency)-[:HAS_HEALTH]->(h:ProjectHealth) WHERE h.overallScore < 5
+```
+
+A demand is ordinary read-only Cypher, validated like a rule body. It runs **before** any rule
+evaluates, in the same transaction, and **after** the consumer's query has materialized its own
+anchors — so it DEEPENS what is already there rather than re-anchoring it. It may reference the rule
+set's declared params, so depth is tunable per invocation with a default you choose.
+
+**When the facts are incomplete anyway, the engine says so.** A rule set that evaluates while any
+fetch was capped, refused, truncated or left a demand unmet reports `PARTIAL_RESULT` and states that
+its membership — and any count or total over it — is a **lower bound**, naming the unmet demand
+where there is one. Report it to your reader as a lower bound; never present a derived count as a
+total. This is not a failure and not "nothing was derived".
+
+**The rule of thumb:** make the fact set complete, and prefer making it complete *cheaply*. Loading
+the data (a local table, a promoted watchlist) beats demanding a deep walk, and a demand beats
+hoping the consumer's query walked far enough.
 
 ## 14. The contract, in one line
 
