@@ -2516,12 +2516,21 @@ is a leg of the guarantee that evaluation terminates:
 | You may | You may not |
 | --- | --- |
 | conclude a label or a relationship, with derived properties | write the graph (`CREATE`/`MERGE`/`SET`/`DELETE` in a body) |
-| reference the derived label positively — recursion | reference it under `NOT` (non-monotone self-reference) |
+| reference the derived label positively — recursion, `any(…)`, `EXISTS` | reference it under a negation: `NOT`, or the quantifiers `none(…)` / `all(…)` / `single(…)` |
 | aggregate in recursion with `sum` / `count` / `max` / `collect` | use `min` / `avg` / percentiles inside recursion |
 | reference other labels, views and virtual joins as usual | `RETURN` in a body — the head is the projection |
 | reference declared params as `$name` | reference a param the set does not declare |
 | conclude the same kind in every rule of a set | mix a node head and a relationship head — one fixpoint cannot be both |
 | declare `requires:` to bring the facts in first (§13.6) | write the graph in a demand — it is read-only like a body |
+
+`none(…)` is `NOT any(…)`, and both `all(…)` and `single(…)` can be falsified by a member a later
+round adds — all three are the same non-monotone self-reference as `NOT`, whatever they look like,
+so all three are refused. Say it the monotone way instead: `any(…)` and `EXISTS` only become more
+true as membership grows, which is exactly what the fixpoint needs. One caution, because the engine
+does not yet catch it: a negation written as a COUNT COMPARISON (`size([x IN xs WHERE x:Derived])
+= 0`) or as a `CASE` that inverts the label is equally unsound and is currently **admitted**. Such a
+rule settles on the first or second round onto a set that contradicts its own body, and the round
+cap will not save you because nothing is still moving. Do not write one.
 
 A rule set that breaks the fragment fails validation with a message naming the rule and the
 property it broke; it never half-installs. A conforming set's MEMBERSHIP is guaranteed to
@@ -2684,6 +2693,42 @@ total. This is not a failure and not "nothing was derived".
 **The rule of thumb:** make the fact set complete, and prefer making it complete *cheaply*. Loading
 the data (a local table, a promoted watchlist) beats demanding a deep walk, and a demand beats
 hoping the consumer's query walked far enough.
+
+### 13.7 What a rule set costs — quoted before it runs
+
+Derivation spends **graph work**: rounds of your rule bodies, and a fact written for every row a
+body binds. That is a different currency from the model calls a producer spends, and it is priced
+separately.
+
+Before any rule evaluates, the engine counts what each body binds — one `count(*)` over the body
+itself, so nothing is materialized and nothing is written. Past the deployment's budget the query is
+**refused** with the count, the budget, and which rule accounts for it:
+
+```
+TOO_EXPENSIVE: deriving :CO_LOCATED would bind at least 249500 row(s) on the first
+round alone (gate: 50000). Rule 1 of 'probe/cartesian' accounts for 249500 of them —
+an under-constrained body is quadratic in the nodes it binds, so narrow it (anchor one
+side, add a filter) or raise the rule set's own limits deliberately if the estate is
+genuinely that dense.
+```
+
+Almost always this means a relationship body that forgot to constrain one side. `MATCH (a:Peer),
+(b:Peer)` binds every peer against every other; anchoring one side to the other through a real
+relationship, or filtering it, is the fix.
+
+The count is a **lower bound**, and deliberately so. A recursive rule reads a label that has no
+members on the first round, so a transitive closure is under-counted while an unanchored quadratic
+body is counted exactly — the engine can let expensive work through, but it can never refuse cheap
+work on a guess.
+
+Two ceilings sit underneath as backstops, and you should never meet them:
+
+| Ceiling | Default | What it means |
+| --- | --- | --- |
+| `maxPairs` | 250,000 | A relationship set derived more pairs than this. Bounds what reaches the graph; it is checked after a round has bound its rows, so treat it as a last resort rather than a budget. |
+| `maxRounds` | 1,000 | The fixpoint did not settle. The message names what was still moving: a derived property climbing (§13.2), or simply an estate deeper than the cap. |
+
+Both fail loudly. Neither truncates: you will never receive a derivation that quietly stopped early.
 
 ## 14. The contract, in one line
 
