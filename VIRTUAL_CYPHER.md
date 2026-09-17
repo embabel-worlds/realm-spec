@@ -2716,6 +2716,13 @@ Almost always this means a relationship body that forgot to constrain one side. 
 (b:Peer)` binds every peer against every other; anchoring one side to the other through a real
 relationship, or filtering it, is the fix.
 
+**Expensive is not the same as forbidden.** Asked through a surface that supports it, an
+over-budget query is *parked* rather than refused outright, and you are offered the same four
+choices any expensive query gets: proceed, narrow it first, **run it in the background** and collect
+the result later, or cancel. A derivation that genuinely is that large is a scheduling question, and
+answering "background" is the normal answer to it. What the engine will not do is spend the time
+without asking.
+
 The count is a **lower bound**, and deliberately so. A recursive rule reads a label that has no
 members on the first round, so a transitive closure is under-counted while an unanchored quadratic
 body is counted exactly — the engine can let expensive work through, but it can never refuse cheap
