@@ -390,6 +390,8 @@ outputTypeName: BackgroundMessage
 
 Dynamic type definitions — custom input/output types for actions, signal types, and the data dictionary in general. A type with `parents:` declared inherits properties from its parent types (which may be JVM-known host types or other realm-declared types).
 
+A type may also declare itself a **spine** (`spine:`) — a shared identity that records from *other* realms resolve onto, so that a CRM's customer, a helpdesk's company and a billing system's account are one node. That, and the rule for choosing between `parents:` and `spine:`, is [VIRTUAL_CYPHER.md §5.4.1–5.4.3](VIRTUAL_CYPHER.md); it is the foundation of every cross-realm join that is not already on a person or an email domain.
+
 ```yaml
 # types/github.yml
 - name: GitHubIssue
@@ -487,8 +489,9 @@ Declare a **mirror type** that `parents: [Contact]` and annotate each property:
   visibility: internal          # machinery, not a user-browsable repository type
   userAnchor: { predicate: OWNED_BY, direction: from-user }
   properties:
-    email:                      # the deterministic merge key
-      metadata: { identity: "true" }
+    email:                      # the deterministic merge key, and the spine it keys
+      identity: true
+      hub: Person
     jobtitle:                   # projects onto the canonical Person
       metadata: { canonical: "jobTitle" }
     company:                    # resolve + link a related entity
@@ -502,6 +505,7 @@ Declare a **mirror type** that `parents: [Contact]` and annotate each property:
 | Metadata key | Effect |
 |--------------|--------|
 | `identity: "true"` | This field's value is the email portion of the **merge key**: records with the same `(worldId, visibilityScopeId, type, email)` resolve to one canonical `:Person` (no LLM entity resolution). Also unioned onto the Person's `emails`. |
+| `hub: <Spine>` | **The opt-in.** This field's value keys the named spine — `Person`, `Organization`, or a spine a realm declares with `spine:`. Without a `hub:` a type is never canonicalized, whatever its `identity`. May sit on a property other than the identity one, when what identifies the record (a CRM id) is not what identifies the entity (a website). Writable first-class (`hub: Person`) or under `metadata:`. See [VIRTUAL_CYPHER.md §5.4](VIRTUAL_CYPHER.md). |
 | `canonical: <field>` | Project this source field onto the canonical Person's `<field>`. Single-valued → a winner is chosen by host precedence then most-recent; mark `multivalued: "true"` (or `cardinality: LIST`) to **union** instead. |
 | `relationship: <EDGE>` + `target: <Label>` + `matchBy: <prop>` | Create-or-match a `<Label>` keyed on `matchBy`, and link `(:Person)-[:EDGE]->(:Label)`. |
 | *(none)* | Source-private — the value lands only on the per-record mirror node. |

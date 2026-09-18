@@ -76,6 +76,13 @@ is not surprised:
 
 Only parents that are themselves **realm-declared types** contribute labels.
 
+**A realm-declared spine is refused as a parent.** A type that carries `spine:`
+([VIRTUAL_CYPHER.md §5.4.1](VIRTUAL_CYPHER.md)) is an identity, like `Person`, but it IS a
+realm-declared type, so naming it in `parents:` would stamp its label on every source record —
+the duplicate-per-source outcome described above. The host reports a loading problem and points
+at the right tool: put `hub: <Spine>` on the property that carries the key. The rule of thumb is in
+VIRTUAL_CYPHER.md §5.4.2: *a record is a parent label; an identity is a spine.*
+
 ### 2.2 Cycles
 
 A cyclic `parents:` chain is reported as a loading problem, and the edge that closes the
