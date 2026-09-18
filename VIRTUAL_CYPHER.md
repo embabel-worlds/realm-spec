@@ -406,12 +406,37 @@ know how another spells things.
 **Other realms opt in with `hub:`**, exactly as for a built-in (above). The spine's realm does not
 know who attaches, and an attaching realm names only the label.
 
-**A join anchored on the spine sends the normalized key.** `CustomerAccount → ChatwootConversation`
-on `accountKey` asks the helpdesk for `acmecorp.com` whatever shape the account's key arrived in.
+**A join anchored on the spine normalizes BOTH sides.** The anchor's key goes out normalized:
+`CustomerAccount → ChatwootConversation` on `accountKey` asks the helpdesk for `acmecorp.com`
+whatever shape the account's key arrived in. And where the join's `keyField` is one of the spine's
+identity properties, each RECORD's `recordKeyField` is read through the spine too before it is
+matched to an anchor. So a realm joins on the source's own field, in the source's own spelling:
+
+```yaml
+- { anchorLabel: CustomerAccount, relationship: BILLED_AS, keyField: accountKey,
+    recordKeyField: url, producer: lagoCustomersByDomain }     # url is "https://www.Stark.com/"
+```
+
+This is what makes a SEARCH safe to join on. A source often cannot be asked for a key exactly —
+only with a substring match that also returns `notstark.com` for `stark.com`. Do NOT `echoKeyAs`
+on such a producer: stamping the asked key onto whatever came back makes every stray a match.
+Let the record's own field be the key; the customer whose url IS that account is linked and the
+stray is not. A value the spine refuses (a freemail address, a bare word) matches nothing.
 `resolve:` chains (§5.2) treat a realm spine as they treat Person: `canonicalDomain` /
 `canonicalEmail` normalize through it.
 
-**Scope is the world.** A realm's spine exists in the worlds that installed the realm. Removing the
+**An account exists once something has keyed it.** A spine node is created when a query
+materializes records of a type that opts in — canonicalization is on demand, and only the spine
+persists; the source record stays virtual. Until some realm's records have been read, the spine is
+empty, and a view that starts `MATCH (a:CustomerAccount)` answers nothing, truthfully. A realm
+whose views start at a spine should ship the small view that walks its door (`MATCH (:OdooBook)
+-[:HAS_COMPANY]->(:OdooCustomer)`) and say in its README that a surface reads it first. Opt in
+from EVERY system that can name the entity, not only the one that seems authoritative: a company
+support is helping and nobody bills is exactly the account an account-level view must not miss.
+
+**Scope is the world.** A realm's spine exists in the worlds that installed the realm. Its nodes
+carry the world, and the world is part of their id, so two worlds in one store never share an
+account. Removing the
 realm removes the spine from resolution; nodes already written remain, as any persisted node does.
 
 **What a host MUST refuse, at load, as a loading problem — and register no spine:**

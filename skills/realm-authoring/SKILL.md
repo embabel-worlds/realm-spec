@@ -155,6 +155,17 @@ on it) and put `hub:` on the website / email / registration number:
 `normalize` is the one definition of "the same"; a realm that lowercases or strips `www.` itself
 has encoded another realm's format and will drift from it.
 
+**Step 4b — if the source can only be SEARCHED for your key, join on the record's own field.**
+Set `recordKeyField` to the source's field (`url`, `website`) and do NOT `echoKeyAs`: a substring
+search returns strays, an echo links every one of them, and the spine — which reads the record's
+field too — links only the right one. Then assert it in `tests/verify.sh`: zero records linked to
+an anchor that is not theirs.
+
+**Step 4c — opt in from every system that can name the entity, and ship the view that walks
+your door.** Spine nodes exist only once some realm's records have been read. A realm that keys
+the spine ships a small view over its door so a surface can read it first; a realm whose views
+START at the spine says so in its README.
+
 **Step 5 — prove the join, with a test that would fail.** In `tests/verify.sh`, run the
 two-realm question against live sources and assert a NON-ZERO count for an entity you know is in
 both. A cross-realm view that returns zero rows passes every other check you have.
