@@ -295,15 +295,34 @@ converge on **one** `Person`, and "my contacts' companies" lands on the same `Or
 email graph already built.
 
 **Source records canonicalize onto a spine via projection metadata on the type** (not a separate
-pipeline). A property tagged `identity: true` is the merge key; a property tagged
-`relationship/target/matchBy` links the record to a spine:
+pipeline). A property tagged `hub: <Spine>` is the value that keys the spine; a property tagged
+`relationship/target/matchBy` links the record to a second spine:
 
 ```yaml
 - name: HubSpotContact
   properties:
-    email:    { metadata: { identity: "true" } }          # → Person, by email
+    email:    { identity: true, hub: Person }             # → Person, by email
     company:  { metadata: { relationship: WORKS_FOR, target: Organization, matchBy: name } }
 ```
+
+**`hub:` is the opt-in, and it is explicit.** `identity: true` alone says what identifies the
+*record*; it never implies a spine, because most identities (an issue number, an invoice id) are
+nobody's canonical person. A type with no `hub:` is not canonicalized.
+
+**`hub:` may sit on any property, not only the identity one.** The two are often different facts. A
+CRM partner is identified by the CRM's own id, and every join inside that realm keys on it; what
+identifies the *company* is its website:
+
+```yaml
+- name: OdooCustomer
+  properties:
+    id:       { identity: true }                          # the record, for this realm's own joins
+    website:  { hub: CustomerAccount }                    # the company, for everybody's
+```
+
+Several properties may carry the same `hub:` (a website and a billing email, say); each non-empty
+value is normalized by the spine and contributes a key. A type attaches to ONE spine this way — the
+first `hub:` names it.
 
 The `relationship`'s **merge key is the spine's key, not the field text** — `company`'s value is
 only the display name; the `Organization` is keyed by the contact's email **domain**. So two contacts
@@ -339,10 +358,136 @@ never cross-context or cross-world authority.
 
 **The two built-in spines are not hardwired — they are config.** A spine is declared by a
 `CanonicalSpec` (label, key property, id prefix, normalization primitives, key-node + edge); Person
-and Organization are just the two built-ins. Add a `Place`, `Repository`, or `Product` spine in
-`application.yml` and source types join it by tagging a property `target: <newLabel>` — the engine
-builds the hub, applies the key-node uniqueness constraint at boot, and the join surface above works
-unchanged.
+and Organization are just the two built-ins. An operator may add a `Place`, `Repository`, or
+`Product` spine in the host's configuration, and source types join it with `hub: <newLabel>` — the
+engine builds the hub, applies the key-node uniqueness constraint, and the join surface above works
+unchanged. A realm may declare one too, which is the next section.
+
+#### 5.4.1 Spines a realm declares — `spine:` on a type
+
+Person and Organization cover people and the companies in your correspondence. They do not cover a
+*customer account*, a *product*, a *site*, a *vessel* — the business entities that several systems
+each hold a record of, and that a cross-system realm exists to bring together. A realm says so by
+declaring the type a spine:
+
+```yaml
+# realm-business-vocabulary/types/vocabulary.yml
+- name: CustomerAccount
+  description: A company the business sells to, whatever system knows about it.
+  spine:
+    key: accountKey                                   # the key property on the spine node
+    identityProperties: [accountKey, website]         # fields, on anything attaching, that carry the key
+    normalize: [lowercase, extractDomain, stripTrailingDot]   # ordered
+    require: hasDot                                   # a value that fails this keys nothing
+    exclude: freemail                                 # nor does a value in this set
+  properties:
+    accountKey: "The company's registrable domain."
+```
+
+| Field | Meaning | Default |
+|---|---|---|
+| `key` | The scalar key property on the spine node. The multi-valued form is `<key>s`. | required |
+| `identityProperties` | Property names that may carry the key, on the spine and on records attaching to it. `key` and `<key>s` are always included. | `[]` |
+| `normalize` | Ordered primitives: `lowercase`, `trim`, `extractDomain`, `stripWww`, `stripScheme`, `stripTrailingDot`. | `[trim]` |
+| `require` | `containsAt` or `hasDot`. A value failing it keys nothing. | none |
+| `exclude` | A named exclusion set. `freemail` is the one defined. | none |
+
+Everything else is derived from the label and is not the realm's to choose — the key-node is
+`<Label>Key`, linked `(:<Label>Key)-[:IDENTIFIES]->(:<Label>)`, with the same uniqueness constraints
+and the same one-hop indexed resolution as the built-ins. A realm that could pick its own key-node
+label could collide with another realm's.
+
+**The normalization is the contract.** It is the single definition of "the same account", applied to
+every value from every realm that opts in. `https://www.AcmeCorp.com/about` from a CRM,
+`acmecorp.com` from a helpdesk and `Billing@acmecorp.com` from a billing system are one key,
+`acmecorp.com`, and therefore one node. No realm normalizes on its own side, and no realm needs to
+know how another spells things.
+
+**Other realms opt in with `hub:`**, exactly as for a built-in (above). The spine's realm does not
+know who attaches, and an attaching realm names only the label.
+
+**A join anchored on the spine normalizes BOTH sides.** The anchor's key goes out normalized:
+`CustomerAccount → ChatwootConversation` on `accountKey` asks the helpdesk for `acmecorp.com`
+whatever shape the account's key arrived in. And where the join's `keyField` is one of the spine's
+identity properties, each RECORD's `recordKeyField` is read through the spine too before it is
+matched to an anchor. So a realm joins on the source's own field, in the source's own spelling:
+
+```yaml
+- { anchorLabel: CustomerAccount, relationship: BILLED_AS, keyField: accountKey,
+    recordKeyField: url, producer: lagoCustomersByDomain }     # url is "https://www.Stark.com/"
+```
+
+This is what makes a SEARCH safe to join on. A source often cannot be asked for a key exactly —
+only with a substring match that also returns `notstark.com` for `stark.com`. Do NOT `echoKeyAs`
+on such a producer: stamping the asked key onto whatever came back makes every stray a match.
+Let the record's own field be the key; the customer whose url IS that account is linked and the
+stray is not. A value the spine refuses (a freemail address, a bare word) matches nothing.
+`resolve:` chains (§5.2) treat a realm spine as they treat Person: `canonicalDomain` /
+`canonicalEmail` normalize through it.
+
+**An account exists once something has keyed it.** A spine node is created when a query
+materializes records of a type that opts in — canonicalization is on demand, and only the spine
+persists; the source record stays virtual. Until some realm's records have been read, the spine is
+empty, and a view that starts `MATCH (a:CustomerAccount)` answers nothing, truthfully. A realm
+whose views start at a spine should ship the small view that walks its door (`MATCH (:OdooBook)
+-[:HAS_COMPANY]->(:OdooCustomer)`) and say in its README that a surface reads it first. Opt in
+from EVERY system that can name the entity, not only the one that seems authoritative: a company
+support is helping and nobody bills is exactly the account an account-level view must not miss.
+
+**Scope is the world.** A realm's spine exists in the worlds that installed the realm. Its nodes
+carry the world, and the world is part of their id, so two worlds in one store never share an
+account. Removing the
+realm removes the spine from resolution; nodes already written remain, as any persisted node does.
+
+**What a host MUST refuse, at load, as a loading problem — and register no spine:**
+
+- **A label the host owns** (`Person`, `Organization`, or any operator-configured spine). An
+  installed realm must not be able to change what every other realm's `hub: Organization` keys on.
+- **Two realms declaring one label differently — both.** Which loaded last must never decide what
+  identity means. The *identical* declaration restated by a second realm is one spine, not a
+  conflict; that is how a realm restates a vocabulary it cannot yet declare a dependency on.
+- **An unknown `normalize`, `require` or `exclude` name**, listing the known ones. Skipping a
+  misspelled `lowercase` would key `Acme.com` and `acme.com` as two companies, everywhere, silently.
+- **A spine label in another type's `parents:`**, pointing the author at `hub:`. See §5.4.2.
+
+A host SHOULD also report a `hub:` that names no spine in the world — a misspelling, or a vocabulary
+realm that was never installed. Nothing downstream fails: the type is simply never canonicalized and
+every join expecting the spine returns nothing.
+
+#### 5.4.2 An identity is a spine; a record is a parent label
+
+A shared vocabulary has two tools and they are not interchangeable.
+
+- **`parents:`** ([LABELS_AND_COMPOSITION.md](LABELS_AND_COMPOSITION.md)) stamps the ancestor's label
+  on your nodes. Right for **records of a kind**: every `ChatwootConversation` and every
+  `ZendeskTicket` *is a* `SupportCase`, and `MATCH (c:SupportCase)` should return all of them, as
+  separate things, because they are separate things.
+- **`spine:` + `hub:`** resolves your records onto ONE shared node. Right for an **identity**: an
+  `OdooCustomer` and a `LagoCustomer` for the same company are two records *about* one account.
+
+The test: **if two systems each hold one, are those two things or one?** Two → parent label.
+One → spine. Getting it wrong in the first direction is the expensive mistake: `parents:
+[CustomerAccount]` on three realms' customer types yields three `:CustomerAccount` nodes per company
+with nothing joining them, and "accounts with an open ticket and an overdue invoice" is empty for
+every account — no error, because no single node has both.
+
+#### 5.4.3 Joining across realms — which mechanism
+
+Every cross-realm join is one of these. Choose by what the two sides actually share:
+
+| The two realms share… | Use | Notes |
+|---|---|---|
+| A person (email) or a corresponded-with company (domain) | built-in spine: `hub: Person` / `hub: Organization` | nothing to declare |
+| Some other real-world entity, held under differently *shaped* keys | a realm-declared spine (§5.4.1) | the spine's `normalize` is the agreement |
+| The *same exact* key, already identical in both (a purl, an ISO code, a CIK) | a plain virtual join on `keyField` / `recordKeyField` | declare `joinKey:` on both so a mismatch is caught |
+| A key one side must *look up* (a login → an email) | a `resolve:` chain (§5.2) | learned handles persist |
+| A key that exists only sometimes, with a fallback | a join `policy:` ladder (§5.15) | `ask` is not yet honoured; see there |
+| No key — only meaning | a vector edge (§6) or a generative producer (§5.3) | a score, not an identity |
+| A conclusion over both | a DERIVE rule (§13) | after the join exists, not instead of it |
+
+Two things that are NOT a join mechanism, however tempting: seeding the same key by hand into both
+realms (it works until the second customer), and a per-producer rewrite that normalizes one side to
+match the other's spelling (it encodes realm B's format inside realm A).
 
 ### 5.5 Graph-cached aggregates — `cache: {kind: graph}`
 
@@ -1085,8 +1230,8 @@ Guarantees:
   carries the pinned value under that property, which is the join's `recordKeyField`.
 - Exposure, `where:` predicates and masks apply exactly as they do to a keyed fetch.
 
-**A join may declare a POLICY instead of one key.** _Forward-looking — see the implementation-status
-note at the end of this section before relying on it._ `keyField` says "match this column"; a policy
+**A join may declare a POLICY instead of one key.** _Partly implemented — see the implementation-status
+note at the end of this section for exactly which guarantees hold today._ `keyField` says "match this column"; a policy
 says how to try, in order, and what to do when the rules disagree:
 
 ```yaml
@@ -1136,23 +1281,32 @@ Guarantees:
   negative assertion, and no later automatic rule may re-link what a person has separated.
 - A join with no `policy:` behaves exactly as before: key on `keyField`, once.
 
-**Implementation status, and what a host must do about it.** `policy:` is **specified and not yet
-implemented** in the reference host: the rule chain, its ordering and its confidence semantics are
-settled, and the evaluator exists, but the join path does not yet consult it.
+**Implementation status, and what a host must do about it.** In the reference host the **key ladder
+is implemented**: `key` rules run in order, each through its own producer, each fetching once for
+the anchors still unresolved, and `none` ends the chain. A rung goes through the ordinary fetch path,
+so it inherits caching, cost budgets, diagnostics — and, where the anchor is a spine, the spine's key
+normalization. The following guarantees above are **not yet honoured**, and a realm must not depend
+on them:
 
-That makes the following normative, because the failure it prevents is the worst one available:
+- **`ask`** — refused at validate/install time, naming the join (the rule below).
+- **`ci`** — not read. Matching is case-insensitive on every rung, declared or not.
+- **`confidence`** — not read, and not recorded on the resolved edge.
+- **"More than one match is not a match"** — not enforced. A rung that returns several records for one
+  anchor links all of them. Until it is, give a fallback rung a key that is unique on the far side.
 
-> **A host that cannot honour a declared `policy:` MUST reject the realm at validate/install time,
-> naming the join.** It MUST NOT accept the declaration and silently key on `keyField` instead.
+The normative rule stands, and is why `ask` is refused rather than skipped:
+
+> **A host that cannot honour a declared `policy:` rule MUST reject the realm at validate/install
+> time, naming the join.** It MUST NOT accept the declaration and silently resolve without it.
 
 A realm author who writes a fallback ladder and an `ask` has said, in the only place the format lets
-them, that one key is not enough for this join. Quietly resolving it with one key anyway produces
-exactly the wrong answers the policy was written to prevent — and produces them silently, on
-customer data, with no warning at the point of use. Refusing the realm is loud, immediate, and
-fixable; ignoring the policy is none of those things.
+them, that automatic rules are not enough for this join. Quietly resolving it anyway produces exactly
+the wrong answers the policy was written to prevent — silently, on customer data, with no warning at
+the point of use. Refusing the realm is loud, immediate, and fixable.
 
-Until the join path consults the evaluator, `policy:` should be treated as a declaration of intent
-that a conforming host refuses rather than a feature a realm can depend on.
+**A ladder is not a substitute for a spine.** A ladder answers "this join has more than one possible
+key". A spine answers "these realms mean the same entity". If the fallback rungs exist only because
+two systems spell one key differently, declare the spine (§5.4.1) and the ladder disappears.
 
 **Mining a database into a realm.** A relational schema already IS a graph — tables are
 labels, primary keys identities, foreign keys edges. The host can mine a datasource's

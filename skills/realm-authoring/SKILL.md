@@ -56,6 +56,9 @@ checkout is mounted.
 | a deterministic rule over a signal | `actions/` (FQN `PolicyActionSpec`) | "Deterministic rules" |
 | a domain / signal / mirror type | `types/` | "`types/`" |
 | call an external REST/GraphQL API | `apis/` (+ vendored spec) | "`apis/`" (auth, OAuth2) |
+| a shared IDENTITY other realms attach to (an account, a product, a site) | `types/` `spine:` | Virtual Cypher §5.4.1 — see "Joining OTHER realms" below |
+| attach your records to a spine (yours, another realm's, or Person/Organization) | `types/` `hub:` on the property carrying the key | Virtual Cypher §5.4 |
+| a shared KIND of record (every ticket is a `SupportCase`) | `types/` `parents:` | LABELS_AND_COMPOSITION.md |
 | fetch a type **on demand** by traversal | `types/` `virtualJoins:` + `producers/` | "Joining types on demand" (Virtual Cypher) |
 | a named, parameterized ANSWER a caller runs by name | `views/` | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
 | query the graph from a code_mode script or skill | `gateway.kg.query` | "CypherScript" |
@@ -100,6 +103,84 @@ back is **Virtual Cypher** — see "Virtual Cypher — the engine" under "Joinin
   (filter), `ORDER BY ai.score(n, '<criterion>') DESC` (rerank), or steer a *generative*
   producer with an `{ai: {hint: '…'}}` edge directive map. The `ai` namespace is **reserved** — never name a
   stored property or producer field `ai` or `ai_*`. See "LLM query primitives" in the Virtual Cypher spec.
+
+## Joining OTHER realms — decide this before you write a type
+
+A realm that stands alone is a connector. The value is in the question that needs two of them —
+*accounts with an open ticket and an overdue invoice* — and that question only has an answer if
+both realms' records land on **the same node**. This does not happen by accident, and when it
+fails it fails as an **empty result with no error**. Design it first.
+
+**Step 1 — for each entity your realm knows, ask: if two systems each hold one, are those two
+things or one?**
+
+- **Two things → a parent label.** Every helpdesk conversation is a `SupportCase`; two systems'
+  tickets are two tickets. Declare `parents: [SupportCase]` and `MATCH (c:SupportCase)` returns
+  them all.
+- **One thing → a spine.** A CRM customer and a billing customer for the same company are two
+  records *about* one account. They must resolve onto one node. `parents:` is WRONG here — it
+  produces one `:CustomerAccount` per system with nothing joining them. The host refuses it.
+
+**Step 2 — find the spine, in this order:**
+
+1. `Person` (by email) or `Organization` (by email domain) — built in. Put `hub: Person` on the
+   email property. Done.
+2. A spine an installed realm already declares. Check `realm_status` / the vocabulary realm you
+   are building against. Put `hub: <ThatSpine>` on the property carrying the key.
+3. None fits → declare one, in the most general realm that needs it (a vocabulary realm, not a
+   product realm — the spine must outlive any one product):
+
+```yaml
+- name: CustomerAccount
+  spine:
+    key: accountKey
+    identityProperties: [accountKey, website]
+    normalize: [lowercase, extractDomain, stripTrailingDot]
+    require: hasDot
+    exclude: freemail
+```
+
+**Step 3 — put `hub:` on the property that identifies the ENTITY, which is often not the one
+that identifies the record.** Keep `identity: true` on the source's own id (your realm's joins key
+on it) and put `hub:` on the website / email / registration number:
+
+```yaml
+- name: OdooCustomer
+  properties:
+    id:      { identity: true }
+    website: { hub: CustomerAccount }
+```
+
+**Step 4 — never normalize on your own side.** Send the spine the raw value. The spine's
+`normalize` is the one definition of "the same"; a realm that lowercases or strips `www.` itself
+has encoded another realm's format and will drift from it.
+
+**Step 4b — if the source can only be SEARCHED for your key, join on the record's own field.**
+Set `recordKeyField` to the source's field (`url`, `website`) and do NOT `echoKeyAs`: a substring
+search returns strays, an echo links every one of them, and the spine — which reads the record's
+field too — links only the right one. Then assert it in `tests/verify.sh`: zero records linked to
+an anchor that is not theirs.
+
+**Step 4c — opt in from every system that can name the entity, and ship the view that walks
+your door.** Spine nodes exist only once some realm's records have been read. A realm that keys
+the spine ships a small view over its door so a surface can read it first; a realm whose views
+START at the spine says so in its README.
+
+**Step 5 — prove the join, with a test that would fail.** In `tests/verify.sh`, run the
+two-realm question against live sources and assert a NON-ZERO count for an entity you know is in
+both. A cross-realm view that returns zero rows passes every other check you have.
+
+Smells that mean the join is not really there:
+
+- You seeded the same key by hand into both realms to make the demo work.
+- Your producer has a rewrite whose only job is to match another realm's spelling.
+- Your `policy:` ladder's fallback rungs exist because two systems format one key differently —
+  that is a spine, not a ladder. (A ladder is for a join that genuinely has more than one key. Its
+  `key` rungs work; `ask`, `ci` and `confidence` are not honoured yet — spec §5.15.)
+- `hub:` names a label that is not a spine in the world (typo, or the vocabulary realm is not
+  installed). Nothing errors; nothing joins. The host logs it at world build — read the log.
+
+Which mechanism for which situation: the table in Virtual Cypher §5.4.3.
 
 ## CypherScript (querying the graph from realm code)
 
@@ -241,6 +322,9 @@ the rows you will show, *then* resolve their names — not the other way round.
 - **`prompts/` is a tax on every turn** — keep it a one-line pointer; put real workflow
   guidance in a `skills/` SKILL.md (paid only when activated).
 - **Naming**: lowercase-hyphenated ids, UpperCamelCase type names.
+- **An identity is a spine; a record is a parent label.** Never `parents:` a spine; never
+  normalize a shared key on your own side; always assert a non-zero cross-realm count in
+  `tests/verify.sh`. A broken cross-realm join is an empty result, not an error.
 - **An untested view is an unshipped view.** Declarative capabilities are only proven by a live
   run against the real source — see "The declarative half has no unit tests".
 - **A realm people ask in words ships `tests/questions.yml`.** Views passing by name proves a
