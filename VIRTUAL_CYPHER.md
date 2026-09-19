@@ -2414,6 +2414,29 @@ Inside `clause`, `{value}` is substituted into a string, and a node that **is** 
 is replaced by the predicate's member list. The distinction matters: a set must reach the source as
 real JSON (`["status", "in", ["open", "pending"]]`), not as text that happens to look like it.
 
+**`linkPrevious`** is for a source that spells conjunction as a field on the PRECEDING element
+rather than implicitly. Chatwoot's conversation filter is one: each clause carries `query_operator`
+naming how it joins to the next, and the last must not carry one at all — so it cannot be declared
+statically on the base payload, only written when a clause is appended.
+
+```yaml
+pushdown:
+  - property: status
+    op: IN
+    argPath: payload.-
+    clause: { attribute_key: status, filter_operator: equal_to, values: "{values}" }
+    linkPrevious: { query_operator: AND }
+```
+
+Omit it for a source whose list is an implicit conjunction — an Odoo domain, an Elasticsearch
+`bool.filter` — where appending is the whole operation.
+
+**Verify a pushdown rule against the live source.** These shapes are unforgiving and fail loudly
+rather than subtly: appending to a Chatwoot payload without `query_operator` is an HTTP 500, and
+including it on the final clause is rejected outright. A rule that renders nothing is correctly
+reported as absorbing nothing, so a wrong rule leaves the query slow rather than incorrect — but
+slow is what the rule was for.
+
 **Enumerated sets** (`WHERE c.status IN ['open','pending']`) push by **member expansion**. A text
 rule renders them as an OR group, and only into a conjunction-style qualifier that has one — a
 space-separated search qualifier does not, since `status:open status:pending` means AND to a search
@@ -2459,7 +2482,32 @@ projected nowhere else (`RETURN c.subject, count(c)` needs the rows whatever els
 aggregate over it must be pushable (one `collect` means the records are needed anyway), `count(*)`
 never pushes because it folds rows of the whole pattern, and any predicate on the target must be one
 the source absorbs — a source can only count what it can also filter. Today `count` is executed;
-`sum`/`min`/`max` are recognised and left unpushed.
+`sum`/`min`/`max` are recognised and left unpushed, and the engine pushes only when EVERY measure in
+the query is deliverable.
+
+**This makes the SHAPE of a view a cost decision.** `collect(c.subject)` needs the records whatever
+else the query asks, so a view that both counts and collects always pays the collecting price —
+including when the question was triage across the whole book and nobody was going to read a subject.
+Write the two questions as two views:
+
+```yaml
+# Triage across every account — answerable by the source.
+- name: HealthOpenCaseCountsByAccount
+  cypher: |
+    MATCH (a:CustomerAccount)-[:HAS_CASE]->(c:SupportCase)
+    WHERE c.status IN ['open', 'pending']
+    RETURN a.accountKey AS accountKey, count(c) AS openCases
+
+# The detail, for the accounts a pane is showing.
+- name: HealthOpenCasesByAccount
+  cypher: |
+    MATCH (a:CustomerAccount)-[:HAS_CASE]->(c:SupportCase)
+    WHERE c.status IN ['open', 'pending']
+    RETURN a.accountKey AS accountKey, collect(c.subject) AS subjects
+```
+
+Each description should point at the other: the counts view names what to ask for detail, and the
+detail view says to ask it about named accounts rather than the whole book.
 
 **Cost (per producer):** a `cost:` block declares the source's shared **rate bucket** and limit.
 The planner budgets producer calls against it and, when a query can't fit, emits `EXPLAIN`-style
