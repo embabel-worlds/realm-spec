@@ -166,6 +166,27 @@ it can hit the source's result cap before your matches (see §3.5).
 **Declared:** a `pushdown:` rule on the `issuesByAuthor` producer mapping the `html_url` predicate
 to a `repo:{value}` qualifier (with a `valuePattern` regex to extract `owner/repo` from a URL).
 
+**If your source's query is JSON, not text** — an Odoo domain, an Elasticsearch `bool.filter`, a
+GraphQL `where:` — declare `argPath` + `clause` instead of `qualifier`. The clause is placed in the
+producer's own `args`, addressed the way `keyArg` is, with a trailing `-` meaning "append here":
+
+```yaml
+pushdown:
+  - property: status
+    op: IN
+    argPath: domain.-
+    clause: ["status", "in", "{values}"]
+```
+
+`"{values}"` becomes the real member list, so the source gets JSON rather than text shaped like it.
+Appending is what keeps an existing `keyArg: "domain.0.2"` pointing at the triple it always did.
+
+**Why it is worth declaring, beyond saving a page.** What the source absorbs decides what else the
+engine may do. With every predicate on the target absorbed, a `LIMIT` can stop the page walk (n rows
+fetched are n rows answered), and a `count()` can be asked of the source instead of fetched — one
+call for the whole question rather than one per anchor. Neither is safe while the graph still has
+filtering left to do, so an undeclared filter costs more than its own page.
+
 ---
 
 ### 3.5 Pagination, batching, and the starvation trap (`batchSafe`)

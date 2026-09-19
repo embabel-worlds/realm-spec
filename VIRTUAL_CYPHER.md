@@ -2386,6 +2386,81 @@ still applied to the materialized graph, so the same query returns the same rows
 pushed or not; only the number of records fetched differs. A value that does not fit the rule's
 declared shape is left to the graph rather than embedded in a source query it would corrupt.
 
+**Two ways to write a rule.** A rule renders either **text** or a **structured clause**, and it
+declares exactly one of them.
+
+```yaml
+pushdown:
+  # TEXT: a search qualifier or a `q=` conjunct, with a {value} slot.
+  - property: html_url
+    op: CONTAINS
+    qualifier: "repo:{value}"
+
+  # STRUCTURED: a clause placed in the producer's own args, for a source whose
+  # query is JSON rather than a string — an Odoo domain, an Elasticsearch
+  # bool.filter, a GraphQL where:.
+  - property: status
+    op: IN
+    argPath: domain.-
+    clause: ["status", "in", "{values}"]
+```
+
+`argPath` addresses the producer's `args` exactly as `keyArg` does, with one addition: a trailing
+`-` means **append to the list there**. That is what lets a conjunction take another clause without
+the rule knowing how many are already present — and without moving an index an existing `keyArg`
+addresses, which inserting at the front would silently do.
+
+Inside `clause`, `{value}` is substituted into a string, and a node that **is** exactly `"{values}"`
+is replaced by the predicate's member list. The distinction matters: a set must reach the source as
+real JSON (`["status", "in", ["open", "pending"]]`), not as text that happens to look like it.
+
+**Enumerated sets** (`WHERE c.status IN ['open','pending']`) push by **member expansion**. A text
+rule renders them as an OR group, and only into a conjunction-style qualifier that has one — a
+space-separated search qualifier does not, since `status:open status:pending` means AND to a search
+API and matches nothing. Where a rule cannot express the set, it renders nothing and the predicate
+stays a graph-side filter.
+
+**What "absorbed" means, and why it is load-bearing.** A rule that renders nothing is reported as
+having absorbed nothing, and the engine plans accordingly. This is not bookkeeping: the residual —
+what the source did *not* take — is what decides whether a `LIMIT` may be pushed and whether a count
+may be asked of the source instead of fetched. A rule that claimed a filter it did not send would
+license the engine to read one page and call it the whole answer.
+
+**Asking the source for a number instead of the records:** a producer may declare what it can
+aggregate, so a query that only counts costs one call rather than one call per anchor.
+
+```yaml
+aggregates:
+  - measure: count            # count | sum | min | max
+    operation: cases.counts   # the source's own aggregate endpoint; omit to reuse `operation`
+    valueField: total         # where the number is in the response
+    keyField: accountKey      # which key the number belongs to
+```
+
+Every field is required for a reason:
+
+- **`valueField`** — a response shaped `{"count": 12}` and one shaped `{"__count": 12}` are equally
+  plausible, and reading the wrong one yields a plausible integer rather than an error.
+- **`keyField`** — a grouped response with no key echo cannot be attributed, and attributing it by
+  position is how one account's case count silently becomes another's.
+- **`of:`** is required for `sum`/`min`/`max` — `sum` with no property is not a question a source
+  can answer.
+
+`avg` is deliberately not supported: an average over one page cannot be recombined across pages, so
+a source reporting only an average cannot be trusted to have averaged everything. Declare `sum` and
+`count` instead.
+
+Declared rather than assumed. A database can always `GROUP BY`, but an arbitrary REST endpoint
+cannot be presumed to count, and a producer that guessed would return a confident number from
+whatever the endpoint happened to send back.
+
+The engine pushes an aggregate only when it is **safe as well as declared**: the target must be
+projected nowhere else (`RETURN c.subject, count(c)` needs the rows whatever else it asks), every
+aggregate over it must be pushable (one `collect` means the records are needed anyway), `count(*)`
+never pushes because it folds rows of the whole pattern, and any predicate on the target must be one
+the source absorbs — a source can only count what it can also filter. Today `count` is executed;
+`sum`/`min`/`max` are recognised and left unpushed.
+
 **Cost (per producer):** a `cost:` block declares the source's shared **rate bucket** and limit.
 The planner budgets producer calls against it and, when a query can't fit, emits `EXPLAIN`-style
 **advice** (push a predicate, add a `LIMIT`, narrow the anchor) rather than silently over-calling.
