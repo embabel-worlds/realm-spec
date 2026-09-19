@@ -2373,6 +2373,35 @@ a bound that bites is **always surfaced**, never silent.
 
 - **`maxAnchors`** (default 200) — reject if the probe binds more anchors than this (a fan-out
   guard; pin/filter the anchor).
+
+  The cap counts **anchors, not records**, and that distinction decides what helps. Pushing a
+  predicate on the TARGET makes each call cheaper and leaves the NUMBER of calls exactly as it was;
+  only narrowing the anchor set — or reaching the target through a different door — changes whether
+  the query is refused.
+
+  **Declare a second door where your source offers one.** A join is one call per anchor, so a realm
+  that also declares the same target keyed on something else gives a query a way in that does not
+  fan out at all:
+
+  ```yaml
+  virtualJoins:
+    # One account's cases — one call per account.
+    - { anchorLabel: CustomerAccount, relationship: HAS_CASE, keyField: accountKey,
+        recordKeyField: accountKeyAsked, producer: casesByAccount }
+    # Every open case — one call for the whole desk.
+    - { anchorLabel: ChatwootDesk, relationship: HAS_CASE, keyField: status,
+        recordKeyField: deskStatus, producer: casesByStatus }
+  ```
+
+  A query pinning `c.status` has already bound the second door's key, and the accounts fall out of
+  the rows it returns. Pin it explicitly with `{via:'…'}`, and where the host enables access-path
+  rewriting the engine may choose it for you — but only where it can show the answer is identical.
+  It will decline, and say so, when the hop is `OPTIONAL` (anchors with no rows would be lost, and
+  "absent from this list means none" is a real reading), when an aggregate folds the anchor, when
+  another predicate on the target would go unapplied, or when the door's key is not pinned.
+
+  So the second door is worth declaring whether or not the rewriter is on: it is what the author
+  pins today, and the search space the engine gets tomorrow.
 - **`maxFanoutTotal`** (default 5 000) — reject if materialization would create more nodes than
   this (primary + brought).
 

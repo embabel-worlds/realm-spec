@@ -351,10 +351,24 @@ subtle: Chatwoot answers HTTP 500 to a payload missing `query_operator`, and rej
 carries it on the final clause. A rule that renders nothing is correctly reported as absorbing
 nothing, so a wrong rule is slow rather than incorrect — but slow is what you were fixing.
 
-**2. Declare what your source can count (`aggregates:`).** A query that only counts then costs one
+**2. Declare a SECOND DOOR where your source offers one.** A join is one call per anchor, and the
+anchor cap counts anchors rather than records — so pushing a predicate on the target makes each call
+cheaper and leaves the number of calls untouched. What changes it is another way in:
+
+```yaml
+virtualJoins:
+  - { anchorLabel: CustomerAccount, relationship: HAS_CASE, keyField: accountKey, … }   # one per account
+  - { anchorLabel: ChatwootDesk,    relationship: HAS_CASE, keyField: status,     … }   # one for the desk
+```
+
+A query pinning `c.status` has bound the second door's key already. Pin it with `{via:'…'}`; where
+the host enables access-path rewriting the engine may pick it, and will decline where the answer
+would differ (an `OPTIONAL` hop, an aggregate over the anchor, an unapplied second predicate).
+
+**3. Declare what your source can count (`aggregates:`).** A query that only counts then costs one
 call instead of one per anchor. See the spec for the fields and why each is required.
 
-**3. Write HOW MANY and WHICH as two views.**
+**4. Write HOW MANY and WHICH as two views.**
 
 `collect(c.subject)` needs the records whatever else the query asks. So a view that both counts and
 collects always pays the collecting price — including when the question was triage across the whole
