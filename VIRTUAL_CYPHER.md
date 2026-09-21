@@ -1257,8 +1257,21 @@ property-graph sibling of `sparql`, in the same language the rest of the system 
   its properties plus `_labels` / `_type`; a returned PATH is rejected (return the columns you
   need instead).
 
-**The `governance:` grammar** — shared by every source of this family (a remote SQL database
-navigated as a graph is next), one vocabulary regardless of what sits behind the source:
+**The `governance:` grammar** — declarable on **every producer kind**, not only the two documented
+here. It is enforced at the dispatch seam, so a `governance:` block means the same thing over an
+API, a CSV, a feed or an index as it does over Postgres. What differs between kinds is *where* the
+rules are applied, which the source answers and the realm does not choose:
+
+| tier | what it means | kinds |
+|---|---|---|
+| compiled | exposure enters the query; unexposed data never leaves the source | `sql` |
+| filtered | the request is narrowed before the fetch; the source may still send more than is kept | |
+| enforced | rows arrive whole and are stripped on receipt — the data crossed the wire | every other kind, `cypher` included |
+
+Only a **compiled** source can honour a row-level `where:`, because only a generated query has a
+clause to put it in. Declaring one anywhere else is refused when the realm loads.
+
+One vocabulary regardless of what sits behind the source:
 
 - `mode: open` (default) — everything the query returns is visible. Two rules hold even here:
   execution is read-only, and the **secret reflex** — fields whose names look like credentials
