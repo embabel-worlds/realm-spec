@@ -2529,9 +2529,10 @@ schema-level engineering could not touch.
   read-only and continue to reject mutating clauses.
 - **Scoped, fail-closed.** Every keyed probe goes through the world/context scope rewriter; vector
   searches are filtered by world, context, and access-policy revision at the source. A query can
-  never read another context without an explicit authorized bridge and never another world's
-  private data; deployment-approved, revisioned `Public`/reference datasets are the explicit
-  exception. An unparseable or unscopable query is rejected, not run.
+  never read another context without an explicit authorized bridge, and never another PRINCIPAL's
+  data; between two worlds of one principal the boundary is focus rather than confidentiality
+  (§15). Deployment-approved, revisioned `Public`/reference datasets are the explicit exception. An
+  unparseable or unscopable query is rejected, not run.
 - **Bounded.** Every fetch is bounded by a bound anchor, `maxAnchors`/`maxFanoutTotal`, `paging`
   caps, `k`, and rate budgets. Truncation is reported.
 - **Idempotent re-runs.** A re-run re-fetches; caching (`ttl`/`immutable`) and `temperature: 0` for
