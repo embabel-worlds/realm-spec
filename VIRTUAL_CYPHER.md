@@ -2699,7 +2699,18 @@ repeat a relationship.
 ### 13.3 Conclusions are computed, never stored — and they carry their why
 
 Derived facts are an overlay: queries see conclusions consistent with the data at the moment they
-ask, nothing persists, and removing the realm removes the label with nothing to clean up. Every
+ask, **no conclusion outlives the run that computed it**, and removing the realm removes the label —
+there is no derived data to migrate or delete.
+
+That guarantee is about what survives, not about what is never written. Under the transient
+execution model the evaluator's writes happen inside a transaction that is rolled back, so they
+never land. Under the **committed** model they do land, on real nodes, and end-of-run cleanup
+reverses exactly them — recorded as they are applied, and journalled durably, so a run that dies
+before reaching its own cleanup is still reversed rather than leaving stamped labels behind. An
+author sees the same conclusions either way; an operator should know which model is in force,
+because only one of them has a crash window to reason about.
+
+Every
 membership records its **firing chain** — which rule concluded it, in which round, with which
 values, and how values grew as membership grew. That trace is the mechanical object an
 explanation renders rather than reconstructs: "blocked because A (30%) and B (25%) together hold
