@@ -1515,7 +1515,12 @@ list, and the score is the only signal of how good each match is.
 - **`minScore`** — a similarity floor (0..1; default 0 = no floor). Use with care: when the anchor
   text is short (a name, a subject) it embeds *far* from topical thread-summary vectors, so a high
   floor can return nothing. Prefer `minScore: 0` + top-k + `ORDER BY r.score`, and let the caller
-  judge relevance from the score, rather than a hard cutoff that silently drops everything.
+  judge relevance from the score, rather than a hard cutoff.
+  **A floor that culls is reported**, naming how many hits of how many it dropped and the best score
+  it saw — so "nothing relevant" and "everything just missed the cutoff" are distinguishable, and
+  the number to change is in the diagnostic. Where the floor is pushed into the index (the `vector`
+  kind sends it as a similarity threshold) the cull happens at the source and only the floor itself
+  is evidence.
 
 ### 6.4 Privacy: the source enforces world and context scope, not the rewriter
 
