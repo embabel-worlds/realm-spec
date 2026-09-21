@@ -141,9 +141,16 @@ These are **rejected at plan time** (fail-closed), with a message:
 |---|---|
 | `MATCH (hc:HubSpotContact) RETURN hc` | **Naked virtual scan** — no anchor to probe. Virtual labels are reached only by traversing a declared join from a bound anchor; otherwise the engine would try to fetch *every* contact. |
 | `MATCH (p:Person)-[:HAS_HUBSPOT_CONTACT]->(hc)` with no predicate on `p` | **Unbound anchor** — `p` matches every person; the fan-out is unbounded. Pin or filter the anchor. |
-| A producer returns a child type/edge the join didn't declare in `brings:` | **Undeclared brought child** — fail loud, so a source-shape change can't silently inject unmodelled nodes. |
+| `MATCH (i:Item)-[:MENTIONS]->(t:Tag)` where `Tag` is brought only via `TAGGED` | **Brought child off its declared edge** — a brought label is reachable only through the exact relationship its own `brings:` entry names, and only from the join whose target brought it. |
 | `UNION`, `CALL { }` subqueries in a scoped query | Not scoped clause-by-clause by the rewriter → rejected (restructure as separate queries). |
 | Anything the Cypher parser can't parse | **Fail closed** — an unparseable query is rejected, never run unscoped. |
+
+A `brings:` entry naming a `childType` the realm does not declare is refused earlier still, when the
+realm is validated — before any query reaches the planner. The remaining case is a **non-event**: a
+producer that starts returning some extra child type cannot inject it, because materialization reads
+only the `records:` paths the join declared. An unmodelled node has no way in, so there is nothing to
+fail loud about; the risk `brings:` actually carries is the opposite one, a declared child arriving
+without its `id`, which is [reported, not swallowed](#9-caps-cost-and-diagnostics).
 
 And these run but are **capped** (never silently — see §9): a probe binding more than `maxAnchors`
 anchors, or a materialization exceeding `maxFanoutTotal` nodes, is rejected or truncated with a
