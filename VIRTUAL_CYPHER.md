@@ -1363,14 +1363,30 @@ Guarantees:
 is implemented**: `key` rules run in order, each through its own producer, each fetching once for
 the anchors still unresolved, and `none` ends the chain. A rung goes through the ordinary fetch path,
 so it inherits caching, cost budgets, diagnostics — and, where the anchor is a spine, the spine's key
-normalization. The following guarantees above are **not yet honoured**, and a realm must not depend
-on them:
+normalization.
 
-- **`ask`** — refused at validate/install time, naming the join (the rule below).
-- **`ci`** — not read. Matching is case-insensitive on every rung, declared or not.
-- **`confidence`** — not read, and not recorded on the resolved edge.
-- **"More than one match is not a match"** — not enforced. A rung that returns several records for one
-  anchor links all of them. Until it is, give a fallback rung a key that is unique on the far side.
+**Honoured.** A realm may depend on these:
+
+- **`confidence`** — stamped on the resolved edge as `confidence`, alongside `matchedBy` naming the
+  rung that matched (`"email -> customerEmail"`). This is what makes `WHERE r.confidence = 'high'`
+  answerable, so an edge found by a name match never reads like one found by an id.
+- **"More than one match is not a match"** — enforced. A rung returning several records for one
+  anchor settles none of them; that anchor falls through to the next rung, where a narrower key may
+  still resolve it. Do NOT design around this by giving a fallback rung a key that is unique on the
+  far side — that workaround was advice for an earlier host and is no longer needed.
+
+**Refused, not ignored.** The host rejects these at validate/install time, naming the join, per the
+rule below:
+
+- **`ask`** — parking a query on a person's answer is not implemented.
+- **`ci: false`** — a case-SENSITIVE match is not something this engine can offer: the link side
+  lowercases both sides, on every rung. An explicit `false` is refused rather than silently given
+  the looser comparison it asked not to have. Omitting `ci` says nothing and is always fine.
+
+This block previously reported `confidence` and the ambiguity rule as unimplemented after both had
+shipped. That is the more damaging direction for a status note to be wrong in: an author who
+believes a safety property is absent designs around one that is already there, and declines
+provenance they are already entitled to.
 
 The normative rule stands, and is why `ask` is refused rather than skipped:
 
