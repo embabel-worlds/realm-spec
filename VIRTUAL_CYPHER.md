@@ -6,8 +6,10 @@
 > guarantees, and what it refuses. It states OBSERVABLE behaviour only — never how the engine is
 > built. Where an implementation and this document disagree, this document is the defect report.
 > The 0.2 world/principal separation and world-keyed cache/canonical guarantees are forward-looking
-> host requirements. Current Me is not conformant. Multi-world or shared-store isolation is not a
-> valid deployment claim until the corresponding release gates pass.
+> host requirements. Current Me is not conformant, and **§15 names exactly which guarantees, with the
+> observable test for each** — the earlier wording admitted a gap without saying what it was or how
+> anyone would know it had closed. Multi-world or shared-store isolation is not a valid deployment
+> claim until those tests pass.
 >
 > **Relationship to Cypher.** Virtual Cypher is not a new language. A query is ordinary Cypher, and
 > everything the [openCypher](https://opencypher.org/) specification says about pattern matching,
@@ -2780,6 +2782,8 @@ query instead.
 - Name derived properties from the head and prefix them for the realm (`phoenixDepth`, not
   `depth`) — the label's vocabulary outlives the file it was declared in.
 
+---
+
 ## 14. The contract, in one line
 
 > **Bind a real anchor; declare how a label is fetched; the engine probes, fetches once per
@@ -2790,3 +2794,72 @@ For the declarative surface (`virtualJoins:`, `producers/`, `resolve:`, `pushdow
 `brings:`, `cache:`, `views:`) see [`README.md`](./README.md#joining-types-on-demand-virtual-joins-not-mirrored).
 Views (regular / materialized, output typing, the pluggable cache, persisted scopes, and hydrating a
 scope into typed instances) are §8.
+
+---
+
+## 15. Conformance status — what "not conformant" names
+
+§0 says the 0.2 world/principal separation and world-keyed cache/canonical guarantees are
+forward-looking and that the reference host is not conformant. That sentence has been true and
+unactionable: it names no guarantee, prescribes no test, and refers to "release gates" this document
+never defines. An admission nobody can check is indistinguishable from one nobody acts on, and it
+lets the gap widen quietly while every other clause reads as shipped.
+
+§5.15 already shows the house pattern for this and is the model here: name each guarantee that is
+not honoured, state the observable test, and require the host to REFUSE rather than proceed
+silently. `ask` is refused at install time, which is why nothing depends on it by accident.
+
+**The rule this section exists to state.**
+
+> **A host that does not honour a guarantee below MUST NOT make the deployment claim that guarantee
+> supports.** It may run; it may not be described as isolating worlds. Multi-world and shared-store
+> isolation are claims about these tests passing, not about the feature existing.
+
+### 15.1 Not honoured: scope is keyed by the principal, not the world
+
+**The guarantee (§2).** "The world selects the outer data boundary… `userId` is never accepted as an
+alias for either scope." A query cannot reach another world at all, including one owned by the same
+user.
+
+**The observable test.** Two worlds owned by ONE principal. A node written in world A must not be
+readable by any query in world B. Read `worldId` off a node reached in world B: it must be B's.
+
+**What the reference host does instead.** Scope is a disjunction over four node properties compared
+against ONE parameter carrying the principal's id: a node is in scope when its `userId`, `worldId` or
+`workspaceId` equals that principal, or the principal appears in its `visibleTo`. `worldId` is
+therefore not a world identity being matched against a world — it holds the principal, and matching
+it is matching the principal. Two worlds owned by one principal are one scope. That is precisely the
+aliasing §2 forbids, so the clause is not merely unimplemented: the current behaviour is its
+opposite.
+
+**Consequence for realm authors.** Do not treat a world boundary as a confidentiality boundary
+between worlds of the same owner. Between OWNERS the disjunction does hold, and that is the isolation
+the host may claim today.
+
+### 15.2 Not honoured: the producer cache is keyed by principal, not by world
+
+**The guarantee (§0).** Cache and canonical state are world-keyed.
+
+**The observable test.** Fetch a producer in world A. In world B, same principal, same producer, same
+key: the fetch must go to the source, and the freshness envelope must not report B's read as served
+from A's.
+
+**What the reference host does instead.** The shared record cache is scoped by the principal's id, so
+an entry written for one world is a hit for another world of the same principal. The values are not
+wrong — the same source answered the same question — but the world is not what decides reuse, and a
+world-scoped source would leak across the boundary §2 describes.
+
+### 15.3 Honoured, and worth stating because it is easy to assume otherwise
+
+Fetches within one scope are keyed by everything that changes the result set — the producer, the
+resolved key, the pushed-down filter, any steer or tuning, and the limit and demand in force. A read
+taken under a cap therefore never serves one taken without. This is the property that lets a warm-up
+in one request populate the cache for another without risking a truncated answer being served as a
+complete one.
+
+### 15.4 How to change this section
+
+An entry leaves 15.1/15.2 when its observable test passes in the reference host and a test asserts
+it. Deleting an entry because the behaviour was reclassified, or because the clause above it was
+softened, is the failure this section is written to prevent: the guarantee and its status move
+together, or the document goes back to being unactionable.
