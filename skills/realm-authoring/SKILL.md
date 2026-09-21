@@ -312,6 +312,97 @@ metered API to protect (go lower), or a batch op behind a `remote` producer (go 
 And shape the view so the cap rarely matters: **narrow before an enrichment hop.** Sort and `LIMIT`
 the rows you will show, *then* resolve their names — not the other way round.
 
+### What you DECLARE decides what the engine may do
+
+Three declarations cost a few lines each and change the shape of every query over your realm. None
+of them is an optimisation you can add later without changing answers — they are what makes the
+difference between one call and one call *per account*.
+
+**1. Declare the filters your source can apply (`pushdown:`).** Without one, a `WHERE` on your
+target is applied to the graph AFTER every record has been fetched. With one, the source scopes the
+fetch.
+
+That is the small win. The large one: what your source absorbs is what lets the engine push a
+`LIMIT` (stop the page walk) and ask for a `count()` instead of the records. Neither is safe while
+the graph still has filtering left to do, so **an undeclared filter costs far more than its own
+page**.
+
+If your source's query is text, use `qualifier`. If it is JSON — an Odoo domain, an Elasticsearch
+`bool.filter`, a Chatwoot filter payload — use `argPath` + `clause`:
+
+```yaml
+pushdown:
+  - property: status
+    op: IN
+    argPath: payload.-            # `-` APPENDS to the list there
+    clause:
+      attribute_key: status
+      filter_operator: equal_to
+      values: "{values}"          # a node that IS "{values}" becomes the member LIST
+    linkPrevious: { query_operator: AND }   # only if the source links to the PRECEDING element
+```
+
+`linkPrevious` exists for sources that spell conjunction as a field on the previous clause, and
+where that field must be absent from the last one — Chatwoot is the example. It is written at
+append time, which is the only moment the engine knows which element stopped being last.
+
+**Verify pushdown against the live source.** The shapes are unforgiving and the failures are not
+subtle: Chatwoot answers HTTP 500 to a payload missing `query_operator`, and rejects one that
+carries it on the final clause. A rule that renders nothing is correctly reported as absorbing
+nothing, so a wrong rule is slow rather than incorrect — but slow is what you were fixing.
+
+**2. Declare a SECOND DOOR where your source offers one.** A join is one call per anchor, and the
+anchor cap counts anchors rather than records — so pushing a predicate on the target makes each call
+cheaper and leaves the number of calls untouched. What changes it is another way in:
+
+```yaml
+virtualJoins:
+  - { anchorLabel: CustomerAccount, relationship: HAS_CASE, keyField: accountKey, … }   # one per account
+  - { anchorLabel: ChatwootDesk,    relationship: HAS_CASE, keyField: status,     … }   # one for the desk
+```
+
+A query pinning `c.status` has bound the second door's key already. Pin it with `{via:'…'}`; where
+the host enables access-path rewriting the engine may pick it, and will decline where the answer
+would differ (an `OPTIONAL` hop, an aggregate over the anchor, an unapplied second predicate).
+
+**3. Declare what your source can count (`aggregates:`).** A query that only counts then costs one
+call instead of one per anchor. See the spec for the fields and why each is required.
+
+**4. Write HOW MANY and WHICH as two views.**
+
+`collect(c.subject)` needs the records whatever else the query asks. So a view that both counts and
+collects always pays the collecting price — including when the question was triage across the whole
+book and nobody was going to read a subject.
+
+```yaml
+# Triage across every account — the source can answer this.
+- name: HealthOpenCaseCountsByAccount
+  cypher: |
+    MATCH (a:CustomerAccount)-[:HAS_CASE]->(c:SupportCase)
+    WHERE c.status IN ['open', 'pending']
+    RETURN a.accountKey AS accountKey, count(c) AS openCases
+
+# The detail pane, for the handful of accounts it is showing.
+- name: HealthOpenCasesByAccount
+  cypher: |
+    MATCH (a:CustomerAccount)-[:HAS_CASE]->(c:SupportCase)
+    WHERE c.status IN ['open', 'pending']
+    RETURN a.accountKey AS accountKey, collect(c.subject) AS subjects
+```
+
+Say so in the descriptions — the counts view should point at the detail one, and the detail one
+should say to ask it about named accounts rather than the whole book.
+
+The same applies to projecting the target bare: `RETURN c.subject, count(c)` needs the rows, so the
+count cannot be pushed. If you want both, that is two views.
+
+**What blocks a pushed aggregate, in the order the engine checks it:** `count(*)` (it folds rows of
+the whole pattern, which no single source can answer); any `collect` over the target; the target
+projected outside an aggregate; a predicate on the target the source does not absorb. Today `count`
+is delivered; `sum`/`min`/`max` are recognised and left graph-side, and the engine pushes only when
+EVERY measure in the query is deliverable — so a counts view mixing `count` with `max` does not yet
+push.
+
 ## Hard rules (don't get these wrong)
 
 - **No secrets in the realm.** Reference them by env-var/credential-store name; OAuth client
@@ -325,6 +416,11 @@ the rows you will show, *then* resolve their names — not the other way round.
 - **An identity is a spine; a record is a parent label.** Never `parents:` a spine; never
   normalize a shared key on your own side; always assert a non-zero cross-realm count in
   `tests/verify.sh`. A broken cross-realm join is an empty result, not an error.
+- **An undeclared filter is a per-anchor fetch.** If your source can filter, say so with
+  `pushdown:` — and verify it against the live source, because a rule that renders nothing is
+  silently just slow. See "What you DECLARE decides what the engine may do".
+- **How many and which are two views.** One view that counts AND `collect`s always pays the
+  collecting price, so triage over the whole book costs what the detail pane costs.
 - **An untested view is an unshipped view.** Declarative capabilities are only proven by a live
   run against the real source — see "The declarative half has no unit tests".
 - **A realm people ask in words ships `tests/questions.yml`.** Views passing by name proves a
