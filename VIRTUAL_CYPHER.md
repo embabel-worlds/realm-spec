@@ -833,11 +833,21 @@ producers:
   zero rows forever.
 
 **`rowIdAs` — for registers whose rows carry no identifier.** A materialized record MUST carry the
-target type's identity property; one that doesn't is DROPPED — silently, because a register with no
-usable id then produces nothing at all while every fetch log says it matched. Many published
-registers have no per-row id (the NDIS compliance CSV's Provider Number is blank on 98% of rows).
-`rowIdAs: recordKey` stamps a deterministic `<normalized key>:<ordinal>` id, and the type declares
-that property as its identity. It is honest about what it is: a ROW POSITION within one file
+target type's identity property; one that doesn't is DROPPED, and the fetch REPORTS how many it
+dropped and which property they lacked. It did not always: a register with no usable id produced
+nothing at all while every fetch log said it matched, which reads exactly like an empty source.
+
+Two of the three cases need no declaration at all. A type that declares NO identity property — a
+per-(petition, constituency) signature row, a per-(place, month) count, anything whose uniqueness is
+the combination rather than a field — is given a deterministic id minted from the record's own
+values: identical rows still MERGE, different rows never collide, and re-fetching is idempotent.
+A type that DECLARES an identity and receives a record without it is a data error, and that record
+is dropped and counted.
+
+`rowIdAs` is for the third case: a type that MUST declare an identity because queries key on it,
+fed by a register that has no per-row id to give (the NDIS compliance CSV's Provider Number is blank
+on 98% of rows). `rowIdAs: recordKey` stamps a deterministic `<normalized key>:<ordinal>` id, and
+the type declares that property as its identity. It is honest about what it is: a ROW POSITION within one file
 version, not a source identity — stable enough for transient virtual rows, and not a key to store
 or compare across file versions.
 
