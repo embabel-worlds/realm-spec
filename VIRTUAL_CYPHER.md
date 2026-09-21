@@ -2447,18 +2447,43 @@ is graph-colocated and transactional: a
 
 ```kotlin
 interface ViewMaterializationStore {
-  fun freshUntil(view: String, worldId: String, contextId: String, accessPolicyRevision: String, principalId: String?): Long?
-  fun materialize(view: String, worldId: String, contextId: String, accessPolicyRevision: String, principalId: String?, memberIds: List<NodeId>, expiresAt: Long)
-  fun members(view: String, worldId: String, contextId: String, accessPolicyRevision: String, principalId: String?): List<NodeId>
-  fun clear(view: String, worldId: String, contextId: String, accessPolicyRevision: String, principalId: String?)
+  data class CacheState(val expiresAt: Long, val memberCount: Long)
+  data class RowSnapshot(val columns: List<String>, val rows: List<Map<String, Any?>>, val expiresAt: Long)
+
+  fun state(view: String, scope: String): CacheState?
+  fun clear(view: String, scope: String)
   fun sweepExpired()
+
+  // A view whose body returns a NODE caches its members.
+  fun materialize(view: String, scope: String, memberIds: List<String>, expiresAt: Long)
+  fun bindClause(alias: String, outputLabel: String, view: String, scope: String): String
+
+  // A TABULAR view has no node to point a MEMBER edge at, so it caches the rows themselves.
+  fun materializeRows(view: String, scope: String, columns: List<String>, rows: List<Map<String, Any?>>, expiresAt: Long)
+  fun rows(view: String, scope: String): RowSnapshot?
 }
 ```
 
-`principalId` is required when the view body uses principal-specific credentials, policy, inputs, a
-principal anchor, or any producer not proven principal-invariant. It may be `null` only when the
-planner verifies that the entire view is principal-invariant. A view that cannot prove either mode is
-rejected rather than cached at context scope.
+Two things in that shape are load-bearing.
+
+**A view without an `outputLabel` is a row snapshot, not a member set.** Its body returns columns, and
+there is no node to point a `MEMBER` edge at — so what is cached is the rows, which is what a client
+reading the view by name wanted anyway. A store that implements only the member half silently fails
+every tabular view.
+
+**Members are bound by a clause, not returned as ids.** `bindClause` lets the default
+graph-colocated store prepend pure Cypher (`-[:MEMBER]->` off its marker node) with no ids threaded
+through the query; an off-graph store returns `elementId(alias) IN [...]` instead. Returning a member
+list would have forced every store to pay the graph store's worst case.
+
+`scope` is the acting caller's scope as §2 defines it; the store never interprets it, only keys on it.
+
+**Every entry is keyed per caller**, unconditionally. A view body may use caller-specific
+credentials, policy, inputs or anchors, and the reference host does not attempt to prove otherwise —
+there is no analysis that marks a view caller-invariant and no sharing of one entry between callers.
+That is the conservative choice and it costs: two callers asking for the same view materialize it
+twice. A host that wants to share reference-data views across callers needs an invariance proof this
+one does not have, and must not assume the absence of the parameter implies one.
 
 An alternative strategy swaps in without touching the query path: an **in-memory LRU** for a single-process
 deployment, an **external KV / Redis** for a horizontally-scaled one, or an **`immutable`** strategy (no TTL,
@@ -2478,9 +2503,13 @@ dataset revision. Caching is governed by the §9 diagnostics:
   per-producer `ttl` (or `immutable` for stable reference data). A repeat query for the same key reads the
   cache; no producer call fires.
 - **Negative (entity) result** — a *known miss* for an ENTITY (this login / email / domain resolves to
-  nothing) is cached too, so a fan-out doesn't re-probe a dead key every query. This exists today ad-hoc as
-  the bridge negative-cache (`_bridgeMissAtMs` per target); the SPI unifies it with a TTL and
-  **invalidate-on-reconnect**.
+  nothing) is cached too, so a fan-out doesn't re-probe a dead key every query. This is a store with a
+  TTL and **invalidate-on-reconnect**: reconnecting an integration re-attempts every key previously
+  missed for that caller, so a miss recorded under a broken credential is never written off permanently.
+  The miss is keyed, not stamped — earlier hosts wrote a `_bridgeMissAtMs_<target>` timestamp onto the
+  **anchor itself**, which put a system property into `keys(n)` where schema snapshots, property
+  enumerators and a plain `RETURN n` could all see it. A cache must not leak into the data model, and
+  eviction must not be a scan of every property of every node a caller owns; keying the entry gives both.
 - **Never cache a FAILURE.** A timeout / 5xx / expired-auth fetch is **not** a result — caching its emptiness
   would hide the data once the integration heals. Only a `PRODUCER_ERROR`-free outcome is cacheable (§9).
 
