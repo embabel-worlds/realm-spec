@@ -810,11 +810,17 @@ producers:
   keys reads one file.
 - **`fileCacheSeconds` is THIS producer's, and an unknown field voids the whole file.** It caches a
   downloaded document, so it exists only on `tabular`. A `remote` producer caches with
-  `cache: { kind: ttl, seconds: … }` alone. Putting it on a remote producer is not ignored and is
-  not a warning: the file fails to parse, so **every producer declared in it silently ceases to
-  exist**, and the only symptom is `Unknown producer '<name>' in plan` when a query finally needs
-  one — surviving a refresh and a restart, because nothing is stale. Check each field against the
-  producer's own `kind`; the realm's problem list names the file when a host records it there.
+  `cache: { kind: ttl, seconds: … }` alone. Putting it on a remote producer is not ignored, and the
+  cost is not confined to that one field: the file fails to parse, so **every producer declared in
+  it ceases to exist** — not some of them, the whole file. It is reported as a problem on the
+  OWNING REALM, naming the file and the parse error, and logged as a warning, because a file of
+  producers vanishing is not a detail to leave sitting in a list somebody has to go and read.
+
+  It used to be silent, and that is worth knowing if you are reading older material: the realm said
+  `problems: 0` while every producer in the failed file did not exist, and the only symptom was
+  `Unknown producer '<name>' in plan` when a query finally needed one — surviving a refresh and a
+  restart, because nothing was stale, the file had simply never parsed. Check each field against
+  the producer's own `kind`.
 - **A banner above the header does not become the schema.** With `headerRow: auto` (the default)
   the header is detected by column shape, so the "Generated on …" lines these exports carry are
   skipped rather than parsed as column names.
