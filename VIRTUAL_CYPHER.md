@@ -734,10 +734,9 @@ producers:
   downloaded document, so it exists only on `tabular`. A `remote` producer caches with
   `cache: { kind: ttl, seconds: … }` alone. Putting it on a remote producer is not ignored, and the
   cost is not confined to that one field: the file fails to parse, so **every producer declared in
-  it ceases to exist** —
-  not some of them, the whole file. It is reported as a problem on the OWNING REALM, naming the
-  file and the parse error, and logged as a warning, because a file of producers vanishing is not a
-  detail to leave sitting in a list somebody has to go and read.
+  it ceases to exist** — not some of them, the whole file. It is reported as a problem on the
+  OWNING REALM, naming the file and the parse error, and logged as a warning, because a file of
+  producers vanishing is not a detail to leave sitting in a list somebody has to go and read.
 
   It used to be silent, and that is worth knowing if you are reading older material: the realm said
   `problems: 0` while every producer in the failed file did not exist, and the only symptom was
