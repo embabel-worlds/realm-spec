@@ -327,6 +327,23 @@ That is the small win. The large one: what your source absorbs is what lets the 
 the graph still has filtering left to do, so **an undeclared filter costs far more than its own
 page**.
 
+**Declare EVERY filter the source accepts, not the obvious one.** That last sentence is not a
+figure of speech: the engine's test is `residual.isEmpty()`, so a *single* predicate your source
+could have applied and didn't forfeits the `LIMIT` push and the `count()` push **entirely**.
+Declaring three filters of four buys you the small win and none of the large one — a query that
+should have been one counted call walks every page instead, and the answer is identical, so nothing
+tells you. Go and read the source's own parameter list, and cover it.
+
+Three things help you do that and check it:
+
+- **A mined realm already has the list.** The scaffold writes `sourceFilters:` onto each producer —
+  the query parameters its specification said it accepts. That is your checklist.
+- **Loading the realm names what you left.** "pushes 1 of the 3 filter(s) its source accepts —
+  `since`, `labels` are fetched over the wire and filtered in the graph."
+- **`EXPLAIN` names what a real query paid for**, per join: `pushed to source: genre` /
+  `applied by the graph after fetching: status`. A residual there is the predicate to go and
+  declare next — it is costing you on a query someone actually runs.
+
 If your source's query is text, use `qualifier`. If it is JSON — an Odoo domain, an Elasticsearch
 `bool.filter`, a Chatwoot filter payload — use `argPath` + `clause`:
 
