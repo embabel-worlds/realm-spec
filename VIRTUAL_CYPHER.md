@@ -5,11 +5,10 @@
 > **Status: normative.** This document defines what a Virtual Cypher query means, what it
 > guarantees, and what it refuses. It states OBSERVABLE behaviour only — never how the engine is
 > built. Where an implementation and this document disagree, this document is the defect report.
-> The 0.2 world/principal separation and world-keyed cache/canonical guarantees are forward-looking
-> host requirements. Current Me is not conformant, and **§15 names exactly which guarantees, with the
-> observable test for each** — the earlier wording admitted a gap without saying what it was or how
-> anyone would know it had closed. Multi-world or shared-store isolation is not a valid deployment
-> claim until those tests pass.
+> **Scope.** Accessibility is per PRINCIPAL and focus is per WORLD: a world decides which
+> capabilities exist in it, not which of its owner's data may be seen. Between principals the
+> boundary is absolute. §15 states this in full, because an earlier draft claimed worlds were
+> mutually confidential for one owner and they are not.
 >
 > **Relationship to Cypher.** Virtual Cypher is not a new language. A query is ordinary Cypher, and
 > everything the [openCypher](https://opencypher.org/) specification says about pattern matching,
@@ -120,9 +119,12 @@ confidentiality boundary within it; the principal supplies authority. The probe 
 fail-closed scope rewriter under immutable host-bound `(worldId, contextId, access-policy revision)`,
 while `principalId` remains separate for authorization and audit. Every anchor and virtual node
 belongs to that scope. The caller supplies none of these identities. A query cannot reach another
-context without an explicit policy-authorized bridge, and cannot reach another world at all,
-including one owned by the same user. Local single-user deployments use the same path and an explicit
-default context. `userId` is never accepted as an alias for either scope.
+context without an explicit policy-authorized bridge, and cannot reach another PRINCIPAL's data at
+all. Between two worlds of the SAME principal the boundary is focus rather than confidentiality:
+each world decides which types, realms, producers, views and skills exist in it, and a label whose
+realm is not installed there cannot be named, fetched or viewed — but data the principal may see is
+data the principal may see. See §15. Local single-user deployments use the same path and an explicit
+default context.
 
 ---
 
@@ -2797,69 +2799,43 @@ scope into typed instances) are §8.
 
 ---
 
-## 15. Conformance status — what "not conformant" names
+## 15. Scope — per-user accessibility, per-world focus
 
-§0 says the 0.2 world/principal separation and world-keyed cache/canonical guarantees are
-forward-looking and that the reference host is not conformant. That sentence has been true and
-unactionable: it names no guarantee, prescribes no test, and refers to "release gates" this document
-never defines. An admission nobody can check is indistinguishable from one nobody acts on, and it
-lets the gap widen quietly while every other clause reads as shipped.
+An earlier draft of this section read the reference host's scope handling as a defect against §2.
+It is not. It is the intended model, and §2 overstated it; this section states what scope actually
+guarantees so that no one else has to reverse-engineer the answer from a scope predicate.
 
-§5.15 already shows the house pattern for this and is the model here: name each guarantee that is
-not honoured, state the observable test, and require the host to REFUSE rather than proceed
-silently. `ask` is refused at install time, which is why nothing depends on it by accident.
+### 15.1 The model
 
-**The rule this section exists to state.**
+**Accessibility is per user. Focus is per world.**
 
-> **A host that does not honour a guarantee below MUST NOT make the deployment claim that guarantee
-> supports.** It may run; it may not be described as isolating worlds. Multi-world and shared-store
-> isolation are claims about these tests passing, not about the feature existing.
+A principal reaches their own data. A world does not fence one part of it off from another part of
+the same principal's; a world selects WHICH CAPABILITIES EXIST — the types, realms, producers,
+views, skills and actions installed in it. That is a real boundary and it is enforced by
+construction rather than by predicate: a label whose realm is not installed in a world cannot be
+named in a query there, has no producer to fetch it, and appears in no view.
 
-### 15.1 Not honoured: scope is keyed by the principal, not the world
+So two worlds of one principal differ in what they can DO, not in what the principal may see. A
+canonical spine that both worlds' realms declare is the same spine, which is the point of a spine.
 
-**The guarantee (§2).** "The world selects the outer data boundary… `userId` is never accepted as an
-alias for either scope." A query cannot reach another world at all, including one owned by the same
-user.
+**Between principals, the boundary is absolute.** A node is in scope when it carries the acting
+principal's id, or names them in its share projection. That is the isolation a shared store depends
+on, and it is the claim worth testing.
 
-**The observable test.** Two worlds owned by ONE principal. A node written in world A must not be
-readable by any query in world B. Read `worldId` off a node reached in world B: it must be B's.
+### 15.2 What this means when you are deciding something
 
-**What the reference host does instead.** Scope is a disjunction over four node properties compared
-against ONE parameter carrying the principal's id: a node is in scope when its `userId`, `worldId` or
-`workspaceId` equals that principal, or the principal appears in its `visibleTo`. `worldId` is
-therefore not a world identity being matched against a world — it holds the principal, and matching
-it is matching the principal. Two worlds owned by one principal are one scope. That is precisely the
-aliasing §2 forbids, so the clause is not merely unimplemented: the current behaviour is its
-opposite.
+- **Designing a realm:** a world is a capability surface. If two worlds should see different DATA of
+  one owner, that difference has to come from what each realm exposes, not from a hope that the
+  world boundary will filter it.
+- **Reading a cache:** fetched records are reused per principal, which is consistent with the above
+  — the same principal asking the same source the same question. It is not a leak across a
+  confidentiality boundary, because between worlds of one principal there is no such boundary.
+- **Making a deployment claim:** "isolated per user" is supported. "Worlds are mutually
+  confidential" is not, and is not intended to be.
 
-**Consequence for realm authors.** Do not treat a world boundary as a confidentiality boundary
-between worlds of the same owner. Between OWNERS the disjunction does hold, and that is the isolation
-the host may claim today.
+### 15.3 What a fetch is keyed by, which is easy to assume wrongly
 
-### 15.2 Not honoured: the producer cache is keyed by principal, not by world
-
-**The guarantee (§0).** Cache and canonical state are world-keyed.
-
-**The observable test.** Fetch a producer in world A. In world B, same principal, same producer, same
-key: the fetch must go to the source, and the freshness envelope must not report B's read as served
-from A's.
-
-**What the reference host does instead.** The shared record cache is scoped by the principal's id, so
-an entry written for one world is a hit for another world of the same principal. The values are not
-wrong — the same source answered the same question — but the world is not what decides reuse, and a
-world-scoped source would leak across the boundary §2 describes.
-
-### 15.3 Honoured, and worth stating because it is easy to assume otherwise
-
-Fetches within one scope are keyed by everything that changes the result set — the producer, the
+Within a scope, a fetch is keyed by everything that changes the result set — the producer, the
 resolved key, the pushed-down filter, any steer or tuning, and the limit and demand in force. A read
-taken under a cap therefore never serves one taken without. This is the property that lets a warm-up
-in one request populate the cache for another without risking a truncated answer being served as a
-complete one.
-
-### 15.4 How to change this section
-
-An entry leaves 15.1/15.2 when its observable test passes in the reference host and a test asserts
-it. Deleting an entry because the behaviour was reclassified, or because the clause above it was
-softened, is the failure this section is written to prevent: the guarantee and its status move
-together, or the document goes back to being unactionable.
+taken under a cap therefore never serves one taken without. This is what lets a warm-up in one
+request populate the cache for another without a truncated answer being served as a complete one.
