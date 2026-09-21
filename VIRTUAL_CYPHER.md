@@ -1948,8 +1948,14 @@ These call an LLM, so they are the **non-deterministic** members of the surface 
 query can score two runs slightly differently, and the model — not the graph — decides. Bound the cost —
 each criterion is **one batched call** over the fetched rows (chunked for large sets), so they scale with
 *rows fetched*, not rows × 1; keep the fetched set small (an anchor, a real `WHERE`, a `LIMIT` on the fetch)
-before judging. They **fail open**: an LLM error scores the affected rows 1.0 (kept, neutral rank), so a
-hiccup never silently *hides* results — it degrades to "no judgment applied", visible and safe. Reach for
+before judging. They **fail open**: a row the model did not judge is scored at the **keep threshold**
+(0.5), so a hiccup never silently *hides* results — it degrades to "no judgment applied". The threshold,
+not 1.0: a perfect score would keep the row *and rank it above every row the model actually read*, which
+is how a grants query for "youth mental health" once came back topped by aged-care infection research, at
+fit 1.0, with its kept count swinging across identical runs. At the threshold an unjudged row is kept and
+never promoted. It is also **visible** — a `PARTIAL_RESULT` (`TRUNCATED`) warning names how many rows of
+how many carry no judgment, so a caller ranking or counting them knows how much of its answer the model
+never read. Reach for
 them only when the discriminator is genuinely subjective; a property, an embedding (§6), or a real predicate
 is always cheaper and more repeatable.
 
