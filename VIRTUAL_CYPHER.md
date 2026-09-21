@@ -5,9 +5,10 @@
 > **Status: normative.** This document defines what a Virtual Cypher query means, what it
 > guarantees, and what it refuses. It states OBSERVABLE behaviour only — never how the engine is
 > built. Where an implementation and this document disagree, this document is the defect report.
-> The 0.2 world/principal separation and world-keyed cache/canonical guarantees are forward-looking
-> host requirements. Current Me is not conformant. Multi-world or shared-store isolation is not a
-> valid deployment claim until the corresponding release gates pass.
+> **Scope.** Accessibility is per PRINCIPAL and focus is per WORLD: a world decides which
+> capabilities exist in it, not which of its owner's data may be seen. Between principals the
+> boundary is absolute. §15 states this in full, because an earlier draft claimed worlds were
+> mutually confidential for one owner and they are not.
 >
 > **Relationship to Cypher.** Virtual Cypher is not a new language. A query is ordinary Cypher, and
 > everything the [openCypher](https://opencypher.org/) specification says about pattern matching,
@@ -118,9 +119,12 @@ confidentiality boundary within it; the principal supplies authority. The probe 
 fail-closed scope rewriter under immutable host-bound `(worldId, contextId, access-policy revision)`,
 while `principalId` remains separate for authorization and audit. Every anchor and virtual node
 belongs to that scope. The caller supplies none of these identities. A query cannot reach another
-context without an explicit policy-authorized bridge, and cannot reach another world at all,
-including one owned by the same user. Local single-user deployments use the same path and an explicit
-default context. `userId` is never accepted as an alias for either scope.
+context without an explicit policy-authorized bridge, and cannot reach another PRINCIPAL's data at
+all. Between two worlds of the SAME principal the boundary is focus rather than confidentiality:
+each world decides which types, realms, producers, views and skills exist in it, and a label whose
+realm is not installed there cannot be named, fetched or viewed — but data the principal may see is
+data the principal may see. See §15. Local single-user deployments use the same path and an explicit
+default context.
 
 ---
 
@@ -2872,9 +2876,10 @@ schema-level engineering could not touch.
   read-only and continue to reject mutating clauses.
 - **Scoped, fail-closed.** Every keyed probe goes through the world/context scope rewriter; vector
   searches are filtered by world, context, and access-policy revision at the source. A query can
-  never read another context without an explicit authorized bridge and never another world's
-  private data; deployment-approved, revisioned `Public`/reference datasets are the explicit
-  exception. An unparseable or unscopable query is rejected, not run.
+  never read another context without an explicit authorized bridge, and never another PRINCIPAL's
+  data; between two worlds of one principal the boundary is focus rather than confidentiality
+  (§15). Deployment-approved, revisioned `Public`/reference datasets are the explicit exception. An
+  unparseable or unscopable query is rejected, not run.
 - **Bounded.** Every fetch is bounded by a bound anchor, `maxAnchors`/`maxFanoutTotal`, `paging`
   caps, `k`, and rate budgets. Truncation is reported.
 - **Idempotent re-runs.** A re-run re-fetches; caching (`ttl`/`immutable`) and `temperature: 0` for
@@ -3249,6 +3254,8 @@ Two ceilings sit underneath as backstops, and you should never meet them:
 
 Both fail loudly. Neither truncates: you will never receive a derivation that quietly stopped early.
 
+---
+
 ## 14. The contract, in one line
 
 > **Bind a real anchor; declare how a label is fetched; the engine probes, fetches once per
@@ -3259,3 +3266,46 @@ For the declarative surface (`virtualJoins:`, `producers/`, `resolve:`, `pushdow
 `brings:`, `cache:`, `views:`) see [`README.md`](./README.md#joining-types-on-demand-virtual-joins-not-mirrored).
 Views (regular / materialized, output typing, the pluggable cache, persisted scopes, and hydrating a
 scope into typed instances) are §8.
+
+---
+
+## 15. Scope — per-user accessibility, per-world focus
+
+An earlier draft of this section read the reference host's scope handling as a defect against §2.
+It is not. It is the intended model, and §2 overstated it; this section states what scope actually
+guarantees so that no one else has to reverse-engineer the answer from a scope predicate.
+
+### 15.1 The model
+
+**Accessibility is per user. Focus is per world.**
+
+A principal reaches their own data. A world does not fence one part of it off from another part of
+the same principal's; a world selects WHICH CAPABILITIES EXIST — the types, realms, producers,
+views, skills and actions installed in it. That is a real boundary and it is enforced by
+construction rather than by predicate: a label whose realm is not installed in a world cannot be
+named in a query there, has no producer to fetch it, and appears in no view.
+
+So two worlds of one principal differ in what they can DO, not in what the principal may see. A
+canonical spine that both worlds' realms declare is the same spine, which is the point of a spine.
+
+**Between principals, the boundary is absolute.** A node is in scope when it carries the acting
+principal's id, or names them in its share projection. That is the isolation a shared store depends
+on, and it is the claim worth testing.
+
+### 15.2 What this means when you are deciding something
+
+- **Designing a realm:** a world is a capability surface. If two worlds should see different DATA of
+  one owner, that difference has to come from what each realm exposes, not from a hope that the
+  world boundary will filter it.
+- **Reading a cache:** fetched records are reused per principal, which is consistent with the above
+  — the same principal asking the same source the same question. It is not a leak across a
+  confidentiality boundary, because between worlds of one principal there is no such boundary.
+- **Making a deployment claim:** "isolated per user" is supported. "Worlds are mutually
+  confidential" is not, and is not intended to be.
+
+### 15.3 What a fetch is keyed by, which is easy to assume wrongly
+
+Within a scope, a fetch is keyed by everything that changes the result set — the producer, the
+resolved key, the pushed-down filter, any steer or tuning, and the limit and demand in force. A read
+taken under a cap therefore never serves one taken without. This is what lets a warm-up in one
+request populate the cache for another without a truncated answer being served as a complete one.
