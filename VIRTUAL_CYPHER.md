@@ -231,8 +231,15 @@ is on GitHub" doesn't re-storm the source.
 | `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
 
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
-`cache:` policy (`none` / `ttl` / `session` / `immutable`, plus `graph` for aggregates and
-extraction — §5.5/§5.6, where the committed graph itself is the cache tier).
+`cache:` policy: `none` (alias `fresh`, the default — read live every query), `ttl` (a window in
+seconds, with an opt-in `negativeTtlSeconds` for misses), `immutable` (reference data, held until
+the process is restarted or maintenance clears it), and `graph` for aggregates and extraction
+(§5.5/§5.6, where the committed graph itself is the cache tier).
+
+> `kind: session` parses and is reported by the catalog, but the per-`AgentProcess` lifetime it
+> names is **not wired** — it behaves as `none`, and validating a realm that declares it raises a
+> warning saying so. Use `ttl` for a window you can state, or `immutable` for data that does not
+> change.
 
 #### Page-number origins
 
