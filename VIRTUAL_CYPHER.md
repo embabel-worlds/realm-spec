@@ -203,12 +203,22 @@ reused — re-resolved only after `refreshAfter`.
 |---|---|
 | `existingBridge` | A fresh bridge already linked to the anchor — use it, stop. |
 | `learnedHandle: { property, as }` | An explicit handle stored on the anchor (e.g. `Person.githubLogin`). No lookup. |
-| `canonicalEmail: { producer }` | The anchor's canonical email set → call the producer. |
-| `canonicalDomain: { producer }` | An organization's canonical domains → call the producer. |
+| `canonicalIdentity: { producer }` | The anchor's spine keys — emails for a Person, domains for an Organization, whatever a realm-declared spine is keyed by (§5.17) → call the producer. |
+| `canonicalEmail: { producer }` | **Alias of `canonicalIdentity`**, for an email-keyed anchor. |
+| `canonicalDomain: { producer }` | **Alias of `canonicalIdentity`**, for a domain-keyed anchor. |
+
+The two aliases are one function: what a canonical rule keys on is decided by the anchor's spine and
+by nothing else, so writing `canonicalEmail` on an Organization resolves by domain regardless. The
+names are kept because realms are written with them, and a name its anchor contradicts is reported
+when the realm loads — but `canonicalIdentity` is the one to write. A kind outside this table is
+**refused at validate/install**; nothing will ever answer it.
 
 Resolution is **batched** (one producer call for many anchors) and **negatively cached** (an anchor
 that resolved to nothing is not re-queried until `refreshAfter`), so a recurring "who that I email
-is on GitHub" doesn't re-storm the source.
+is on GitHub" doesn't re-storm the source. A fetch that *failed* is never negatively cached — "could
+not ask" must not become "asked, nothing there" and then stay that way past a fixed token. The
+negative cache is recorded on the bridge store, so it rides `writeThrough`: a join that declares
+`writeThrough: false` has nowhere to record a miss and re-asks every query.
 
 ### 5.3 Producer kinds
 
