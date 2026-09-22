@@ -236,7 +236,7 @@ negative cache is recorded on the bridge store, so it rides `writeThrough`: a jo
 | kind | fetch | keyed by |
 |---|---|---|
 | `remote` (alias `api`) | a gateway op — realm handler or learned REST API | the anchor's id/email/login (list, string-template, or path-param mode) |
-| `sql` | a relational TABLE joined by a column, or SCANNED (`scan:`) ordered and bounded — the SELECT is **generated**, never authored, so the `governance:` grammar (§5.15) is enforceable by construction: governed exposure compiles into the column list, row-level `where:` predicates (`:userId` binds the acting user) inject into every statement | the anchor key batch, bound into `WHERE <keyColumn> IN (…)`; rows echo the key column. A `scan:` producer takes no keys: the pinned value chooses the ordering column and is echoed under `echoKeyAs` |
+| `sql` | a relational TABLE joined by a column, SCANNED (`scan:`) ordered and bounded, or a stored PROCEDURE's result set (`procedure:`) — the SELECT is **generated**, never authored, so the `governance:` grammar (§5.15) is enforceable by construction: governed exposure compiles into the column list, row-level `where:` predicates (`:userId` binds the acting user) inject into every statement. A procedure is read as a read — no `readOnly: false` — and rolled back to keep it one (§5.15.1) | the anchor key batch, bound into `WHERE <keyColumn> IN (…)`; rows echo the key column. A `scan:` producer takes no keys: the pinned value chooses the ordering column and is echoed under `echoKeyAs`. A `procedure:` producer is called once per key, and echoes it |
 | `compute` | an in-process function over the keys (scores, rollups, synthesis) | the anchor key; no external I/O |
 | `vector` | top-k semantic relevance to the anchor's **text** — a fused semantic + lexical retrieval, ranked as one list (§6.6) | nothing — *relevance is the join* (§6) |
 | `keyword` | top-k **lexical** (fulltext, exact-token) match to the anchor's text — the honest fit for "MENTIONS \<term\>" | nothing — same relevance contract as `vector`, only the mode differs (§6.6) |
@@ -1364,6 +1364,72 @@ Guarantees:
 - **`echoKeyAs` is required**, and is what makes a keyless read joinable — every returned row
   carries the pinned value under that property, which is the join's `recordKeyField`.
 - Exposure, `where:` predicates and masks apply exactly as they do to a keyed fetch.
+
+**Reading a stored procedure: `procedure:` instead of `table:`.** On PostgreSQL a read-only
+routine is a FUNCTION, and a keyed fetch over `SELECT * FROM fn()` already reaches it. SQL
+Server and Sybase ASE have no such form: `EXEC` is the only way to invoke any procedure, read
+or write, and an operations estate is full of reporting procedures that are SELECT wrappers —
+*queue depth right now*, *connections by host*, *items completed in the last fifteen minutes*.
+A `sql` producer may declare `procedure:`, and the procedure's result set becomes typed graph
+rows: joinable, viewable, cacheable, and served through every door the world has.
+
+```yaml
+- name: robotQueueByInstance
+  kind: sql
+  datasource: lumina_au            # a READ-ONLY datasource: no `readOnly: false` is needed
+  echoKeyAs: instance              # every row comes back carrying the pinned key
+  procedure:
+    name: lumina_au.dbo.sp_database_monitor_lumina_robot_queue_statistics_pending
+    args: []                       # ordered; "$key" binds the anchor key, anything else is a literal
+  cache: { kind: none }            # "right now" means right now
+  governance:
+    mode: governed
+    expose:
+      lumina_au.dbo.sp_database_monitor_lumina_robot_queue_statistics_pending:
+        properties: [queue_item_type, queue_item_sub_type, pending_queue_item_count]
+```
+
+Reached through a virtual join whose anchor is PINNED — a datasource instance, a site, a
+region, whatever the procedure is *about*:
+
+```cypher
+MATCH (:SybaseInstance {name:'lumina_au'})-[:ROBOT_QUEUE]->(q:RobotQueueDepth)
+RETURN q.queue_item_type, q.pending_queue_item_count ORDER BY q.pending_queue_item_count DESC
+```
+
+Guarantees:
+
+- **Placement is the volatility declaration.** A producer is a read path: its rows are
+  materialized for one query and rolled back with it. A procedure declared here runs against
+  a read-only datasource with no opt-in. A procedure that WRITES is a verb, declared in
+  `sql/procedures.yml` against a datasource that says `readOnly: false`, and stays gated
+  exactly as before. "Can anything mutate this database?" is still answered by grepping for
+  `readOnly: false`.
+- **The declaration is made true, not trusted.** By default (`rollback: true`) the call runs
+  inside a transaction that is rolled back unconditionally after the result set is read, so a
+  procedure that writes leaves nothing behind. This matters on engines where a procedure runs
+  with its owner's rights rather than its caller's. `rollback: false` exists for an engine
+  whose procedures refuse to run inside a caller's transaction (Sybase ASE unchained-mode
+  procedures); with it, the declaration is the only assurance, and the realm README should
+  say so.
+- **One call per key.** A procedure argument is a scalar, so there is no batch. Every
+  returned row carries the pinned key under `echoKeyAs`, which is required and is the join's
+  `recordKeyField`. A procedure with no arguments still needs a pinned anchor: the key it
+  echoes is the door the query walked through.
+- **The first result set is the rows.** A procedure that produces none reads as no rows. A
+  procedure the datasource cannot run is a diagnostic and no rows, never a silent zero.
+- **`procedure`, `keyColumn` and `scan` are mutually exclusive**, and exactly one is required.
+  A procedure read needs no `table`.
+- **Governance is enforced on receipt, and the tier says so.** There is no SELECT list to
+  compile exposure into, so the rows cross the wire whole and unexposed columns are stripped
+  on arrival; `expose` is keyed by the procedure's name. A row-level `where:` predicate has
+  nowhere to go and is REFUSED at load, never silently ignored. Masks and the secret reflex
+  apply as everywhere.
+- **A procedure-backed label's values are not enumerable.** There is no column to list
+  distinct values of; discovery says so rather than guessing.
+- **SQL Server, Azure SQL and Sybase ASE datasources are supported**, for procedures and
+  tables alike. A `jdbc:sqlserver:` or `jdbc:sybase:` URL selects the T-SQL dialect on its
+  own; `dialect: sqlserver` or `dialect: sybase` on the producer names it explicitly.
 
 **A join may declare a POLICY instead of one key.** _Partly implemented — see the implementation-status
 note at the end of this section for exactly which guarantees hold today._ `keyField` says "match this column"; a policy
