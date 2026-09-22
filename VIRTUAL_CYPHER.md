@@ -2318,6 +2318,9 @@ over 150 cases costs about eight calls, not 150. Nothing about the answer change
 still judged on its own evidence, its label still comes from the closed set, and a group the model's
 reply does not settle unambiguously (a number missing, given twice, or given a label off the set) is
 judged again on its own rather than guessed. `llmCalls` in the result counts the calls actually made.
+The calls a reduction makes for independent groups (or batches of them) overlap, a few at a time,
+so a query that judges many groups waits for the slowest few round trips rather than the sum of
+all of them; the order of the rows and the count of the calls are unchanged by this.
 
 ```cypher
 MATCH (t:ResearchTopic)-[:HAS_NEWS]->(n:NewsItem)
