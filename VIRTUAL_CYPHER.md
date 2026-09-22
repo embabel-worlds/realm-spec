@@ -2185,9 +2185,18 @@ What this costs, and the one rule it imposes:
   set judged is never SMALLER than the set that can reach the answer, so the answer is exactly what
   judging every group would give. Where the aggregation flows into something other than a filter or a
   bare pass-through — an expression (`toUpper(triage)`), a pattern, an `UNWIND`, a `CALL`, a `UNION` —
-  the query cannot be narrowed by it and every group is judged, as before. `ORDER BY` and `LIMIT`
-  after the aggregation never narrow it (the rows a limit keeps depend on the filter it follows).
-  A query whose filter would still need more than a few hundred model calls after narrowing is
+  the query cannot be narrowed by it and every group is judged, as before.
+- **A `LIMIT` stops the judging when the answer is full.** Under `ORDER BY … LIMIT n`, the groups
+  are judged toward the top of the answer a few at a time, best rows first, and judging stops the
+  moment the first `n` rows (or `SKIP s LIMIT n`: the first `s + n`) are all judged — every group
+  below them is never sent to the model. "The ten biggest at-risk deals" costs judging the biggest
+  deals until ten of them are at risk, not judging every deal. The answer is exactly what judging
+  every group would give. This holds when the judgement only FILTERS rows; where its value shapes
+  them — an `ORDER BY` on the judgement, a `RETURN` that is `DISTINCT` or aggregates, a later clause
+  grouped by it, a `LIMIT` before the final `RETURN` — every candidate is judged as before. One
+  residue is the store's own: rows that tie exactly at the boundary of the window are seated
+  arbitrarily, as they are under any `LIMIT`; such a row can carry no label, never a wrong one.
+  A query whose filter would still need more than a few hundred model calls is
   REFUSED with the count, rather than sampled quietly. The refusal names the
   cap it hit, and a query that MEANS to spend that much says so: `{ai: {maxGroups: 600}}` raises it
   (up to 2000 — past that, compute the value once and persist it), and a smaller number LOWERS it,
