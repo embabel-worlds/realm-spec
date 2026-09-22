@@ -599,7 +599,7 @@ Producer `kind`s:
 | kind | fetch | notes |
 |------|-------|-------|
 | `remote` (alias `api`) | a `gateway.<name>.*` op (realm handler or learned API) — a **RemoteRepository** | list mode (`keyArg` → array) or string mode (`keyTemplate` + `{keys}`); `records` JSONPaths the response |
-| `sql` | a SELECT against a realm/world `datasource` | keys expand into `IN (…)`; rows are the records; SELECT-only, wallet/env creds |
+| `sql` | a SELECT against a realm/world `datasource`, or a read-only stored procedure's result set (`procedure:`) | keys expand into `IN (…)`; rows are the records; SELECT-only, wallet/env creds. A `procedure:` is called once per key on a read-only datasource and rolled back after the read — see Virtual Cypher §5.15.1 |
 | `compute` | an in-process computation over the keys | scores / rollups / synthesis — no external I/O; *local*, so NOT a RemoteRepository |
 | `vector` | top-k **semantic similarity** to the anchor | for joins with no key — similarity *is* the join (related docs/chunks); rides the host embedder |
 | `generative` | **GENERATES** the edge (resumably) rather than reading it — an LLM's world knowledge (`SIMILAR_TO`, `IN_INDUSTRY`) or a code function | pluggable generator (`llm` \| `function`); keeps generating; resolves each answer onto the type spine; provenance-stamped |
