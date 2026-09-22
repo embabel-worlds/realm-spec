@@ -1984,7 +1984,7 @@ So a gate has to be written in a shape the engine can attach:
 |---|---|
 | `r.amount >= 20000000` | yes |
 | `toFloat(r.amount) >= 20000000` | yes — wrapping is fine |
-| `size(trim(coalesce(r.description,''))) <= 60` | **no** — see below: a length is not the property's value |
+| `size(trim(coalesce(r.description,''))) <= 60` | yes — see below: a length is screened by the engine, not by the source |
 | `r.description CONTAINS 'lease'` | yes |
 | `r.description IS NOT NULL` | **no** |
 | `toLower(r.description) = toLower(r.title)` | **no** — compares two properties, not a value |
@@ -1992,11 +1992,15 @@ So a gate has to be written in a shape the engine can attach:
 | `r.amount >= $threshold` **in a view** | yes — a view's declared params become literals before the query is read |
 | `r.amount >= $threshold` **with caller-bound params** | **no** — the value is not known when the query is read |
 
-**A wrapper that CHANGES the compared quantity cannot gate.** `toFloat(r.amount) >= 5` still compares
-the amount, so it gates. `size(r.description) <= 60` compares a LENGTH, and the engine has only the
-property to offer a source — so the condition is honoured in full, but after the judgment rather than
-before it. The rows are right; the bill is the same as if the gate were absent. `length`, `count` and
-`toString` behave the same way.
+**A wrapper that CHANGES the compared quantity gates too — but locally.** `toFloat(r.amount) >= 5`
+still compares the amount, so it can be handed to the source. `size(r.description) <= 60` compares a
+LENGTH the source has never heard of, so it is never handed to one; the engine evaluates it itself on
+every fetched record before the judge is asked, and the judge sees only the rows it keeps. This holds
+for a chain of `size` / `length` / `char_length` / `toString` over `coalesce` / `trim` / `toLower` /
+`toUpper` / `toFloat` / `toInteger`. A record the engine cannot decide — a missing value whose
+`coalesce` default it does not evaluate — is kept for the judge and settled by the query afterwards,
+so the screen only ever admits rows, never drops one the query would keep. A wrapper outside that
+set (`substring`, `reverse`, …) is not screened: the condition is honoured in full, after judging.
 
 That last pair is the one that surprises people. The same text bounds the cost inside a view and does
 not bound it when the parameter is bound by the caller at execution time. If a screen carries an
