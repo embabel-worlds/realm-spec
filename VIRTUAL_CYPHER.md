@@ -2279,6 +2279,13 @@ batches. They therefore read a bounded sample of the group, and **say what they 
 larger than the sample returns a `PARTIAL_RESULT` note naming the counts and the strategy, so a
 number over 40 of 500 items never renders as a number over all 500.
 
+**Many groups share a call.** A query that classifies per row is a query of many small groups, and
+`classify` judges up to twenty of them in one model call — `RETURN c.id, classify(c.body, 'blocked,degraded,asking')`
+over 150 cases costs about eight calls, not 150. Nothing about the answer changes: every group is
+still judged on its own evidence, its label still comes from the closed set, and a group the model's
+reply does not settle unambiguously (a number missing, given twice, or given a label off the set) is
+judged again on its own rather than guessed. `llmCalls` in the result counts the calls actually made.
+
 ```cypher
 MATCH (t:ResearchTopic)-[:HAS_NEWS]->(n:NewsItem)
 RETURN t.name,
