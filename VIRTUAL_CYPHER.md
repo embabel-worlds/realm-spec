@@ -2167,10 +2167,28 @@ cell, and a cell can be filtered on.
 
 What this costs, and the one rule it imposes:
 
-- The value is computed BEFORE the query runs, so a query that filters on an aggregation pays for it
-  whether or not the filter keeps anything. Narrow the rows FIRST — a `WHERE` before the aggregating
-  `WITH` — and only groups that survive are computed. A query whose filter would need more than a few
-  hundred model calls is REFUSED with the count, rather than sampled quietly. The refusal names the
+- The value is computed BEFORE the query runs, and only for the groups whose value can still reach
+  the answer. Every part of the query that does not read the aggregation narrows that set first —
+  a `WHERE` before the aggregating `WITH`, and equally a `WHERE` after it on any other column, a later
+  `MATCH` that drops rows, a later `WITH … WHERE`. In
+
+  ```cypher
+  MATCH (l:Lead)
+  WITH l, classify(l.notes, 'strategic,standard,at_risk') AS triage
+  WHERE triage = 'at_risk' AND l.probability < 50
+  MATCH (l)-[:OWNED_BY]->(u:User {active: true})
+  RETURN l.name
+  ```
+
+  only the leads under 50% with an active owner are judged; the others are excluded whatever the
+  judgement would have been, and are never sent to the model. The guarantee is one-directional: the
+  set judged is never SMALLER than the set that can reach the answer, so the answer is exactly what
+  judging every group would give. Where the aggregation flows into something other than a filter or a
+  bare pass-through — an expression (`toUpper(triage)`), a pattern, an `UNWIND`, a `CALL`, a `UNION` —
+  the query cannot be narrowed by it and every group is judged, as before. `ORDER BY` and `LIMIT`
+  after the aggregation never narrow it (the rows a limit keeps depend on the filter it follows).
+  A query whose filter would still need more than a few hundred model calls after narrowing is
+  REFUSED with the count, rather than sampled quietly. The refusal names the
   cap it hit, and a query that MEANS to spend that much says so: `{ai: {maxGroups: 600}}` raises it
   (up to 2000 — past that, compute the value once and persist it), and a smaller number LOWERS it,
   which is how a shipped view holds its own spending line. This is a cost guard, so it is the
