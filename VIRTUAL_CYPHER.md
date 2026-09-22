@@ -2322,6 +2322,11 @@ The calls a reduction makes for independent groups (or batches of them) overlap,
 so a query that judges many groups waits for the slowest few round trips rather than the sum of
 all of them; the order of the rows and the count of the calls are unchanged by this.
 
+**A `classify` judgement is repeatable.** It runs at temperature 0 unless the call says otherwise
+(`{ai: {temperature: …}}`, or a role that carries its own), so the same evidence under the same
+rubric yields the same label run after run — a materialised view refreshed on its `ttl` keeps its
+labels where the words have not changed.
+
 ```cypher
 MATCH (t:ResearchTopic)-[:HAS_NEWS]->(n:NewsItem)
 RETURN t.name,
