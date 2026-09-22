@@ -2288,6 +2288,30 @@ batches. They therefore read a bounded sample of the group, and **say what they 
 larger than the sample returns a `PARTIAL_RESULT` note naming the counts and the strategy, so a
 number over 40 of 500 items never renders as a number over all 500.
 
+**Settle what you already know before the model is asked.** Wrap any reduction in a two-argument
+`coalesce` whose first argument is a plain expression over the row: where that expression is not
+null it IS the group's value and no model call is made; where it is null the reduction runs as
+usual.
+
+```cypher
+MATCH (a:CustomerAccount)
+WITH a, a.caseSubjects AS problems, coalesce(a.crmNotes, '') AS written
+RETURN a.name,
+       coalesce(CASE WHEN written = '' THEN 'unaware'
+                     WHEN any(p IN problems WHERE toLower(written) CONTAINS toLower(p)) THEN 'aware' END,
+                classify('OPEN: ' + problems + ' || CRM: ' + written, 'aware,unaware',
+                         'aware: a note touches the same topic as a support item …')) AS crmAwareness
+```
+
+An account sales never wrote about is `unaware` by definition, and one whose case subject appears
+verbatim in a note is `aware` by the same word test an app would apply — neither needs a model, and
+neither is sent one. The guard settles a GROUP only when every row of it carries the same non-null
+guard value; a group with one guarded row and one unguarded, or with guards that disagree, is judged
+whole by the model over its values (the guards are never part of the evidence). The guard must be a
+plain expression — one that aggregates is refused — and a reduction that collects two expressions
+(`argmax`, `correlate`, `regress`) cannot be guarded. The guarded form can be filtered, ordered and
+grouped by like any other reduction (§6.4), and there too the settled groups cost nothing.
+
 **Many groups share a call.** A query that classifies per row is a query of many small groups, and
 `classify` judges up to twenty of them in one model call — `RETURN c.id, classify(c.body, 'blocked,degraded,asking')`
 over 150 cases costs about eight calls, not 150. Nothing about the answer changes: every group is
