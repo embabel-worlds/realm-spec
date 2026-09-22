@@ -1427,6 +1427,9 @@ Guarantees:
   apply as everywhere.
 - **A procedure-backed label's values are not enumerable.** There is no column to list
   distinct values of; discovery says so rather than guessing.
+- **SQL Server, Azure SQL and Sybase ASE datasources are supported**, for procedures and
+  tables alike. A `jdbc:sqlserver:` or `jdbc:sybase:` URL selects the T-SQL dialect on its
+  own; `dialect: sqlserver` or `dialect: sybase` on the producer names it explicitly.
 
 **A join may declare a POLICY instead of one key.** _Partly implemented — see the implementation-status
 note at the end of this section for exactly which guarantees hold today._ `keyField` says "match this column"; a policy
