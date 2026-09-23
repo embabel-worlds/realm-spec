@@ -2326,12 +2326,13 @@ over 150 cases costs about eight calls, not 150. Nothing about the answer change
 still judged on its own evidence, its label still comes from the closed set, and a group the model's
 reply does not settle unambiguously (a number missing, given twice, or given a label off the set) is
 judged again on its own rather than guessed. `llmCalls` in the result counts the calls actually made.
-`score` and `holds` share a call the same way — `ORDER BY score(…)` or `WHERE holds(…)` over many
-rows is batched, not one call per row — and each keeps its own contract: a batched score is the
-same 0–1 number, clamped; a batched verdict is still three-valued, and a TRUE or FALSE read from a
-batch is verified with the same recheck a single verdict gets before it is believed (a recheck
-that does not confirm it is UNKNOWN). A group whose evidence is too long for one call is judged
-on its own, as before.
+`score` shares a call the same way — `ORDER BY score(…)` over many rows is batched, not one call
+per row — and keeps its contract: a batched score is the same 0–1 number, clamped, and a group
+whose evidence is too long for one call is scored on its own. `holds` is **not** batched: a
+verdict read from a numbered list was measured to differ from the verdict the same evidence
+gets on its own (a small judge answered FALSE in a batch where it answers TRUE alone), and a
+confidently wrong negative is a row silently missing from `WHERE holds(…) = true` — a
+`holds` over many rows still costs one call per group.
 The calls a reduction makes for independent groups (or batches of them) overlap, a few at a time,
 so a query that judges many groups waits for the slowest few round trips rather than the sum of
 all of them; the order of the rows and the count of the calls are unchanged by this.
