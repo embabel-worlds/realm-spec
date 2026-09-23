@@ -283,6 +283,20 @@ the final page. A short page ends the walk normally under either convention; rea
 on a full page produces the same truncation diagnostic. Omitting `startPage` fetches pages 1, 2,
 and so on. A negative value is rejected. Cursor paging does not send or interpret `startPage`.
 
+**`total`** names where a page says how many records the source holds in all (a JSONPath, e.g.
+`data.meta.all_count`). With it, a page-number or offset walk reads page one, learns how many
+pages remain, and fetches them **concurrently** rather than one after another — a 29-page sweep
+costs about one page's latency instead of 29. Everything a serial walk promises still holds:
+records come back in page order, a pushed-down `LIMIT` stops at the same page, a page that fails
+ends the walk there with the pages before it and a warning, `maxPages` still caps and still warns
+when it cuts, and the declared `cost.rate` still paces every call. Without `total` (or when the
+page does not carry it) the walk is serial, because it cannot know how many pages there are until
+a short one arrives. Cursor paging is always serial.
+
+```yaml
+paging: { style: page, param: page, size: 25, maxPages: 200, total: data.meta.all_count }
+```
+
 The **LLM-backed** kinds (`generative`'s `generator:`, `aggregate`'s `reduce:`, `extract`'s `extract:`) take optional
 per-edge tuning — `role:` (a portable, world-defined model role id such as `chat_cheap`; **never a
 concrete model name**, which stays an ops concern) and `temperature:`. A query can override both for one
