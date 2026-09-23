@@ -1176,6 +1176,8 @@ A producer's `cache:` declares how CURRENT its answers are:
   query re-reads. A query may force one live re-read of a TTL source with `{ai: {fresh: true}}` on
   the virtual edge; the fresh result then serves subsequent queries within a new window.
 
+**What the cache is keyed on.** A cached fetch is keyed per anchor key AND per the set of predicates the engine attached to the target node for that query (§7.6.1 lists the shapes). Two queries over the same door with different attached predicates are two fetches, each with its own TTL. A family of views that should share one read keeps its predicates behind a `WITH` (README, "Predicate pushdown"), so the fetch carries none and every view and every window is served from the same entry. Measured on a `periods:` door (§5.17): 31 calls for the first view of a repository, 0 calls and ~100 ms for every other view over any window inside the 31 days.
+
 **The `freshness` block.** Whenever a query touched an external source, its result envelope carries
 a `freshness` array alongside `rows` and `warnings`: one entry per source read,
 `{producer, source, observedAt, keys}`, where `source` is `"live"` (read during this query) or
@@ -1695,6 +1697,31 @@ ORDER BY changePct DESC
 Cost every consumer should know: the fan-out multiplies the anchor set by `count`. Bound the
 anchors as usual (`maxAnchors` declares the join's appetite), and for a deep window over many
 anchors, drive the cold fill with a **fill** (§9.1) instead of one long query.
+
+**A worked example: immutable records behind a date-filterable list.** GitHub's workflow-runs
+endpoint is not date-addressable by design, but its `created` filter takes an exact date, and a
+completed run never changes — so the same endpoint declared twice gives two doors to one
+collection (realm-github-actions, 2026-09-23):
+
+```yaml
+- name: runsByRepo              # LIVE: newest first, a literal since pushed to `created`
+  operation: actions/list-workflow-runs-for-repo
+  pushdown: [{ property: created_at, op: GREATER_THAN_OR_EQUAL, argPath: created, clause: ">={value}" }]
+  cache: { kind: ttl, seconds: 300 }
+- name: runHistoryByRepo        # HISTORY: one call per day, closed days cached for the process
+  operation: actions/list-workflow-runs-for-repo
+  periods: { param: created, unit: day, count: 31, lag: 0, stampAs: day }
+  echoKeyAs: repository
+  cache: { kind: ttl, seconds: 300 }
+```
+
+`unit: day` sends `created=2026-09-22` — an exact-date value the source understands. Measured: a
+cold read of one repository is 31 small calls in ~11 s; every later read of any window up to 31
+days is 0 calls and ~100 ms, provided the views keep their predicates behind a `WITH` (§5.13)
+so they share the one fetch. "Right now" questions (is main red, this run's jobs) stay on the
+live door. State the edge in the realm's README: a record still changing when its day closed
+(a run in progress at midnight, a run re-run days later) keeps in history the state it had when
+that day was last read.
 
 
 ## 6. Vector edges — semantic joins in depth
