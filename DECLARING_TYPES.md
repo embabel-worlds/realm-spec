@@ -147,6 +147,12 @@ export class MovieRating extends Entity {
 - `recordKeyField` — the property the fetched record echoes it back in, so the edge links.
 - `producer` — what fetches the target when a traversal crosses the edge.
 
+**Guarantee — the key is one the anchor's records carry.** `keyField` must be a property the
+anchor type declares, or a field one of the anchor type's own joins names as its
+`recordKeyField` — a column its records are already said to carry, such as a foreign key a
+type keeps out of its properties so queries follow the edge instead of returning the id. Any
+other `keyField` is reported as a load problem against the declaring realm.
+
 **Guarantee — the target is the field's type.** `Movie`, not the string `"Movie"`.
 
 **Guarantee — cardinality is the field's arity.** `Movie` is one; `Movie[]` is many. The
