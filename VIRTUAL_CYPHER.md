@@ -2807,6 +2807,14 @@ detail view says to ask it about named accounts rather than the whole book.
 The planner budgets producer calls against it and, when a query can't fit, emits `EXPLAIN`-style
 **advice** (push a predicate, add a `LIMIT`, narrow the anchor) rather than silently over-calling.
 
+**Query-shape advice:** `EXPLAIN` also names a shape the store runs correctly but quadratically —
+an equality join between two matched sets with a function wrapping one side, `WHERE k.id =
+toString(n.res_id)`, which a planner cannot hash-join and so filters every pair (measured: 13.6 s
+against 2.5 s on 6,000 × 4,010 rows). The advice line quotes the clause and the spelling that
+hashes: project the function first (`WITH n, toString(n.res_id) AS nResId`), then compare the two
+plain values (`WHERE k.id = nResId`). Advice never changes what the query runs or answers; the
+advised spelling answers the same rows and draws no advice of its own.
+
 **Diagnostics — what a 0-row or partial result *means*:** a fetch that returns nothing is
 indistinguishable from "genuinely no data" unless the engine says otherwise. Every producer failure
 is classified and surfaced as a warning on the result:
