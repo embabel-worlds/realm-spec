@@ -1176,7 +1176,7 @@ A producer's `cache:` declares how CURRENT its answers are:
   query re-reads. A query may force one live re-read of a TTL source with `{ai: {fresh: true}}` on
   the virtual edge; the fresh result then serves subsequent queries within a new window.
 
-**What the cache is keyed on.** A cached fetch is keyed per anchor key AND per the set of predicates the engine attached to the target node for that query (§7.6.1 lists the shapes). Two queries over the same door with different attached predicates are two fetches, each with its own TTL. A family of views that should share one read keeps its predicates behind a `WITH` (README, "Predicate pushdown"), so the fetch carries none and every view and every window is served from the same entry. Measured on a `periods:` door (§5.17): 31 calls for the first view of a repository, 0 calls and ~100 ms for every other view over any window inside the 31 days.
+**What the cache is keyed on.** A cached fetch is keyed per anchor key AND per the set of predicates the engine attached to the target node for that query (§7.6.1 lists the shapes) — a `WITH` does not end attachment, and a `LIMIT` on the final `RETURN` is part of the key too. Two queries over the same door with different attached sets are two fetches, each with its own TTL. A family of views that should share one read filters on **projected variables** (`WITH n, n.created_at AS createdAt WHERE createdAt >= $since`) and limits on a `WITH` (README, "Predicate pushdown"), so the fetch carries nothing and every view and every window is served from the same entry. Measured on a `periods:` door (§5.17): 31 calls for the first view of a repository, 0 calls and ~150 ms for every other view over any window inside the 31 days.
 
 **The `freshness` block.** Whenever a query touched an external source, its result envelope carries
 a `freshness` array alongside `rows` and `warnings`: one entry per source read,
@@ -1717,8 +1717,8 @@ collection (realm-github-actions, 2026-09-23):
 
 `unit: day` sends `created=2026-09-22` — an exact-date value the source understands. Measured: a
 cold read of one repository is 31 small calls in ~11 s; every later read of any window up to 31
-days is 0 calls and ~100 ms, provided the views keep their predicates behind a `WITH` (§5.13)
-so they share the one fetch. "Right now" questions (is main red, this run's jobs) stay on the
+days is 0 calls and ~150 ms, provided the views filter on projected variables and limit on a
+`WITH` (§5.13) so they share the one fetch. "Right now" questions (is main red, this run's jobs) stay on the
 live door. State the edge in the realm's README: a record still changing when its day closed
 (a run in progress at midnight, a run re-run days later) keeps in history the state it had when
 that day was last read.
