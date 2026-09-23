@@ -1154,6 +1154,10 @@ A producer's `cache:` declares how CURRENT its answers are:
   every query re-reads the source, so the answer is the current state as of the query — re-running
   the same query re-observes the source. This is the declaration behind "what is the current X,
   joined to my graph", and a scheduled re-run of such a query is a fresh observation each time.
+  Within ONE query the same read is made once: a fresh source asked for the same keys by two joins,
+  or by the engine's own pre-pass and its fetch, is read once and the records reused, and the
+  envelope bills one call. Independent fresh sources in the same query are read concurrently (their
+  cost is the slowest, not the sum), exactly as cached ones are.
 - `cache: {kind: ttl, seconds: N}` declares that an answer up to `N` seconds old is acceptable:
   within the window the same lookup is served without re-reading the source; past it, the next
   query re-reads. A query may force one live re-read of a TTL source with `{ai: {fresh: true}}` on
