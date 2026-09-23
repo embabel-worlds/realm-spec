@@ -467,6 +467,32 @@ stray is not. A value the spine refuses (a freemail address, a bare word) matche
 `resolve:` chains (§5.2) treat a realm spine as they treat Person: `canonicalDomain` /
 `canonicalEmail` normalize through it.
 
+**A spine-anchored join can ride a book sweep — `ridesHub: true`.** An edge anchored on the spine
+is answered by asking the source about each account, so it is refused above `maxAnchors` (200)
+— and that caps every rule set absolutely, because a rule body cannot fetch and a `requires:`
+demand written as `(a:CustomerAccount)-[:HAS_CASE]->(…)` is itself account-anchored. Declaring
+`ridesHub: true` on the join says: in a query that has already swept this record type's BOOK —
+`MATCH (d:ChatwootDesk {status:'all'})-[:HAS_CASE]->(c:SupportCase) MATCH (a:CustomerAccount)-[:HAS_CASE]->(c)`
+— link each account to the swept records by the spine's own key (the record's `hub:` property,
+normalized as the spine defines: a URL becomes the account's domain), with no fetch at all. The
+cap does not apply to a ridden edge, so the book's size no longer matters.
+
+```yaml
+- { anchorLabel: CustomerAccount, relationship: HAS_CASE, keyField: accountKey,
+    recordKeyField: accountKeyAsked, producer: chatwootConversationsByAccount, ridesHub: true }
+```
+
+What the author asserts by declaring it: that the sweep is COMPLETE for the edge. `{status:'open'}`
+sweeps only open cases; an edge that means "this account's cases" ridden on it would silently
+under-report, which is exactly the fault the opt-in exists to forbid. Sweep `all`, or do not opt in.
+Three rules for the demand that rides: sweep first and name the account edge to the SAME alias;
+PROJECT what is swept (`RETURN c.id` — a demand that only asks whether something exists is fetched
+as one page, and one that counts is answered by a count and no records); and bind a per-customer
+hop through its own sweep (`MATCH (b)-[:HAS_CUSTOMER]->(lc) MATCH (b)-[:HAS_INVOICE]->(i) MATCH (lc)-[:HAS_INVOICE]->(i)`,
+the hop declaring `materializedKeyField: customerExternalId`) so it links rather than mints.
+Measured on realm-account-health at 2,030 accounts: the three rule-backed views went from "none"
+to answering in a few seconds, six book sweeps and no per-account call.
+
 **An account exists once something has keyed it.** A spine node is created when a query
 materializes records of a type that opts in — canonicalization is on demand, and only the spine
 persists; the source record stays virtual. Until some realm's records have been read, the spine is
