@@ -179,6 +179,23 @@ distinctions:
 - **bridge** (§3.2) — anchor is an external-identity node (`GitHubIdentity`, `HubSpotOwner`).
   Declared with a `resolve:` chain instead of a plain `keyField`.
 
+**What a `keyField` may name.** Either a property the anchor type declares, or a field one of the
+anchor type's OWN joins names as its `recordKeyField`. Anything else is a load problem reported
+against the realm declaring the join.
+
+The second case is how a foreign key is traversed in REVERSE, and it is sound rather than lenient.
+A type may keep an FK out of its properties — a visible id is one a generator returns instead of
+following the link — while its own forward join already declares that its records carry that
+column. The reverse hop keyed on it traverses because materialization stores that column on the
+node whether or not the type declares it: the stored-property allowlist is the declared set PLUS
+the join's `recordKeyField`, the producer's projections and computed fields, and the echoed key.
+So the column is on the anchor by the time the reverse hop reads it, and refusing the shape
+reported a problem on joins that work.
+
+The check applies where the anchor type is declared in the same world. A join whose anchor is a
+type this validation does not hold — a realm keying on another realm's type — is not checked
+here, because the properties that would answer live in the other realm's declaration.
+
 A `keyField` naming a **list-valued** property yields one key per element, not one key for the whole
 list. A trial's `collaborators` or `interventions` names several organizations or drugs, and each is
 looked up in its own right; blank and duplicate elements are dropped, so two anchors naming the same
