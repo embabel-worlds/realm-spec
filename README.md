@@ -1213,6 +1213,46 @@ because they run in Docker.
 | `oauth2` | with `auth: oauth2` | OAuth2 config — see **OAuth2** below. |
 | `tags` | no | Allowlist of OpenAPI tag names. Filters huge specs to a coarse subset. |
 | `operation-ids` | no | Exact `operationId` allowlist. Composes with `tags` (tags pre-filter, operation-ids picks exact ops). Match is case-insensitive and treats `-`/`/` as `_`, so `repos/get`, `repos-get`, `repos_get` all match. |
+| `capability-tags` | no | Capability DECLARATION — what the API is FOR, in the host's vocabulary (`web-search`, `web-fetch`). Lets host code pick a tool by capability instead of by provider name. Unrelated to `tags`; see **Capability tags** below. |
+
+### Capability tags
+
+`capability-tags` says what an API IS FOR, in a vocabulary the host
+defines — `web-search` (discovers information on the open web from a
+query), `web-fetch` (reads a URL it is given, and cannot discover one).
+Most tools are chosen by an LLM reading their descriptions, but some
+consumers have to choose without one in the loop: the host's person
+research needs *a* search tool before any model is asked anything. A
+declaration is how such a consumer finds yours.
+
+```yaml
+- url: https://api.example.com/search/openapi.json
+  name: example-search
+  capability-tags: [web-search]
+```
+
+**Not `tags`.** `tags` filters WHICH OPERATIONS of the spec become tools,
+using the spec's own OpenAPI tag names. `tags: [web-search]` therefore
+filters the spec down to operations the provider happened to tag
+`web-search` — usually none, leaving the entry with no tools at all. The
+two fields do unrelated jobs and may both be set.
+
+**The host owns the vocabulary; realms supply the providers.** A tag the
+host does not recognise is carried but matches nothing, so inventing one
+declares nothing. Only `web-search` and `web-fetch` are defined today.
+
+**Declare on every provider you ship, not just one.** Selection is
+all-or-nothing per capability: once anything in the world declares
+`web-search`, only declarations count, and an untagged provider in the
+same realm stops being selected. Where nothing at all declares the
+capability the host falls back to matching tool names and logs that it
+did — so a realm that predates this field keeps working, but a realm
+that tags half its providers loses the other half.
+
+**The tag sits on the ENTRY, so it covers every operation that entry
+exposes.** Where only part of a spec carries the capability, narrow the
+entry with `tags` / `operation-ids` — or split it into two entries, each
+with its own declaration.
 
 ### Vendored specs
 
