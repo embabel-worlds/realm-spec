@@ -99,6 +99,20 @@ always rolls back**:
    *The one exception:* an identity **bridge** (`writeThrough`) is committed as a warm cache and
    re-resolved after `refreshAfter` (§5.2).
 
+### Evidence when a lookup returns no matching rows
+
+A fetched record is not the same thing as a matching query row. A producer may return records
+that a query's predicate or join does not reach; an empty answer in that case does **not** prove
+those records are absent. The result distinguishes records returned by producers before query-side
+filtering, nodes made available to the query, and rows matched by the query. Cache-served records
+count as fetched for that execution; a source that genuinely returns zero records does not.
+
+When a query about one identity-pinned record matches nothing, a result may include a record
+card with already-fetched fields and related rows. The card is **supporting context only**:
+it does not answer the original filter, prove omitted related sections empty, or fetch additional
+sources. Its result identifies the Cypher that produced the card and marks the answer partial.
+An incomplete-source warning remains visible even if the card supplies useful context.
+
 ### Two concepts the rest of the spec leans on
 
 **Bound anchor.** A virtual label may only be reached by **traversing a declared join from a
