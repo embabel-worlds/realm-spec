@@ -1970,8 +1970,26 @@ upstream query that binds no input rows makes **no downstream request**; a virtu
 stage that has not executed yet is **not evidence of absence** and cannot license a broad
 request or a clean empty answer. If a graph predicate targets a source field already set by an
 explicit request input, that input is not overwritten; a conflicting predicate is still checked
-on the fetched graph rows, not claimed as a source-side match. Without `queryArgs`, existing
-producer-specific `realm` steering keeps its ordinary meaning above.
+on the fetched graph rows, not claimed as a source-side match. When a declared filter was not
+sent and the graph predicate rejects every fetched record, the empty result carries a
+`FILTER_NOT_PUSHED` warning: a bounded page fetched without that predicate does not prove the
+requested record is absent. A conflicting explicit `realm` input preserves its own request value
+and does not suppress that warning. Without `queryArgs`, existing producer-specific `realm`
+steering keeps its ordinary meaning above.
+
+A learned OpenAPI collection exposes its optional scalar query parameters as declared `queryArgs`.
+A matching equality on a numeric or boolean response field, or an enum-constrained string field,
+may be sent as a source filter; an unconstrained text equality is still checked on returned
+records. An explicit `realm` input takes precedence over an inferred filter on the same field:
+a conflicting graph predicate remains a graph filter and cannot silently change the request.
+
+A GET of one object beneath a keyed parent (for example, `GET /containers/{containerId}/usage`)
+can expose a navigable singleton edge from that parent even when the returned object has no own
+identity key. Its lookup uses exactly one parent key per call; the key is echoed on the returned
+record when the response omits it, so results from different parents cannot join to each other.
+Learned properties declared as OpenAPI `date`, `date-time`, and `time` remain distinct graph
+`date`, offset-aware `datetime`, and offset-aware `time` values, respectively; filtering and
+ordering use those temporal values rather than lexical string order.
 
 ### 7.3 `ai.relevant` — the per-row relevance filter
 
