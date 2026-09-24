@@ -1949,6 +1949,30 @@ Realm parameters are steering like everything above — stripped from the read, 
 cache key — and can never clobber the engine's reserved template variables (`anchors`, `exclude`,
 `want`, `hint`, …).
 
+For a `remote` producer that declares optional scalar `queryArgs` (`string`, `integer`, `number`,
+`boolean`), keys in the edge's `realm` map are **request inputs**, not prompt parameters or record
+identities. Each supplied key must be declared and have a value of its declared type. It can be a
+literal, a query parameter, or a property of a bound node already available to the query; an
+unresolved, missing, non-scalar, or ambiguous value is rejected rather than silently dropped to
+make an unfiltered request. Omit an unused optional input to retain the source's default. For
+example, a declared string `segment` can narrow a contact-list operation:
+
+```cypher
+MATCH (me:AssistantUser)
+MATCH (me)-[:HAS_MAILBOX_CONTACT {realm:{segment:me.segment}}]->(c:MailboxContact)
+RETURN c.email
+```
+
+Only declared optional `realm` inputs are forwarded alongside the producer's own arguments;
+distinct input sets stay separate in the cache. A
+single query cannot use different input sets for the same producer. A successfully executed
+upstream query that binds no input rows makes **no downstream request**; a virtual upstream
+stage that has not executed yet is **not evidence of absence** and cannot license a broad
+request or a clean empty answer. If a graph predicate targets a source field already set by an
+explicit request input, that input is not overwritten; a conflicting predicate is still checked
+on the fetched graph rows, not claimed as a source-side match. Without `queryArgs`, existing
+producer-specific `realm` steering keeps its ordinary meaning above.
+
 ### 7.3 `ai.relevant` — the per-row relevance filter
 
 ```cypher
