@@ -2010,8 +2010,10 @@ a conflicting graph predicate remains a graph filter and cannot silently change 
 
 A GET of one object beneath a keyed parent (for example, `GET /containers/{containerId}/usage`)
 can expose a navigable singleton edge from that parent even when the returned object has no own
-identity key. Its lookup uses exactly one parent key per call; the key is echoed on the returned
-record when the response omits it, so results from different parents cannot join to each other.
+identity key. Its lookup uses exactly one parent key per call, and that key is echoed on each
+returned record, so results from different parents cannot join to each other. When the record
+already has a property with the key's name, or the name is reserved, the echo uses a distinct
+suffixed property name (for example `id_2`) and the edge joins on that name.
 Learned properties declared as OpenAPI `date`, `date-time`, and `time` remain strings in the graph.
 Use ISO string comparisons only where the source guarantees a consistent representation; otherwise
 normalize explicitly before comparing or ordering.
