@@ -726,6 +726,8 @@ materializes — with `anchorLabel` naming where it starts. `SIMILAR_TO` produce
 wrong type and the planner registers it against the wrong target and it silently never fires.
 
 The anchor of one join can be the **virtual target** of another, and the engine stages them in one read tx:
+**Keep every hop pattern-bound.** The probe follows `MATCH` patterns. A node re-bound out of a list — `WITH collect(run) AS runs … UNWIND runs AS f MATCH (f)-[:HAS_JOB]->(j)` — is NOT probed for its joins: the second hop fetches nothing and the query returns no jobs, with no warning (verified 2026-09-23). Narrow with `WITH run ORDER BY … LIMIT n` and hop from `run` itself. `OPTIONAL MATCH` over a virtual hop is likewise not probed; use `MATCH`.
+
 `StagedVirtualCypher` materializes stage 1, treats its target as real, re-probes, then materializes stage 2 off
 it (up to `MAX_STAGES` deep). So a fan-IN → fan-OUT pipeline is expressible — reduce a user's ratings to one
 `MovieTasteSummary` node, then generate films *from that summary*. Both joins go under the type each produces:
@@ -772,13 +774,23 @@ pushdown:
 
 So `WHERE i.html_url CONTAINS 'embabel/me'` turns `is:issue author:X {filters}` into `is:issue author:X repo:embabel/me` — one scoped search instead of fetching the author's thousands and intersecting in the graph. The mapping is declarative and source-specific; the engine knows nothing of `repo:`.
 
+**Only a LITERAL is pushed.** `run.created_at >= '2026-09-16T00:00:00Z'` renders into the source's filter; `run.created_at >= toString(datetime() - duration({days: 7}))` does not — the value is not known when the fetch is planned, so the fetch is broad and the comparison is applied in the graph. A view's declared params become literals before the query is read (VIRTUAL_CYPHER §7.6.1), which is how a windowed view gets a pushed-down window: take `since` as a parameter and let the app or the asker supply the date. A relative window ("the last 7 days") cannot be pushed by any spelling; say so in the view's description and bound the fetch with `paging.maxPages`.
+
+**Three consequences of "attached" predicates, all verified the hard way (2026-09-23):**
+
+1. Every predicate the engine attaches to the target node (the shapes in VIRTUAL_CYPHER §7.6.1) is part of the **fetch's cache key** — and attachment does not stop at a `WITH`: `MATCH …->(run) WITH run WHERE run.status = 'completed'` is attached exactly as if it were in the MATCH's own WHERE, and so is a wrapped one (`toInteger(run.id) = 123`). So is the **`LIMIT` of a terminal query** — each LIMIT value is its own read, on a `WITH` or on the `RETURN`. Two views over the same door whose attached sets or limits differ re-read the source separately, even inside the TTL. To make several views share ONE cached fetch: filter on **projected variables** (`WITH run, run.created_at AS createdAt, run.status AS status WHERE createdAt >= $since AND status = 'completed'` attaches nothing) and limit a terminal result by **list slice** (`ORDER BY … WITH collect(row) AS rows UNWIND rows[0..$limit] AS row`), never by LIMIT. But a predicate on a projected variable does **not** bound the anchors of a following hop — the hop is then refused as too wide — so a view that narrows and hops keeps ONE `LIMIT`, on the `WITH` directly before the hop, carrying its order key: `WITH run, createdAt ORDER BY createdAt DESC LIMIT $n MATCH (run)-[:HAS_JOB]->(j)` both shares the read and bounds the hop (a LIMIT that feeds a later stage sets no demand target). A `WITH` between that LIMIT and the hop hides it again. To look ONE record up for a hop, rank it first and take one (`WITH run, CASE WHEN toInteger(run.id) = $id THEN 0 ELSE 1 END AS pick ORDER BY pick LIMIT 1 MATCH (run)-[:HAS_JOB]->(j) WITH j, pick WHERE pick = 0`) rather than filtering on the id. Measured on a `periods:` door: these shapes took a 12-view app from 91 s to a few seconds, every view 0 calls after the first read.
+2. **Two traversals of the same door in one query share ONE fetch, with every attached predicate from both.** A summary over all runs followed by a second `MATCH` over the same door `WHERE f.conclusion = 'failure'` silently narrows the FIRST traversal too, and the summary describes failed runs only — a wrong figure with no warning. Wrapping the predicate in a function does not help (§7.6.1: wrapping is still attached). Filter the second traversal on projected variables, or sort-and-`LIMIT` on a `WITH`, so nothing extra is attached.
+3. A predicate that is attached is also what `pushdown:` sees; one that is not attached is never pushed. The two mechanisms read the same set.
+
 > **Verify that a pushdown actually narrows — some sources ignore unknown filters SILENTLY.** The engine cannot tell a filter the source honoured from one it discarded: both return 200 with records. A source that responds to an unrecognised filter key by returning the *entire unfiltered collection* turns a typo, a renamed upstream field, or an optimistic guess into a full-collection scan that looks like a success — the query still returns correct rows (the graph filters what pushdown didn't), so nothing fails; you just quietly fetch everything, every time. This is real: the NSW planning feed used by `realm-nsw-property` returns all 426,096 records for a misspelled filter and never errors.
 >
 > Before declaring a `pushdown:` rule, call the source twice — once with the filter, once without — and confirm the **counts differ**. Declare rules only for keys you have proven narrow, and say so in a comment. When a source's filter surface is partly unsupported, the honest producer declares the few verified keys and leaves the rest to graph-side filtering; document which properties do *not* push down, because a query author will otherwise assume a `WHERE` on any property is cheap.
 
 **`project` paths: use `[*]`, never `[0]`.** An INDEXED path is not honoured and projects **null silently** — no warning, no error, just an empty property, and any predicate over it then drops every row. Only the `[*]` form reaches into a nested array, and it yields a **list**, so a single-valued nested field arrives as a one-element list the consumer must unwrap. Write `address: "Location[*].FullAddress"`, not `Location[0].FullAddress`. (Verified 2026-07-28: with `[0]`, every address and coordinate in a fetched collection was null while the flat scalar fields projected fine — the kind of defect that reads as "the source didn't return that field".)
 
-Relatedly, **`project` does not coerce types**: values arrive as the source encodes them. A JSON feed that quotes its numbers yields strings, so `WHERE n.cost >= $min` compares a string to a number and quietly matches nothing. Coerce at the point of use (`toFloat(n.cost)`), and beware that a null-propagating comparison also *removes* rows with no value at all — which for something like a cost bound means records the user would have wanted to see silently vanish.
+**`project` takes paths, not expressions.** A JSONPath filter (`steps[?(@.conclusion=='failure')].name`) or function (`steps.length()`) projects **null silently**, exactly like an indexed path. Project the parallel lists (`step_names: "steps[*].name"`, `step_conclusions: "steps[*].conclusion"`) and derive in Cypher: `[i IN range(0, size(j.step_names) - 1) WHERE j.step_conclusions[i] = 'failure' | j.step_names[i]]`.
+
+Relatedly, **`project` does not coerce types**: values arrive as the source encodes them. A JSON feed that quotes its numbers yields strings, so `WHERE n.cost >= $min` compares a string to a number and quietly matches nothing. Coerce at the point of use (`toFloat(n.cost)`) — a `type: int` on the target type's property does not coerce either; the declaration documents intent, and a generated query that compares `run.id = 35703978620` against a string-valued id matches nothing. Say in the property's description that ids arrive as strings and how to compare them. And beware that a null-propagating comparison also *removes* rows with no value at all — which for something like a cost bound means records the user would have wanted to see silently vanish.
 
 **Composite-key joins — when no single anchor property is the key.** A source keyed on a *pair* — a latitude/longitude point for a geospatial lookup, an owner/repo slug — declares the join with `producerKeyFields` and **omits `keyField`**:
 
@@ -799,7 +811,11 @@ keyArgs: [latitude, longitude]    # → latitude=…&longitude=… per call
 echoKeyAs: key
 ```
 
-`keyArgs` implies one source call per key. The composite's own separator is reserved by the engine and always takes precedence over `keySplit`, so the same `keyArgs` mechanism keeps working for source-shaped keys like `"owner/repo"`.
+`keyArgs` implies one source call per key. The composite's own separator is reserved by the engine and always takes precedence over `keySplit` — and the two do **not** compose: a composite component is handed to `keyArgs` **as one argument**, never re-split by `keySplit`. So a source-shaped component like `"owner/repo"` does NOT become two path parameters; declare the parts as separate anchor properties (`producerKeyFields: [owner, repo, id]`, projected from the record that produced the anchor) and name one `keyArgs` entry per part. (Verified 2026-09-23: `producerKeyFields: [repository, id]` with `keyArgs: [owner, repo, run_id]` sent `owner=embabel/embabel-agent`, `repo=<the id>` and no `run_id`, a 404 that read like a missing run.)
+
+A composite that is itself echoed (`echoKeyAs: runKey` on a first hop) may be a component of the NEXT hop's composite: `producerKeyFields: [runKey, id]` splits back into every part of `runKey` followed by `id`, so a three-hop chain (repository → run → job → annotation) threads the path parameters down without any record having to carry them. Name every part in `keyArgs`, in order, even the ones the operation does not declare — an undeclared name is simply not sent, and it keeps the positions aligned.
+
+**A key with an empty path segment is refused, not sent.** A URL (`https://…`, whose `//` is an empty segment) is therefore never a usable key for a path-parameter producer, and `keySplit: "/"` over one is refused with a warning naming the key. Compose the parts instead, as above.
 
 `project` itself still maps flat paths only — there is no template or concatenation form *inside* `project`; composition is the join declaration's job, as above. A TypeScript handler (`src/api/*.ts`) remains the escape hatch when the source needs more than destructured arguments.
 
@@ -1841,6 +1857,8 @@ Adding a host that consumes an existing artifact class changes nothing for a Rea
 | `docker` | wasm bundle present | **conflict** |
 | `wasm` | bundle present | wasm |
 | `wasm` | no bundle, `wasm/handlers.js` present | wasm — bundle built on load |
+| `wasm` | no bundle, `wasm/handlers.ts` present | wasm — TypeScript compiled and bundled on load |
+| absent | `wasm/handlers.ts` present, nothing else | **docker — the TypeScript is ignored.** Inference looks for `handlers.js` or a bundle; a `.ts`-only realm loads with no functions and `realm_status` shows `verbs: []`. Declare `host: wasm`. (Verified 2026-09-23.) |
 | `wasm` | neither | **conflict** |
 
 A conflict surfaces as a world-loading problem with a one-sentence reason and a suggested `host:` fix; the realm's declarative content still loads. `docker` with a bundle present is a conflict deliberately: a stale bundle must never sit silently beside a host that isn't running it.
@@ -2629,7 +2647,7 @@ The action body queries email threads from the biller's domain, extracts `:Bill`
 
 ## `apps/`
 
-HTML apps the realm ships. They're served at `/apps/{name}` alongside the user's vibe-coded apps and the world template's apps. Resolution order is:
+HTML apps the realm ships. A realm-bundled app is served at **`/apps/{realm-name}/{name}.html`** (the reference host, verified 2026-09-23: `/apps/github-actions/ci-health.html`; `/apps/{name}` and `/api/v1/apps/{name}` answer 404 for it). Vibe-coded and world-template apps share the `/apps/{name}` resolution below:
 
 1. `<world>/data/apps/{name}` — user-owned (vibe-coded), highest priority
 2. `<world>/config/apps/{name}` — world-template apps shipped with default-world
@@ -2805,6 +2823,9 @@ builtins: true
 | `name` | Yes | Stable slug — used by the `/focus <name>` slash command, the picker, and persistence. |
 | `displayName` | No | Human label for the picker. Falls back to `name`. |
 | `description` | No | One-line summary for the picker tooltip / chat badge. |
+| `title` | No | The name shown for the app. Without it a host may derive one from the file stem (`ci-health` → "Ci Health"); an acronym needs `"title": "CI Health"`. |
+
+**The Embabel badge is mandatory.** A realm-shipped app is refused by validation unless it carries, verbatim before `</body>`, the attribution block the validator names in its message: a fixed-position `<div id="embabel-badge">` reading "Created with Embabel Worlds" linking to worlds.embabel.com. Nothing injects it into a realm app, and the app harness (`vibe-apps/browser-harness.md`) asserts it is visible in the viewport, not merely present.
 | `icon` | No | Emoji or single character for the picker. |
 | `defaultPersona` | No | Persona slug to activate when a session enters this focus. Resolved against the same registry that `personalities/` populates — world-authored or realm-shipped. Null = keep the world's current persona. |
 | `realms` | No | Realm names whose skills stay visible in this focus. Empty = no realm skills, only built-ins. |
