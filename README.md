@@ -569,6 +569,8 @@ Producers are the source-specific fetchers a `virtualJoins.producer` references 
 - name: contactsByEmail
   kind: remote                    # a RemoteRepository — gateway op (realm handler or learned API)
   operation: objectsSearch
+  queryArgs: { segment: string }    # optional typed request input from an edge's realm map
+  sourceFilters: [segment]         # source capability; does not itself narrow a request
   records: "$.results[*].properties"
   keyArg: "filterGroups.0.filters.0.values"   # where the key LIST is injected (list mode)
   args: { objectType: contacts, filterGroups: [ { filters: [ { propertyName: email, operator: IN } ] } ] }
@@ -593,6 +595,12 @@ Producers are the source-specific fetchers a `virtualJoins.producer` references 
   datasource: warehouse           # a realm/world SQL datasource (sql/datasources.yml)
   query: "SELECT id, customer_email, total FROM orders WHERE customer_email IN (:keys)"
 ```
+
+For `kind: remote`, `queryArgs` declares optional scalar request inputs (`string`, `integer`,
+`number`, `boolean`), supplied as `realm` values on the edge. Undeclared, ambiguous or invalid
+inputs are rejected, not silently dropped. `sourceFilters` lists filter-capable source fields;
+listing one does not send it. An unsent condition on a declared filter can yield
+`FILTER_NOT_PUSHED` when a bounded read cannot establish a match (see Virtual Cypher §7.2.2).
 
 Producer `kind`s:
 

@@ -164,6 +164,11 @@ These are **rejected at plan time** (fail-closed), with a message:
 | `UNION`, `CALL { }` subqueries in a scoped query | Not scoped clause-by-clause by the rewriter → rejected (restructure as separate queries). |
 | Anything the Cypher parser can't parse | **Fail closed** — an unparseable query is rejected, never run unscoped. |
 
+Strict schema validation also rejects a declared virtual relationship traversed from a label
+outside its declared `anchorLabel` set, unless the recorded graph shape can answer that exact
+relationship between the specified labels. Name a valid anchor or use a recorded edge; a matching
+relationship name alone is not evidence that another anchor can fetch it.
+
 A `brings:` entry naming a `childType` the realm does not declare is refused earlier still, when the
 realm is validated — before any query reaches the planner. The remaining case is a **non-event**: a
 producer that starts returning some extra child type cannot inject it, because materialization reads
@@ -1985,8 +1990,9 @@ upstream query that binds no input rows makes **no downstream request**; a virtu
 stage that has not executed yet is **not evidence of absence** and cannot license a broad
 request or a clean empty answer. If a graph predicate targets a source field already set by an
 explicit request input, that input is not overwritten; a conflicting predicate is still checked
-on the fetched graph rows, not claimed as a source-side match. When a predicate on a same-named
-declared filter was not sent, a successful source read that returns no matching records carries
+on the fetched graph rows, not claimed as a source-side match. A **declared filter** is a field named by `queryArgs` or `sourceFilters`. When a target-alias
+condition on a declared filter was not sent — including a parameter or expression on its right-hand
+side — a successful source read that cannot establish a match carries
 a `FILTER_NOT_PUSHED` warning — even when the source returned
 zero records. A bounded page fetched without that predicate does not prove the requested record
 is absent. A failed read carries its failure diagnostic; a skipped read does not count as
@@ -2006,9 +2012,9 @@ A GET of one object beneath a keyed parent (for example, `GET /containers/{conta
 can expose a navigable singleton edge from that parent even when the returned object has no own
 identity key. Its lookup uses exactly one parent key per call; the key is echoed on the returned
 record when the response omits it, so results from different parents cannot join to each other.
-Learned properties declared as OpenAPI `date`, `date-time`, and `time` remain distinct graph
-`date`, offset-aware `datetime`, and offset-aware `time` values, respectively; filtering and
-ordering use those temporal values rather than lexical string order.
+Learned properties declared as OpenAPI `date`, `date-time`, and `time` remain strings in the graph.
+Use ISO string comparisons only where the source guarantees a consistent representation; otherwise
+normalize explicitly before comparing or ordering.
 
 ### 7.3 `ai.relevant` — the per-row relevance filter
 
@@ -2893,7 +2899,7 @@ is classified and surfaced as a warning on the result:
 | `AMBIGUOUS_LABEL` | the query named a parent label that more than one installed type answers to through the same edge | **nothing was fetched**, so the empty result is not "no data". The engine will not choose between a customer's two helpdesks on the caller's behalf; the detail names the types, so the query can be re-issued naming one. |
 | `NEEDS_FILTER` | a source that cannot be swept was asked without a narrowing predicate | the answer is **unknown until the query is narrowed** — not "no data". |
 | `FILTER_STARVED` | candidates were found, and the query's own filters rejected every one | zero matches among **fetched candidates**, not proof of absence elsewhere. If `FILTER_NOT_PUSHED` also appears, the requested record may be outside the fetched page. |
-| `FILTER_NOT_PUSHED` | a completed source read omitted a declared filter and returned no matching records, including when it returned zero records | the bounded fetch **cannot prove absence**. Supply a valid declared request input or narrow the source request; do not turn this warning into a clean zero. A failed read carries its failure diagnostic; a skipped read does not establish absence. |
+| `FILTER_NOT_PUSHED` | a completed source read omitted a declared filter (`queryArgs` or `sourceFilters`) and could not establish a match for that target alias, including when it returned zero records | the bounded fetch **cannot prove absence**. Supply a valid declared request input or narrow the source request; do not turn this warning into a clean zero. A failed read carries its failure diagnostic; a skipped read does not establish absence. |
 | `FIELDS_WITHHELD` | governance removed fields — the secret reflex, `mask: drop`, or governed exposure (§5.15) | the **rows are complete**; named fields were removed by policy. An absent field here means "not exposed by this source's governance", never "no data". |
 | `COMPUTE_FAILED` | a producer's `compute:` expression raised on some records | the rows are complete and the source is fine; **one property is absent** on the records named. Absent rather than null or zero, because either would read as an answer. |
 | `MATERIALIZATION_FAILED` | the source returned data the graph could not store | the records **exist** but are missing from the result, so an answer of "none" is definitely wrong. The fix is the engine's, not the caller's. |
