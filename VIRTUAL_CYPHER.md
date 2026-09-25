@@ -2907,10 +2907,22 @@ is classified and surfaced as a warning on the result:
 | `MATERIALIZATION_FAILED` | the source returned data the graph could not store | the records **exist** but are missing from the result, so an answer of "none" is definitely wrong. The fix is the engine's, not the caller's. |
 | `REDUCTION_FAILED` | an `aggregate` reduction or an `extract` call failed | the anchor's reduced or extracted records are **absent**, not empty. Retried on the next traversal. |
 
-A row is not proof of a complete answer: `count = 0` remains inconclusive when the same result
-carries `NEEDS_FILTER` or `FILTER_NOT_PUSHED`. When `FILTER_NOT_PUSHED` accompanies actual
-non-aggregate matches, those rows remain usable as a partial result; the warning still prevents
-a claim that the returned set is complete.
+A row is not proof of a complete answer. A single-value aggregate — `count = 0` included — is
+inconclusive and withheld when the same result carries any diagnostic that leaves the facts
+incomplete (`NEEDS_FILTER`, `FILTER_NOT_PUSHED`, `PARTIAL_RESULT`, `MATERIALIZATION_FAILED`,
+`INCOMPLETE_TRAVERSAL`, a failed fetch, reduction or computation). List rows under the same
+diagnostics remain usable as a partial result; the diagnostic still prevents a claim that the
+returned set is complete. An empty result is not absence when records were fetched but none
+matched, or when `FILTER_STARVED` reports that the query's filters rejected every fetched
+candidate; such a result carries `FETCHED_NOT_MATCHED`. A direct query result reports how many
+source records it fetched and how many nodes it materialized, so a caller can tell "fetched and
+unmatched" from "nothing fetched".
+
+A month label derived from week-start buckets (for example `date.truncate('month', weekStart)`
+over weekly totals, including suffixed names such as `week_start_date`) is reported as a total
+by week-start, not by calendar month. It does not establish an exact calendar-month total, or that
+each labelled week was fetched in full, unless the source filtered the underlying events to that
+calendar window before grouping.
 
 A failed fetch is **never cached** as an empty result (so a later call with a refreshed token finds
 the data); only a genuine, successful "no records" is cacheable.
