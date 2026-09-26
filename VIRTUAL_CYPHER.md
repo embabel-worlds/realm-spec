@@ -99,6 +99,21 @@ always rolls back**:
    *The one exception:* an identity **bridge** (`writeThrough`) is committed as a warm cache and
    re-resolved after `refreshAfter` (§5.2).
 
+### Evidence when a lookup returns no matching rows
+
+A fetched record is not the same thing as a matching query row. A producer may return records
+that a query's predicate or join does not reach; an empty answer in that case does **not** prove
+those records are absent. The result distinguishes records returned by producers before query-side
+filtering, nodes made available to the query, and rows matched by the query. Cache-served records
+count as fetched for that execution; a source that genuinely returns zero records does not.
+
+When a query about one identity-pinned record matches nothing, a result may include a record
+card with already-fetched fields and up to 20 rows per related section. The card is
+**supporting context only**: it does not answer the original filter, prove omitted or truncated
+related sections complete, or fetch additional sources. Its result identifies the Cypher that
+produced the card and marks the answer partial.
+An incomplete-source warning remains visible even if the card supplies useful context.
+
 ### Two concepts the rest of the spec leans on
 
 **Bound anchor.** A virtual label may only be reached by **traversing a declared join from a
@@ -148,6 +163,11 @@ These are **rejected at plan time** (fail-closed), with a message:
 | `MATCH (i:Item)-[:MENTIONS]->(t:Tag)` where `Tag` is brought only via `TAGGED` | **Brought child off its declared edge** — a brought label is reachable only through the exact relationship its own `brings:` entry names, and only from the join whose target brought it. |
 | `UNION`, `CALL { }` subqueries in a scoped query | Not scoped clause-by-clause by the rewriter → rejected (restructure as separate queries). |
 | Anything the Cypher parser can't parse | **Fail closed** — an unparseable query is rejected, never run unscoped. |
+
+Strict schema validation also rejects a declared virtual relationship traversed from a label
+outside its declared `anchorLabel` set, unless the recorded graph shape can answer that exact
+relationship between the specified labels. Name a valid anchor or use a recorded edge; a matching
+relationship name alone is not evidence that another anchor can fetch it.
 
 A `brings:` entry naming a `childType` the realm does not declare is refused earlier still, when the
 realm is validated — before any query reaches the planner. The remaining case is a **non-event**: a
@@ -1949,6 +1969,57 @@ Realm parameters are steering like everything above — stripped from the read, 
 cache key — and can never clobber the engine's reserved template variables (`anchors`, `exclude`,
 `want`, `hint`, …).
 
+For a `remote` producer that declares optional scalar `queryArgs` (`string`, `integer`, `number`,
+`boolean`), keys in the edge's `realm` map are **request inputs**, not prompt parameters or record
+identities. Each supplied key must be declared and have a scalar value coercible to its declared
+type. It can be a literal, a query parameter, or a property of a node bound in an earlier clause; an
+unresolved, missing, non-scalar, or ambiguous value is rejected rather than silently dropped to
+make an unfiltered request. Omit an unused optional input to retain the source's default. For
+example, a declared string `segment` can narrow a contact-list operation:
+
+```cypher
+MATCH (me:AssistantUser)
+MATCH (me)-[:HAS_MAILBOX_CONTACT {realm:{segment:me.segment}}]->(c:MailboxContact)
+RETURN c.email
+```
+
+Only declared optional `realm` inputs are forwarded alongside the producer's own arguments;
+distinct input sets stay separate in the cache. A
+single query cannot use different input sets for the same producer. A successfully executed
+upstream query that binds no input rows makes **no downstream request**; a virtual upstream
+stage that has not executed yet is **not evidence of absence** and cannot license a broad
+request or a clean empty answer. If a graph predicate targets a source field already set by an
+explicit request input, that input is not overwritten; a conflicting predicate is still checked
+on the fetched graph rows, not claimed as a source-side match. A **declared filter** is a field named by `queryArgs` or `sourceFilters`. When a target-alias
+condition on a declared filter was not sent — including a parameter or expression on its right-hand
+side — the answer depends on whether the read was complete. After a **complete** read the graph
+applies the filter exactly, so a miss is a real miss and the unsent filter costs only calls and
+latency. After a **bounded** read — a page cap or declared limit reached on a full page, or a
+LIMIT-capped fetch that came back full — a read that cannot establish a match carries a
+`FILTER_NOT_PUSHED` warning, even when the source returned zero records: a bounded page fetched
+without that predicate does not prove the requested record is absent. A failed read carries its failure diagnostic; a skipped read does not count as
+source evidence. Neither is reported as an unfiltered successful read. A conflicting explicit
+`realm` input preserves its own request value and does not suppress the warning after a
+bounded read. Without `queryArgs`, existing producer-specific `realm`
+steering keeps its ordinary meaning above.
+
+A learned OpenAPI collection exposes optional scalar query parameters as declared `queryArgs`
+except paging controls and conventional free-text search inputs, which are not treated as
+filters. A matching equality on a numeric or boolean response field, or an enum-constrained string field,
+may be sent as a source filter; an unconstrained text equality is still checked on returned
+records. An explicit `realm` input takes precedence over an inferred filter on the same field:
+a conflicting graph predicate remains a graph filter and cannot silently change the request.
+
+A GET of one object beneath a keyed parent (for example, `GET /containers/{containerId}/usage`)
+can expose a navigable singleton edge from that parent even when the returned object has no own
+identity key. Its lookup uses exactly one parent key per call, and that key is echoed on each
+returned record, so results from different parents cannot join to each other. When the record
+already has a property with the key's name, or the name is reserved, the echo uses a distinct
+suffixed property name (for example `id_2`) and the edge joins on that name.
+Learned properties declared as OpenAPI `date`, `date-time`, and `time` remain strings in the graph.
+Use ISO string comparisons only where the source guarantees a consistent representation; otherwise
+normalize explicitly before comparing or ordering.
+
 ### 7.3 `ai.relevant` — the per-row relevance filter
 
 ```cypher
@@ -2831,11 +2902,31 @@ is classified and surfaced as a warning on the result:
 | `UNKNOWN_VIA` | an edge pinned `{via:'…'}` that no declared join offers | the rows are **real but came from a different join** than the one named. The query still answers — a via that does not exist must not cost a good answer — and the warning lists the vias that do exist so it can be re-issued. Matters most where several joins converge on one label, since the substitution is otherwise invisible. |
 | `AMBIGUOUS_LABEL` | the query named a parent label that more than one installed type answers to through the same edge | **nothing was fetched**, so the empty result is not "no data". The engine will not choose between a customer's two helpdesks on the caller's behalf; the detail names the types, so the query can be re-issued naming one. |
 | `NEEDS_FILTER` | a source that cannot be swept was asked without a narrowing predicate | the answer is **unknown until the query is narrowed** — not "no data". |
-| `FILTER_STARVED` | candidates were found, and the query's own filters rejected every one | a legitimate zero **that explains itself**: relax a filter rather than reading it as "no such data anywhere". The combination may be unsatisfiable at this source. |
+| `FILTER_STARVED` | candidates were found, and the query's own filters rejected every one | zero matches among **fetched candidates**, not proof of absence elsewhere. If `FILTER_NOT_PUSHED` also appears, the requested record may be outside the fetched page. |
+| `FILTER_NOT_PUSHED` | a bounded source read (page cap or limit reached) omitted a declared filter (`queryArgs` or `sourceFilters`) and could not establish a match for that target alias, including when it returned zero records | the bounded fetch **cannot prove absence**. Supply a valid declared request input or narrow the source request; do not turn this warning into a clean zero. A failed read carries its failure diagnostic; a skipped read does not establish absence. |
 | `FIELDS_WITHHELD` | governance removed fields — the secret reflex, `mask: drop`, or governed exposure (§5.15) | the **rows are complete**; named fields were removed by policy. An absent field here means "not exposed by this source's governance", never "no data". |
 | `COMPUTE_FAILED` | a producer's `compute:` expression raised on some records | the rows are complete and the source is fine; **one property is absent** on the records named. Absent rather than null or zero, because either would read as an answer. |
 | `MATERIALIZATION_FAILED` | the source returned data the graph could not store | the records **exist** but are missing from the result, so an answer of "none" is definitely wrong. The fix is the engine's, not the caller's. |
 | `REDUCTION_FAILED` | an `aggregate` reduction or an `extract` call failed | the anchor's reduced or extracted records are **absent**, not empty. Retried on the next traversal. |
+
+A row is not proof of a complete answer. A single-value aggregate — `count = 0` included — is
+inconclusive and withheld when the same result carries any diagnostic that leaves the facts
+incomplete (`NEEDS_FILTER`, `FILTER_NOT_PUSHED`, `PARTIAL_RESULT`, `MATERIALIZATION_FAILED`,
+`INCOMPLETE_TRAVERSAL`, a failed fetch, reduction or computation). List rows under the same
+diagnostics remain usable as a partial result; the diagnostic still prevents a claim that the
+returned set is complete. An empty result is not absence when records were fetched but none
+matched, or when `FILTER_STARVED` reports that the query's filters rejected every fetched
+candidate; such a result carries `FETCHED_NOT_MATCHED`. The exception is a read the engine
+reports as complete with an unsent filter applied in the graph (a cost note for the realm's
+author): that empty is exact and is not caveated. A direct query result reports how many
+source records it fetched and how many nodes it materialized, so a caller can tell "fetched and
+unmatched" from "nothing fetched".
+
+A month label derived from week-start buckets (for example `date.truncate('month', weekStart)`
+over weekly totals, including suffixed names such as `week_start_date`) is reported as a total
+by week-start, not by calendar month. It does not establish an exact calendar-month total, or that
+each labelled week was fetched in full, unless the source filtered the underlying events to that
+calendar window before grouping.
 
 A failed fetch is **never cached** as an empty result (so a later call with a refreshed token finds
 the data); only a genuine, successful "no records" is cacheable.
