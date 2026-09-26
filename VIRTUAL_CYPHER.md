@@ -2000,7 +2000,7 @@ LIMIT-capped fetch that came back full — a read that cannot establish a match 
 without that predicate does not prove the requested record is absent. A failed read carries its failure diagnostic; a skipped read does not count as
 source evidence. Neither is reported as an unfiltered successful read. A conflicting explicit
 `realm` input preserves its own request value and does not suppress the warning after a
-completed read. Without `queryArgs`, existing producer-specific `realm`
+bounded read. Without `queryArgs`, existing producer-specific `realm`
 steering keeps its ordinary meaning above.
 
 A learned OpenAPI collection exposes optional scalar query parameters as declared `queryArgs`
