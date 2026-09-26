@@ -1992,10 +1992,12 @@ request or a clean empty answer. If a graph predicate targets a source field alr
 explicit request input, that input is not overwritten; a conflicting predicate is still checked
 on the fetched graph rows, not claimed as a source-side match. A **declared filter** is a field named by `queryArgs` or `sourceFilters`. When a target-alias
 condition on a declared filter was not sent — including a parameter or expression on its right-hand
-side — a successful source read that cannot establish a match carries
-a `FILTER_NOT_PUSHED` warning — even when the source returned
-zero records. A bounded page fetched without that predicate does not prove the requested record
-is absent. A failed read carries its failure diagnostic; a skipped read does not count as
+side — the answer depends on whether the read was complete. After a **complete** read the graph
+applies the filter exactly, so a miss is a real miss and the unsent filter costs only calls and
+latency. After a **bounded** read — a page cap or declared limit reached on a full page, or a
+LIMIT-capped fetch that came back full — a read that cannot establish a match carries a
+`FILTER_NOT_PUSHED` warning, even when the source returned zero records: a bounded page fetched
+without that predicate does not prove the requested record is absent. A failed read carries its failure diagnostic; a skipped read does not count as
 source evidence. Neither is reported as an unfiltered successful read. A conflicting explicit
 `realm` input preserves its own request value and does not suppress the warning after a
 completed read. Without `queryArgs`, existing producer-specific `realm`
@@ -2901,7 +2903,7 @@ is classified and surfaced as a warning on the result:
 | `AMBIGUOUS_LABEL` | the query named a parent label that more than one installed type answers to through the same edge | **nothing was fetched**, so the empty result is not "no data". The engine will not choose between a customer's two helpdesks on the caller's behalf; the detail names the types, so the query can be re-issued naming one. |
 | `NEEDS_FILTER` | a source that cannot be swept was asked without a narrowing predicate | the answer is **unknown until the query is narrowed** — not "no data". |
 | `FILTER_STARVED` | candidates were found, and the query's own filters rejected every one | zero matches among **fetched candidates**, not proof of absence elsewhere. If `FILTER_NOT_PUSHED` also appears, the requested record may be outside the fetched page. |
-| `FILTER_NOT_PUSHED` | a completed source read omitted a declared filter (`queryArgs` or `sourceFilters`) and could not establish a match for that target alias, including when it returned zero records | the bounded fetch **cannot prove absence**. Supply a valid declared request input or narrow the source request; do not turn this warning into a clean zero. A failed read carries its failure diagnostic; a skipped read does not establish absence. |
+| `FILTER_NOT_PUSHED` | a bounded source read (page cap or limit reached) omitted a declared filter (`queryArgs` or `sourceFilters`) and could not establish a match for that target alias, including when it returned zero records | the bounded fetch **cannot prove absence**. Supply a valid declared request input or narrow the source request; do not turn this warning into a clean zero. A failed read carries its failure diagnostic; a skipped read does not establish absence. |
 | `FIELDS_WITHHELD` | governance removed fields — the secret reflex, `mask: drop`, or governed exposure (§5.15) | the **rows are complete**; named fields were removed by policy. An absent field here means "not exposed by this source's governance", never "no data". |
 | `COMPUTE_FAILED` | a producer's `compute:` expression raised on some records | the rows are complete and the source is fine; **one property is absent** on the records named. Absent rather than null or zero, because either would read as an answer. |
 | `MATERIALIZATION_FAILED` | the source returned data the graph could not store | the records **exist** but are missing from the result, so an answer of "none" is definitely wrong. The fix is the engine's, not the caller's. |
