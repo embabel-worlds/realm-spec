@@ -2916,7 +2916,9 @@ incomplete (`NEEDS_FILTER`, `FILTER_NOT_PUSHED`, `PARTIAL_RESULT`, `MATERIALIZAT
 diagnostics remain usable as a partial result; the diagnostic still prevents a claim that the
 returned set is complete. An empty result is not absence when records were fetched but none
 matched, or when `FILTER_STARVED` reports that the query's filters rejected every fetched
-candidate; such a result carries `FETCHED_NOT_MATCHED`. A direct query result reports how many
+candidate; such a result carries `FETCHED_NOT_MATCHED`. The exception is a read the engine
+reports as complete with an unsent filter applied in the graph (a cost note for the realm's
+author): that empty is exact and is not caveated. A direct query result reports how many
 source records it fetched and how many nodes it materialized, so a caller can tell "fetched and
 unmatched" from "nothing fetched".
 
