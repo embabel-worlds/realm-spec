@@ -50,6 +50,12 @@ Code that implements a Realm Function or the inline TypeScript body of a Trigger
 is an implementation, not the declared callable or trigger rule.
 _Avoid_: Realm Function, Trigger Binding
 
+**Key Entry**:
+A credential a Realm declares it needs: a name, one or more fields each stored under a credential
+variable, and optionally how the host checks a value. The realm names the check; the host makes it,
+and realm code never sees a value.
+_Avoid_: secret, config entry, API key when meaning the declaration rather than the value
+
 **Knowledge Context**:
 A named confidentiality boundary for knowledge or memory within one world. Its identity and access
 policy are subordinate to the world and cannot authorize access across worlds.

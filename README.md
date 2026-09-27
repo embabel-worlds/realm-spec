@@ -51,6 +51,7 @@ realm-name/
 │   └── my-lens.yml
 ├── apis/                 # API entries (YAML)
 │   └── my-api.yml
+├── keys.yml              # The API keys the realm needs, and how to check them (optional)
 ├── src/                  # Hand-authored TypeScript handlers (optional)
 │   └── api/
 │       └── my-handlers.ts
@@ -1402,6 +1403,133 @@ If none resolve, the provider's status reports `not-configured` and Authorize re
 End users **never** paste tokens, IDs, or secrets. Settings → Connected Services → click **Authorize** → consent on the provider's page → done. ConnectedAccounts holds the real account label; `gateway.<name>.*` is live in chat.
 
 **Token refresh** is automatic — the host's `OAuth2Service` rotates expired access tokens using the stored refresh token and writes back any new refresh token the provider issues (HubSpot rotates them on every refresh).
+
+## `keys.yml` — the keys a realm needs
+
+A realm that calls a vendor with an API key declares that key here: what to call it, where somebody
+gets one, the value(s) it takes, and how the host can tell whether a value works. Hosts use the
+declaration to ask for the key by name, show it on the realm's settings, check a value before
+storing it, and re-check a stored value while it is in use.
+
+```yaml
+# keys.yml
+- name: brave
+  displayName: Brave Search
+  description: Web and news search.
+  getKeyUrl: https://brave.com/search/api/
+  fields:
+    - variable: BRAVE_API_KEY
+      displayName: API key
+  validate:
+    api: brave                   # an API this realm declares in apis/
+    operation: webSearch
+    args: { q: test, count: 1 }
+    refusedOn: [401, 403, 422]   # Brave answers a bad token 422
+
+- name: maps
+  displayName: Google Maps
+  fields:
+    - variable: GOOGLE_MAPS_API_KEY
+      displayName: API key
+    - variable: GOOGLE_MAPS_PROJECT_ID
+      displayName: Project ID
+      secret: false
+  validate:
+    api: maps
+    operation: geocode
+    args: { address: "1 Main St" }
+    interpret: checkMapsAnswer   # optional Realm Function, see below
+
+- youtube                        # shorthand: one field, YOUTUBE, called "youtube"
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | Stable id, unique within the realm. |
+| `displayName` | no | What a person is shown. Defaults to `name`. |
+| `description` | no | One line on what the key unlocks. |
+| `getKeyUrl` | no | Where somebody obtains a key. |
+| `fields` | no | The values the key takes. Defaults to one field whose `variable` is `name` upper-snake-cased (`brave-search` → `BRAVE_SEARCH`). |
+| `fields[].variable` | yes | The credential name the value is stored and resolved under — the same name `token-env` and `${VAR}` in `apis/` refer to. |
+| `fields[].displayName` | no | Defaults to the entry's `displayName`. |
+| `fields[].secret` | no | Default `true`. `false` marks a value safe to show back, like a project id. |
+| `validate` | no | How to check the values. Without it a key can be set but never checked. |
+
+**One declaration, any number of APIs.** A field's `variable` is the credential slot every `apis/`
+entry naming that variable resolves. Two APIs that use one key share one entry, and a person is asked
+once.
+
+### Validation
+
+`validate` names **one of the realm's own API operations** and the arguments to call it with. To check
+a candidate value, the host calls that operation with the value bound into the entry's credential
+slot, using the API's declared auth. The call is the host's, made through the gateway like any other;
+the realm never sees the value.
+
+| `validate` field | Required | Description |
+|---|---|---|
+| `api` | yes | An API this realm declares in `apis/`. |
+| `operation` | yes | An operation of that API. Pick the cheapest one any valid key may call. |
+| `args` | no | Arguments for the call. Fixed, so the answer can only be about the key. |
+| `refusedOn` | no | Response statuses that mean the key is refused. Default `[401, 403]`. |
+| `interpret` | no | A Realm Function that decides the verdict from the response, for a vendor whose refusal is not a status. |
+
+**A check has four outcomes**, and every host reports them the same way:
+
+| Outcome | Meaning |
+|---|---|
+| `accepted` | The issuer answered and the key works. |
+| `refused` | The issuer answered and said no. |
+| `unreachable` | No answer: DNS, connection, timeout. Says nothing about the key. |
+| `failed` | An answer that is neither yes nor no, such as a 5xx or a rate limit. |
+
+**Only `refused` is a verdict on the key.** A host stores nothing it was refused, and may tell the
+person when a key already stored turns refused. `unreachable` and `failed` never block a write and
+never mark a key bad: a vendor being down is not the key's fault.
+
+**`interpret` never receives the key.** It is called with the check's response, not the request:
+
+```ts
+// src/api/keys.ts — Google answers 200 with status REQUEST_DENIED for a bad key
+export async function checkMapsAnswer(input: { status: number; body: unknown }): Promise<{ outcome: string; detail?: string }> {
+  const answer = (input.body as { status?: string }).status
+  if (answer === 'REQUEST_DENIED') return { outcome: 'refused' }
+  if (input.status === 200) return { outcome: 'accepted' }
+  return { outcome: 'failed', detail: `HTTP ${input.status}` }
+}
+```
+
+It must return one of the four outcomes. The host applies a short deadline to the whole check; an
+`interpret` that throws or overruns is `failed`. `detail` is shown to the person and must not repeat
+anything from the response that could identify the key.
+
+### Guarantees
+
+- **Values are never exposed.** A host never logs a key's value, returns it from any read, shows it
+  back unless the field is `secret: false`, or passes it to realm code.
+- **A check may run at any time**, repeatedly, and must not change anything at the vendor. `validate`
+  names a read.
+- **Declared keys are the typed credential slot** the [trust tiers](#apis) require: a marketplace realm
+  declares its keys here rather than relying on `token-env` resolving from the environment.
+
+### Realms that declare nothing
+
+`keys.yml` is optional, and a realm without one behaves as before. A host still derives one entry per
+credential variable the realm's APIs refer to (`token-env`, `${VAR}` in `headers`), and presents it as:
+
+| | Derived from the variable |
+|---|---|
+| `name` | the variable, as-is (`YOUTUBE_API_KEY`) |
+| `displayName` | the variable less a trailing `_API_KEY`, `_KEY` or `_TOKEN`, title-cased (`Youtube`) |
+| `fields` | one field, the variable |
+| `validate` | none — a derived key can be set, never checked |
+
+A declared entry takes precedence over a derived one for the same variable, so a realm can adopt
+`keys.yml` one key at a time.
+
+**Load problems.** A `validate.api` the realm does not declare, a `validate.operation` that API does
+not have, an `interpret` naming no Realm Function, or two entries claiming one `variable`, is a
+recorded problem. The entry still loads, without `validate`.
 
 ## `src/` and `tests/` — hand-authored TypeScript handlers
 
