@@ -1991,7 +1991,9 @@ For a `remote` producer that declares optional scalar `queryArgs` (`string`, `in
 identities. Each supplied key must be declared and have a scalar value coercible to its declared
 type. It can be a literal, a query parameter, or a property of a node bound in an earlier clause; an
 unresolved, missing, non-scalar, or ambiguous value is rejected rather than silently dropped to
-make an unfiltered request. Omit an unused optional input to retain the source's default. For
+make an unfiltered request. A value the query computes (a function call, arithmetic, or a `WITH`
+variable such as a date derived from `date()`) is not accepted: write it as a literal, for example
+`{realm: {from: '2026-07-01'}}`, and the rejection says so. Omit an unused optional input to retain the source's default. For
 example, a declared string `segment` can narrow a contact-list operation:
 
 ```cypher
