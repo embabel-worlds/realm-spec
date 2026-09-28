@@ -52,7 +52,8 @@ _Avoid_: Realm Function, Trigger Binding
 
 **App Link**:
 A link that opens a Realm's app at a place inside it: `app://<scope>/<name>#<route>`. The address is the
-app's own, so it cannot collide; the route is the app's to interpret and is untrusted input.
+app's own, so it cannot collide; the route is the app's to interpret and is untrusted input. The scope `host` is
+reserved for the host's own places, whose names each host defines.
 _Avoid_: URL scheme, deep link when meaning this contract
 
 **Key Entry**:

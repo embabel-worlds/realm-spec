@@ -2835,6 +2835,19 @@ ctx.gateway.notifications.createNotification({
 A realm should link to its OWN apps. Its producers and its apps ship together, so the link cannot
 point at an app that is not there.
 
+**The host's own places.** The scope `host` is reserved: no realm or vibe-coded app may occupy it, and
+`app://host/<place>#<route>` names a place in the host's own interface rather than an app. What
+follows `host/` is the host's to define, and a place one host has another may not:
+
+```
+app://host/settings#keys        # a console's Keys and connections, say
+app://host/inbox
+```
+
+They exist mostly for notifications the host raises about itself, such as a key that stopped
+working. A realm should rarely use them — its links belong in its own apps — and must not rely on one
+existing. A host that does not recognise a place falls back as below.
+
 **When the app is not there.** A user can uninstall a realm, or shadow its app. A host that cannot
 resolve an app link opens the nearest list of the thing instead, such as the notification inbox. It
 never shows an error for an unresolvable app link. External `http(s)` links are unchanged.
