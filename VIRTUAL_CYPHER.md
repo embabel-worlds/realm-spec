@@ -130,6 +130,8 @@ and `WHERE q.eventId = 2779` find an anchor keyed `2779` or `'2779'`, whether it
 one the engine created for the fetch; the quoted `{eventId: '2779'}` matches only the text key. Each
 number in a key list does the same: `WHERE q.eventId IN [2779, 2780]` finds anchors keyed `2779` or
 `'2779'` and `2780` or `'2780'`, while a quoted list matches only text keys.
+A named anchor pinned to a variable that only an `UNWIND` of a literal list binds does the same:
+`UNWIND [2779, 2780] AS id MATCH (q:EventQuery {eventId: id})` finds both anchors, and `id` stays a number.
 This applies only to the key a join fetches by; every other
 property compares exactly, so `{age: 40}` does not match `'40'`.
 
