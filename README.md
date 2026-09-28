@@ -2786,6 +2786,72 @@ Realm apps must use the same architecture as vibe-coded apps: tool-gateway calls
 
 **What "no direct external fetches" does and does not cover.** The prohibition is on the app reaching a third-party *data* API itself — that would bypass the gateway's auth, scoping, quotas and provenance, and would leak keys into the browser. It does not prohibit ordinary outbound *navigation*: an `<a href>` deep link to an external site (a map, a source document, a public register entry) is how a surface cites its sources and should be encouraged. Embedding third-party runtime assets — a map SDK, tiles, remote fonts — is a different question again: it adds a network dependency and a privacy surface the host does not mediate, so treat it as a deliberate choice rather than a default, and never let a provider's key reach the page. A realm that wants map rendering without that dependency can deep-link out instead, which also keeps provider terms about attribution and caching simple to honour.
 
+### Linking into an app
+
+An **app link** opens an app at a place inside it:
+
+```
+app://<scope>/<name>#<route>
+```
+
+`<scope>/<name>` is the app's own address: the same one it is served at, `/apps/<scope>/<name>`. That
+address is unique in a world, so an app link cannot collide with another app's, and nothing is
+registered or declared to make one work. The `.html` suffix may be left off.
+
+```
+app://google/mail#/thread/18f3a2c
+app://google/mail.html#/thread/18f3a2c     # the same app
+```
+
+**The route is the app's business.** A host opens the app with `#<route>` and does not read it. The
+app reads `location.hash` when it loads and follows `hashchange` after that: when the app is already
+open, a host changes only the route, and does not reload the app.
+
+```js
+// apps/mail.html
+function route() {
+  const m = location.hash.match(/^#\/thread\/([A-Za-z0-9_-]+)$/)
+  if (m) showThread(m[1])
+}
+addEventListener('hashchange', route)
+route()
+```
+
+**Treat the route as untrusted input.** Anything that can produce a link can put anything after the
+`#`. An app matches the route against the shapes it expects, as above, and ignores the rest. It never
+passes route text to `eval`, `innerHTML`, a lens argument, or a query without validating it.
+
+**Where app links go.** Anywhere a host shows a link it may carry an app link. A notification's `url`
+is the common case:
+
+```ts
+ctx.gateway.notifications.createNotification({
+  event: 'Reply needed: contract renewal',
+  source: 'email',
+  url: 'app://google/mail#/thread/18f3a2c',
+})
+```
+
+A realm should link to its OWN apps. Its producers and its apps ship together, so the link cannot
+point at an app that is not there.
+
+**The host's own places.** The scope `host` is reserved: no realm or vibe-coded app may occupy it, and
+`app://host/<place>#<route>` names a place in the host's own interface rather than an app. What
+follows `host/` is the host's to define, and a place one host has another may not:
+
+```
+app://host/settings#keys        # a console's Keys and connections, say
+app://host/inbox
+```
+
+They exist mostly for notifications the host raises about itself, such as a key that stopped
+working. A realm should rarely use them — its links belong in its own apps — and must not rely on one
+existing. A host that does not recognise a place falls back as below.
+
+**When the app is not there.** A user can uninstall a realm, or shadow its app. A host that cannot
+resolve an app link opens the nearest list of the thing instead, such as the notification inbox. It
+never shows an error for an unresolvable app link. External `http(s)` links are unchanged.
+
 ## `artifacts.yml`
 
 Optional. Register custom artifact types the realm introduces, in addition to the host's built-ins (`DOCUMENT`, `APP`, `CODE`, `DATASET`, `DIAGRAM`).

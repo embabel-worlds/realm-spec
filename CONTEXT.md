@@ -50,6 +50,12 @@ Code that implements a Realm Function or the inline TypeScript body of a Trigger
 is an implementation, not the declared callable or trigger rule.
 _Avoid_: Realm Function, Trigger Binding
 
+**App Link**:
+A link that opens a Realm's app at a place inside it: `app://<scope>/<name>#<route>`. The address is the
+app's own, so it cannot collide; the route is the app's to interpret and is untrusted input. The scope `host` is
+reserved for the host's own places, whose names each host defines.
+_Avoid_: URL scheme, deep link when meaning this contract
+
 **Key Entry**:
 A credential a Realm declares it needs: a name, one or more fields each stored under a credential
 variable, and optionally how the host checks a value. The realm names the check; the host makes it,
