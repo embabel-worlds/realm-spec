@@ -834,6 +834,14 @@ paging: { style: cursor, size: 100, maxPages: 10, cursorParam: after, cursorPath
 
 Omitting `startPage` preserves one-based requests (`1, 2, …`). A negative value is invalid. For either starting convention, a short page ends the walk normally; a full final page at `maxPages` reports the existing truncation warning.
 
+**A listing that cannot be sized: `singlePage: true`.** A `remote` producer without `paging` whose
+operation has no page-size argument answers whatever page the source chooses, often its default
+first page. Declare `singlePage: true` on such a producer (a learned OpenAPI listing does this
+automatically). Every non-empty read then reports `PARTIAL_RESULT` (`TRUNCATED`), and nothing
+counted or summed through it is presented as an exact total. An empty read is still a complete
+answer. The warning also appears when the source did return everything, because the producer
+cannot tell.
+
 `param` / `sizeParam` name **parameters declared on the operation**, so an API that takes paging somewhere other than the query string is addressed by naming the parameters it actually declares. A handful of APIs pass paging (and even filtering) as HTTP **headers** — the NSW planning feed used by `realm-nsw-property` takes `PageSize`, `PageNumber` and a JSON `filters` string as headers. Declare them as `in: header` parameters in the vendored spec and name them here; the walker then drives them correctly (verified against a live world, 2026-07-28).
 
 > **Always set `param`/`sizeParam` when the endpoint's paging arguments are not literally named `page` and `per_page`.** The defaults are injected as *query* parameters, and a source that ignores unknown query parameters — many do, silently — will return **page 1 for every request**. The walker cannot detect this: it sees `maxPages` successful 200s with a full page of records each time, and reports the product as the record count. In the case that motivated this note it reported 3,200 records that were 400 records repeated eight times, with no warning, and every downstream statistic was computed over eight copies of the same page.
