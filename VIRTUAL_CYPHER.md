@@ -2944,7 +2944,16 @@ A month label derived from week-start buckets (for example `date.truncate('month
 over weekly totals, including suffixed names such as `week_start_date`) is reported as a total
 by week-start, not by calendar month. It does not establish an exact calendar-month total, or that
 each labelled week was fetched in full, unless the source filtered the underlying events to that
-calendar window before grouping.
+calendar window before grouping. When the request's end-date input falls inside a returned
+week-start bucket, the result also says that bucket may cover only part of its week, depending on
+how the source applies the end bound, so that month's total may be partial.
+
+A result column whose value the query wrote as a constant is described as written by the query,
+not returned by the source.
+
+A warning about the result's columns (a column that holds whole nodes, or a column name that claims
+more than the query computed) describes how the result was projected. It does not mean the read
+failed or is incomplete.
 
 A failed fetch is **never cached** as an empty result (so a later call with a refreshed token finds
 the data); only a genuine, successful "no records" is cacheable.
