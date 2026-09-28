@@ -114,6 +114,23 @@ related sections complete, or fetch additional sources. Its result identifies th
 produced the card and marks the answer partial.
 An incomplete-source warning remains visible even if the card supplies useful context.
 
+These distinctions appear in the result envelope next to `rows` and `warnings`. Each field below is omitted when it does not apply.
+
+| Field | Type | Present | Meaning |
+|---|---|---|---|
+| `fetchedRecords` | integer | on query, ask and saved-view results | Records the producers returned before query-side filtering, cache-served ones included. |
+| `materializedNodes` | integer | on query, ask and saved-view results | Graph nodes made available to the query from those records. |
+| `aggregate` | boolean | only when `true` | The query computes an aggregate (`count`, `sum`, …). Under an incompleteness warning its figures are not totals. The query text itself can stay withheld. |
+| `answerBoundary` | object `{kind, unresolvedQuestion?}` | only on a non-empty record card | `kind: SUPPORTING_CONTEXT_ONLY`: the rows support the lookup but do not answer its original filter. `unresolvedQuestion` restates what is still unanswered. |
+| `cypher` | string | on an empty result, an explicitly requested explanation, or a record card | The executed query. It is withheld from an ordinary non-empty answer. |
+
+```json
+{ "rows": [], "warnings": [], "fetchedRecords": 12, "materializedNodes": 12,
+  "reason": "FETCHED_NOT_MATCHED", "cypher": "MATCH (e:Event) WHERE e.status = 'open' RETURN e" }
+```
+
+Twelve records arrived and none matched. The answer is "no fetched record matched", not "no such records exist".
+
 ### Two concepts the rest of the spec leans on
 
 **Bound anchor.** A virtual label may only be reached by **traversing a declared join from a
