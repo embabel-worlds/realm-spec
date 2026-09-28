@@ -122,7 +122,7 @@ These distinctions appear in the result envelope next to `rows` and `warnings`. 
 | `materializedNodes` | integer | on query, ask and saved-view results (the admin REST endpoints omit a zero) | Graph nodes made available to the query from those records. |
 | `aggregate` | boolean | only when `true` | The query computes an aggregate (`count`, `sum`, …). Under an incompleteness warning its figures are not totals. The query text itself can stay withheld. |
 | `answerBoundary` | object `{kind, unresolvedQuestion?}` | only on a non-empty record card | `kind: SUPPORTING_CONTEXT_ONLY`: the rows support the lookup but do not answer its original filter. `unresolvedQuestion` restates what is still unanswered. |
-| `cypher` | string | gateway `kg_query`/`kg_ask` and saved-view results: on an empty result, an explicitly requested explanation, or a record card. The admin REST query endpoints always include it. | The executed query. The gateway withholds it from an ordinary non-empty answer; use `aggregate` to tell a computed total without it. |
+| `cypher` | string | an ask result (`kg_ask`): on an empty result, a requested explanation, or a record card. A saved-view result: only on a requested explanation. A direct query (`kg_query`) never echoes it, since the caller wrote it. The admin REST query endpoints always include it. | The executed query. Without it, `aggregate` still tells a computed total from a list. |
 
 ```json
 { "rows": [], "warnings": [], "fetchedRecords": 12, "materializedNodes": 12,
