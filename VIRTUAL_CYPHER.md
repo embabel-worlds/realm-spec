@@ -2912,7 +2912,7 @@ is classified and surfaced as a warning on the result:
 |---|---|---|
 | `PRODUCER_ERROR` (`FETCH_FAILURE`) | a timeout, a missing gateway tool, a non-auth error | the source could **not** be reached — *not* "no data". Fix the integration. |
 | `PRODUCER_ERROR` (`AUTH_EXPIRED`) | a 401 / "token expired" / `EXPIRED_AUTHENTICATION` | the OAuth token has **expired** — reconnect to refresh. The empty result is because the source rejected the call. |
-| `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page; a `singlePage` producer returned any records (it cannot tell a default first page from the whole listing); a call budget ran out mid-fan-out; a declared floor or gate dropped records | the fetch **succeeded but is incomplete** — the source has more. *Not* a failure. The detail says which cause, because the fixes differ: raise the cap, or simply ask again (a budgeted run keeps its completed work and resumes rather than restarting). |
+| `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page; a `singlePage` producer (one that declares paging it cannot walk) returned any records (it cannot tell a default first page from the whole listing); a call budget ran out mid-fan-out; a declared floor or gate dropped records | the fetch **succeeded but is incomplete** — the source has more. *Not* a failure. The detail says which cause, because the fixes differ: raise the cap, or simply ask again (a budgeted run keeps its completed work and resumes rather than restarting). |
 | `PARTIAL_RESULT` (`NOT_FOUND`) | the source answered a definitive 404 for one key of a fan-out | that key **does not exist** — as opposed to "we could not find out", which is `FETCH_FAILURE`. The answer is short by exactly the named keys; the source is not down, and the other keys' rows are good. |
 | `PARTIAL_RESULT` (`DERIVED_LOWER_BOUND`) | a DERIVE rule set concluded while the facts its rules read were themselves incomplete (another diagnostic fired, or a demand went unmet) | membership and any aggregate over it are a **lower bound, not a total**. The fixpoint is correct over what was materialized and says nothing about what was not — a rule body cannot fetch (§13.6). Not a failure, and not "nothing was derived". |
 | `INCOMPLETE_TRAVERSAL` | a variable-length traversal (§5.12) stopped short of its declared depth | the warning names the hop reached and the bound hit (`maxFanoutTotal`, frontier width, or the unbounded-`*` cap). Rows cover only the hops walked; any subtree total is a **lower bound**. |
@@ -2937,7 +2937,8 @@ candidate; such a result carries `FETCHED_NOT_MATCHED`. The exception is a read 
 reports as complete with an unsent filter applied in the graph (a cost note for the realm's
 author): that empty is exact and is not caveated. A direct query result reports how many
 source records it fetched and how many nodes it materialized, so a caller can tell "fetched and
-unmatched" from "nothing fetched".
+unmatched" from "nothing fetched". An incomplete read that matched nothing, with no failed step, carries
+`PARTIAL_NOT_MATCHED`: it is neither a failure nor evidence of absence.
 
 A month label derived from week-start buckets (for example `date.truncate('month', weekStart)`
 over weekly totals, including suffixed names such as `week_start_date`) is reported as a total

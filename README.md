@@ -834,13 +834,17 @@ paging: { style: cursor, size: 100, maxPages: 10, cursorParam: after, cursorPath
 
 Omitting `startPage` preserves one-based requests (`1, 2, …`). A negative value is invalid. For either starting convention, a short page ends the walk normally; a full final page at `maxPages` reports the existing truncation warning.
 
-**A listing that cannot be sized: `singlePage: true`.** A `remote` producer without `paging` whose
-operation has no page-size argument answers whatever page the source chooses, often its default
-first page. Declare `singlePage: true` on such a producer (a learned OpenAPI listing does this
-automatically). Every non-empty read then reports `PARTIAL_RESULT` (`TRUNCATED`), and nothing
-counted or summed through it is presented as an exact total. An empty read is still a complete
-answer. The warning also appears when the source did return everything, because the producer
-cannot tell.
+**A listing that may be one page: `singlePage: true`.** A `remote` producer without `paging` whose
+operation declares a page, offset or cursor argument but no page-size argument may answer only the
+page the source chooses, often its default first page. Declare `singlePage: true` on such a producer
+(a learned OpenAPI listing does this automatically). Every non-empty read then reports
+`PARTIAL_RESULT` (`TRUNCATED`), and nothing counted or summed through it is presented as an exact
+total. An empty read is still a complete answer. The warning also appears when the source did return
+everything, because the producer cannot tell.
+
+An operation that declares no paging and no page size returns its whole collection as far as a
+client can tell, so its reads are complete. A learned listing that declares a page size sends it at
+the declared default, and only a full page reports `PARTIAL_RESULT` (`TRUNCATED`).
 
 `param` / `sizeParam` name **parameters declared on the operation**, so an API that takes paging somewhere other than the query string is addressed by naming the parameters it actually declares. A handful of APIs pass paging (and even filtering) as HTTP **headers** — the NSW planning feed used by `realm-nsw-property` takes `PageSize`, `PageNumber` and a JSON `filters` string as headers. Declare them as `in: header` parameters in the vendored spec and name them here; the walker then drives them correctly (verified against a live world, 2026-07-28).
 
