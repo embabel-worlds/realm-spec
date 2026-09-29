@@ -30,25 +30,46 @@ A named, schema-described callable supplied by a Realm and executed by a host. A
 be pure or effectful and may be invoked on demand or through an adopted Trigger Registration.
 _Avoid_: verb, operation, action
 
-**Trigger Binding**:
-A declarative entry under `handlers/` connecting a signal match, a schedule, or both to executable
-logic. Its target may be an inline TypeScript Handler or a Realm Function.
-_Avoid_: verb binding, event handler
+**Agent**:
+A named colleague: a job, the routines that do its work, and the duties it keeps. A Realm proposes
+agents under `agents/`; a world adopts one by putting it on duty, and decides who answers for it.
+_Avoid_: bot, assistant, handler
+
+**Sponsor**:
+The person who answers for an agent in a world. Set by the world, never by a Realm. A sponsor signs
+each version the agent runs.
+_Avoid_: owner when meaning the one accountable person
+
+**Stage**:
+Whether an agent's routines run, and whether they may take effects: off duty (`off`), on duty
+observing (`observing`, read-only gateway), or on duty (`on`). Set by the world, per agent or per
+routine.
+_Avoid_: autonomous, enabled, armed
+
+**Routine**:
+A declarative entry in an agent connecting a signal match, a schedule, or both to executable logic.
+Its target may be an inline TypeScript Handler or a Realm Function.
+_Avoid_: Trigger Binding, verb binding, event handler
+
+**Duty**:
+A condition an agent keeps true, named by the view, lens or DERIVE label that should hold.
+_Avoid_: invariant in user-facing text, standing order, rule
 
 **Manifest Schedule**:
 A schedule declared directly on a Realm Function's manifest entry. It is a Trigger Registration,
-but not a Trigger Binding, and invokes the Function with empty arguments.
+but not a Routine, and invokes the Function with empty arguments. A host presents it as a routine of
+an agent it proposes for the Realm, so it is adopted the same way.
 _Avoid_: scheduled binding, handler schedule
 
 **Trigger Registration**:
-The adopted identity of an autonomous trigger: either a Trigger Binding or a Manifest Schedule.
+The adopted identity of an autonomous trigger: either a Routine or a Manifest Schedule.
 Adoption authorizes it to execute as exactly one principal.
 _Avoid_: trigger when referring to the durable registration
 
 **Handler**:
-Code that implements a Realm Function or the inline TypeScript body of a Trigger Binding. A Handler
+Code that implements a Realm Function or the inline TypeScript body of a Routine. A Handler
 is an implementation, not the declared callable or trigger rule.
-_Avoid_: Realm Function, Trigger Binding
+_Avoid_: Realm Function, Routine
 
 **App Link**:
 A link that opens a Realm's app at a place inside it: `app://<scope>/<name>#<route>`. The address is the

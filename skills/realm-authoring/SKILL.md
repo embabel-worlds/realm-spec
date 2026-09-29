@@ -28,8 +28,8 @@ write into an invisible draft and publish it:
     realm_write (one file per call) -> realm_validate -> realm_install
 
 Two things about this path that nothing else tells you:
-- `wasm/handlers.ts` is where TypeScript goes. Not `handlers/` (that is YAML trigger
-  bindings), not `src/api/*.ts` (that is the checkout build, which this path does not run).
+- `wasm/handlers.ts` is where TypeScript goes. Not `agents/` (that is YAML: agents and
+  the routines that call into it), not `src/api/*.ts` (that is the checkout build, which this path does not run).
 - **`realm_install` consumes the draft.** After a successful install the next
   `realm_write` starts a NEW empty draft — so a follow-up write, on its own, produces
   "realm.yml is missing" for a file you wrote minutes ago. Re-write the whole realm, or
@@ -72,7 +72,7 @@ checkout is mounted.
 | an MCP server (last resort — prefer `apis/` for anything API-backed) | `mcp/` | "`mcp/`" |
 | a slash command | `commands/` | "`commands/`" |
 | inbound events → typed `Signal`s | `events/` (webhook + poll) | "`events/`" |
-| WHICH signal/cron invokes a verb (declarative YAML) | `handlers/` | "`handlers/`" |
+| an agent, and WHICH signal/cron its routines react to (declarative YAML) | `agents/` | "`agents/`" |
 | the TypeScript a wasm-host realm actually runs | `wasm/handlers.ts` (ONE file) | "`wasm/`" |
 | scheduled KG enrichment | `decorations/` | "`decorations/`" |
 | an HTML app | `apps/` | "`apps/`" |

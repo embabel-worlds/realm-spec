@@ -1,6 +1,6 @@
 # Embabel Realm Specification
 
-Realms are self-contained, declarative bundles of agent capabilities that can be installed into an Embabel-based host. Each realm is a git repository (no JVM bytecode, no native binaries) that provides actions, types, APIs, MCP servers, commands, webhooks, event sources, Trigger Bindings, skills, prompts, and apps. The host platform reads the realm and wires its contents into the running agent.
+Realms are self-contained, declarative bundles of agent capabilities that can be installed into an Embabel-based host. Each realm is a git repository (no JVM bytecode, no native binaries) that provides actions, types, APIs, MCP servers, commands, webhooks, event sources, agents, skills, prompts, and apps. The host platform reads the realm and wires its contents into the running agent.
 
 The [hosted execution contract](HOSTED_EXECUTION.md) defines captured execution, channel
 publication, finite capacity and credential mediation. It also records the governed reference
@@ -79,7 +79,7 @@ realm-name/
 ├── data-pipes.yml        # Captured channel source and consumer declarations
 ├── channels/             # Realm-shipped provider connector drafts (YAML)
 │   └── my-channel.yml
-├── handlers/             # Trigger Bindings — reactions to signals/cron the user adopts
+├── agents/               # Agents — named colleagues whose routines react to signals/cron, adopted by the world
 │   └── my-handler.yml
 ├── decorations/          # Scheduled KG node-decoration manifests
 │   └── my-decoration.yml
@@ -951,7 +951,7 @@ Most producers don't need `echoKeyAs` — e.g. HubSpot owners/contacts records a
 
 ### CypherScript — Cypher woven into TypeScript/JavaScript
 
-Anywhere a realm ships code that runs in the host's `code_mode` sandbox — a **handler** (`handlers/`), a **decoration** action, a skill recipe — it writes **CypherScript**: an ordinary TypeScript/JavaScript program that interleaves graph queries with procedural logic, integration calls, and inline LLM, all over the one typed `gateway.*` surface. It is not a separate language — it's TS/JS with first-class graph access:
+Anywhere a realm ships code that runs in the host's `code_mode` sandbox — a **routine** (`agents/`), a **decoration** action, a skill recipe — it writes **CypherScript**: an ordinary TypeScript/JavaScript program that interleaves graph queries with procedural logic, integration calls, and inline LLM, all over the one typed `gateway.*` surface. It is not a separate language — it's TS/JS with first-class graph access:
 
 - **Cypher for the graph** — `await gateway.kg.query({ cypher, params })`. The query runs through **Virtual Cypher** (above): rewritten to the host-bound world, context, and access policy, read-only, and materializing on-demand virtual joins exactly as a chat query would — so one `MATCH` spans persisted **and** virtual (integration) data.
 - **TypeScript/JavaScript** for what Cypher can't express — branching, aggregation, reshaping, loops.
@@ -2182,13 +2182,13 @@ defineHandler("ping", async (input, ctx) => "pong");
 
 The name a form contributes is the export identifier, the property key, or the `defineHandler` string. **Resolution is deterministic:** for each manifest function the host looks up its `name` among the contributed functions; a name contributed more than once, or by more than one form, is a load-time problem — a name is defined exactly once. **Discovery is the manifest's; the module supplies implementations.** The host reads the manifest for what functions exist — it never executes guest code to *discover* functions — then evaluates the module to *resolve* each entry's implementation (collecting the exports and any `defineHandler` registrations) and binds them. A function with no manifest entry is unreachable; a manifest function with no contributed function is a recorded load problem and is unavailable for calls or triggers; a realm with no manifest registers no functions at all.
 
-`input` is the dispatch input, described by the manifest's `inputSchema`: the call arguments for an on-demand call, or the trigger-discriminated event for a signal- or cron-bound dispatch (see [trigger bindings](#trigger-bindings-and-dispatch-scoped-replies--forward-looking)). An on-demand call passes the arguments verbatim, with no `trigger` key; a handler that is also bound distinguishes the cases by the presence of `trigger`. `ctx` carries:
+`input` is the dispatch input, described by the manifest's `inputSchema`: the call arguments for an on-demand call, or the trigger-discriminated event for a signal- or cron-bound dispatch (see [routines that call a Realm Function](#routines-that-call-a-realm-function-and-dispatch-scoped-replies--forward-looking)). An on-demand call passes the arguments verbatim, with no `trigger` key; a function that a routine also targets distinguishes the cases by the presence of `trigger`. `ctx` carries:
 
 | Member | Contract |
 |---|---|
 | `ctx.gateway.<namespace>.<method>(args)` | Calls back into the host's gateway surface — the same namespaces and schemas a TS handler or LLM-generated script sees. The host binds the world, context, access-policy revision, execution, and principal. On-demand calls run as the authenticated caller; autonomous calls run as the adoption's pinned principal. The guest never holds or presents a credential or scope key. |
 | `ctx.log(message)` | Guest logging, surfaced in the host's logs against the dispatch. |
-| `ctx.reply({ text, idempotencyKey })` | Dispatch-scoped reply to the triggering channel thread ([trigger bindings](#trigger-bindings-and-dispatch-scoped-replies--forward-looking)). Returns `{ status }` (one of the reply results listed there). Always present; on a dispatch with no live route it returns `{ status: "NOT_REPLYABLE" }` rather than being absent. |
+| `ctx.reply({ text, idempotencyKey })` | Dispatch-scoped reply to the triggering channel thread ([routines that call a Realm Function](#routines-that-call-a-realm-function-and-dispatch-scoped-replies--forward-looking)). Returns `{ status }` (one of the reply results listed there). Always present; on a dispatch with no live route it returns `{ status: "NOT_REPLYABLE" }` rather than being absent. |
 
 **Statelessness applies to every form.** Every dispatch runs in a fresh instance, so nothing in the file survives between dispatches — a module-level variable and a value closed over by a default-export object both reset each dispatch. Durable state lives in the graph, through the gateway. `wasm/handlers.js` is compiled as a module; `defineHandler` is a host-provided global available both in that module and in a file with no `export` syntax — reach for it when generating a file that cannot use export syntax.
 
@@ -2280,11 +2280,11 @@ A wasm realm ships `dist/manifest.json` in the same [manifest format](#manifest-
 
 | Field | Meaning |
 |---|---|
-| `schedule` | A cron expression (Spring 6-field, evaluated in the host's timezone). Installation makes the schedule available but **does not activate it**. It starts only after adoption under the same digest-bound grant as a Trigger Binding, and a realm update pauses it until that grant is valid again. A **Manifest Schedule** passes empty args (`{}`), so every `inputSchema` field must be optional. (A scheduled Trigger Binding in `handlers/` instead passes `{trigger: "cron", firedAt}` under a different input contract; see [trigger bindings](#trigger-bindings-and-dispatch-scoped-replies--forward-looking).) |
+| `schedule` | A cron expression (Spring 6-field, evaluated in the host's timezone). Installation makes the schedule available but **does not activate it**. It starts only after adoption under the same digest-bound grant as a routine, and a realm update pauses it until that grant is valid again. A host shows a realm's Manifest Schedules as routines of an agent it proposes for the realm, so they are adopted the same way. A **Manifest Schedule** passes empty args (`{}`), so every `inputSchema` field must be optional. (A scheduled routine in `agents/` instead passes `{trigger: "cron", firedAt}` under a different input contract; see [routines that call a Realm Function](#routines-that-call-a-realm-function-and-dispatch-scoped-replies--forward-looking).) |
 | `onType` | The function is a method on a declared type — callable as `<obj>.<name>(args)` on an in-scope object, not as a bare gateway function. The handler receives the object as `input.self` and the caller's arguments as `input.args`. `schedule` does not combine with `onType`: a scheduled invocation has no receiver. |
 
 A Trigger Registration has one discriminated identity everywhere it appears in adoption, dispatch,
-receipts, and audit: `binding:<binding id, binding revision>` for a `handlers/` binding, or
+receipts, and audit: `routine:<agent name, routine name, routine revision>` for a routine in `agents/`, or
 `manifest-schedule:<namespace, name, schedule revision>` for a manifest entry. The schedule revision
 is a canonical digest of the entry's schedule and invocation schema; `realmDigest` still pins the
 rest of the package.
@@ -2793,47 +2793,98 @@ sandbox callbacks instead.
 
 An unknown `type` is reported against the file and that channel is skipped; the realm's other content loads.
 
-## `handlers/` — Trigger Bindings
+## `agents/` — Agents and their Routines
 
-Where `events/` produces signals, `handlers/` declares **Trigger Bindings** that react to them or
-to a cron schedule. A Realm can ship ready-made bindings that remain inactive until adopted.
-
-> The directory name is historical. A Trigger Binding is the declaration; a Handler is code that
-> implements it. A binding may embed a TypeScript Handler or target a manifest-declared Realm Function.
-
-A TypeScript Trigger Binding is the event-side mirror of a lens: a lens queries and declares focus;
-the binding receives a signal, queries or judges, and may take an effect. Its embedded Handler runs
-through the host's per-dispatch, world/context-scoped code-mode runtime and may be generated or
-hand-written.
+An **Agent** is a named colleague a realm proposes: a job, the routines that do its work, and the
+duties it keeps. Where `events/` produces signals, an agent's **Routines** react to them or to a
+cron schedule. Everything here is a proposal. The world that installs the realm decides who answers
+for the agent, what it may do, and whether it runs, so a realm never declares those things.
 
 ```yaml
-# handlers/pr-review.yml
-- id: pr-review                       # stable id (also the cron job name `handler-<id>`)
-  name: Flag review requests on my PRs
-  description: When a review is requested on one of my PRs, notify me
-  match:
-    signalType: github.pr_review_request   # a Signal type name (from events/ or types/); "*" = any
-  schedule: "0 0 8 * * *"            # optional 6-field cron — fires on a schedule too (omit for signal-only)
-  autonomous: false                  # ships OBSERVE-ONLY; user opts into external effects
-  spec:
-    kind: typescript
-    module: pr-review.handler.ts      # sibling file, inlined at load (or inline `source: |`)
+# agents/reviewer.yml
+name: reviewer                        # stable id; the world shadows a realm agent of the same name
+job: Make sure nobody waits on a review from me
+routing: Pull requests, review requests, who is waiting on whom   # "ask me about…"
+persona: terse                        # optional; a personality the host already has
+routines:
+  - name: pr-review                   # stable within the agent
+    description: When a review is requested on one of my PRs, notify me
+    match:
+      signalType: github.pr_review_request   # a Signal type name (from events/ or types/); "*" = any
+    schedule: "0 0 8 * * *"          # optional 6-field cron; fires on a schedule too (omit for signal-only)
+    spec:
+      kind: typescript
+      module: pr-review.routine.ts    # sibling file under agents/, inlined at load (or inline `source: |`)
+duties:                               # forward-looking: declared and shown, not yet kept by a host
+  - name: no-stale-reviews
+    text: No review request waits more than a working day
+    holds: StaleReviewRequest         # a view, lens or DERIVE label that should stay empty
+    every: "0 0 * * * *"
 ```
-
-A Trigger Binding may declare `match` (signal-triggered), `schedule` (cron-triggered), or both.
 
 | Field | Required | Meaning |
 |---|---|---|
-| `id` | yes | Stable id; the world shadows a Realm Trigger Binding of the same id. |
-| `name` | yes | Display name. |
-| `description` | no | One line shown in the available Trigger Bindings list. |
-| `match.signalType` | no | Signal type that fires it — a JVM signal (`EmailSignal`) or a realm signal (`github.pr_review_request`). `*`/omitted = any signal. |
-| `schedule` | no | 6-field cron expression. A scheduled Trigger Binding is registered on the host's normal cron path (it *is* a cron job). |
-| `autonomous` | no | `false` (default) = observe-only: it reads, judges, and logs what it *would* do, mutating nothing external. `true` lets it apply write effects. |
-| `spec.kind` | yes | `typescript`. |
-| `spec.source` / `spec.module` | yes | Inline TS, or a sibling file inlined at load. |
+| `name` | yes | Stable id. A world agent of the same name shadows the realm's. |
+| `job` | yes | One sentence, in the words of the person who will answer for it. |
+| `routing` | no | What to ask this agent about, for a host that routes questions to colleagues. |
+| `persona` | no | A personality the host already has. The persona is presentation; it confers no authority. |
+| `routines[]` | no | The work it does without being asked. Fields below. |
+| `duties[]` | no | Conditions it keeps true, each naming the view, lens or DERIVE label that should hold. _Forward-looking._ |
+| `state` | no | Only `retired`, to withdraw an agent the realm used to ship. Any other value is ignored. |
 
-### What the inline Handler sees
+**What a realm does not declare.** `sponsor`, `owners`, `operators`, the agent's stage, and a
+routine's or duty's stage are the world's to decide, and a host ignores them in a realm's agent
+file. A realm that could name who answers for its own agent would be vouching for itself, and one
+that could set its own stage would go on duty the moment it was signed. A realm agent arrives off
+duty with no sponsor.
+
+A routine may declare `match` (signal-triggered), `schedule` (cron-triggered), or both.
+
+| Routine field | Required | Meaning |
+|---|---|---|
+| `name` | yes | Stable id within the agent. |
+| `description` | no | One line shown with the agent. |
+| `match.signalType` | no | Signal type that fires it — a host signal or a realm signal (`github.pr_review_request`). `*`/omitted = any signal. |
+| `schedule` | no | 6-field cron expression, registered on the host's normal cron path. |
+| `spec.kind` | yes | `typescript`, or `function` to target a manifest-declared Realm Function (below). |
+| `spec.source` / `spec.module` | for `typescript` | Inline TS, or a sibling file inlined at load. |
+
+### What an agent may ask for — _forward-looking_
+
+These field names are reserved on an agent so that a realm can state what its agent needs and a
+world can grant less. Each is a request; none is honoured by being written down, and a host that
+does not yet read one ignores it.
+
+| Field | A realm requests | The world decides |
+|---|---|---|
+| `authority` | Which verbs its routines call, at what level, with what argument rules | What is granted, which may narrow the request and never widen it |
+| `qos` | Priority class, deadlines, freshness, serialisation, how to degrade | Budgets, source shares, freeze windows |
+| `colleagues` | Which kinds of colleague it expects to message | Which it may actually reach |
+| `roles` | Which [LLM roles](#llm-roles) its work leans on | Which model plays each |
+| `battery` | Cases that must fire and must not fire, run before adoption | Whether the results are good enough to adopt |
+
+### Stage: off duty, observing, on duty
+
+Whether a routine runs, and whether it may change anything, is its agent's **stage**, set by the
+world and never by the realm:
+
+| Stage | Wire | Meaning |
+|---|---|---|
+| Off duty | `off` | Nothing it holds runs. |
+| On duty, observing | `observing` | Its routines run against a read-only gateway: they read and judge, and every effect is refused and reported. |
+| On duty | `on` | Its routines run and may take effects. |
+
+The world may set a stage per routine as well as per agent. This replaces the Trigger Binding's
+`autonomous` flag, which a routine does not have.
+
+### Signed versions
+
+A world runs the version of an agent its sponsor last **signed**: the definition, each routine's
+body and trigger as they were, and a digest of every view a duty names. A realm update, an edit, or
+a changed view appears on the agent as an unsigned change and reaches nothing until the sponsor
+signs again. An agent that has never been signed runs nothing.
+
+### What an inline routine sees
 
 The triggering event is bound in scope as one normalised shape, whatever the signal type:
 
@@ -2847,10 +2898,10 @@ now                         // ISO-8601 timestamp of this run
 dryRun                      // true when being tested — GUARD every external effect with if (!dryRun)
 ```
 
-It reacts through the typed `gateway.*` surface — read with `gateway.kg.query`, judge with `gateway.ai.classify`, act with Realm Functions or `gateway.notifications.createNotification`. Reads and `gateway.ai.*` are always safe; **guard writes with `if (!dryRun)`**.
+A routine reacts through the typed `gateway.*` surface — read with `gateway.kg.query`, judge with `gateway.ai.classify`, act with Realm Functions or `gateway.notifications.createNotification`. Reads and `gateway.ai.*` are always safe; **guard writes with `if (!dryRun)`**.
 
 ```ts
-// pr-review.handler.ts
+// agents/pr-review.routine.ts
 if (trigger !== "signal" || !signal) { console.log("not a signal event"); return; }
 const { repo, number, author } = signal.properties;
 const [owner, name] = String(repo).split("/");
@@ -2865,8 +2916,8 @@ if (isNew) {
 
 ### Activation — _forward-looking_
 
-Installation makes a Realm Trigger Binding **available, not runnable**. Adoption makes it runnable and pins
-the full-package `realmDigest`, Trigger Registration identity, compiled capability-grant digest and
+Installation makes a realm's agent **available, not runnable**. Adoption, which is putting the agent on duty, makes its routines runnable and pins
+the full-package `realmDigest`, Trigger Registration identities, compiled capability-grant digest and
 revision, `worldId`, `contextId`, access-policy revision, and one run-as **`principalId`**. The
 principal may be the adopting human or a service principal they are allowed to delegate to. The
 adoption retains its `adoptionId` across reapproval and records its creator and approvers for audit;
@@ -2881,40 +2932,41 @@ Removing an approver triggers host-policy revalidation of adoptions they approve
 silently revoke or inherit an independently authorized service principal's authority.
 An organization may auto-approve a compatible change only under an explicit reviewed rule; the host
 never silently carries approval forward or expands
-an adoption's authority. The host surfaces available Trigger Bindings in its activation UX and over MCP.
-Activation respects the Realm's `autonomous` default. A scheduled Trigger Binding uses the normal cron path;
-there is no second scheduler. World Trigger Bindings (`config/handlers/`) shadow Realm Trigger Bindings on
-id collision.
+an adoption's authority. The host surfaces a realm's agents in its activation UX and over MCP. Whoever adopts an agent
+becomes its sponsor unless the world names another. A scheduled routine uses the normal cron path;
+there is no second scheduler. World agents shadow realm agents on name collision.
 
-Observe-only preview is a legibility aid, not a proof of future behaviour: realm code can branch on
+An observing stage is a legibility aid, not a proof of future behaviour: realm code can branch on
 inputs or time after adoption. Security comes from the host-bound grant and method classification.
 Only host-vetted gateway metadata may classify a method as `READ`; realm, MCP, or tool-authored
-claims are `UNKNOWN` until reviewed. Observe-only dispatches deny both `EFFECT` and `UNKNOWN`,
+claims are `UNKNOWN` until reviewed. Observing dispatches deny both `EFFECT` and `UNKNOWN`,
 including nested gateway calls.
 
-### Trigger bindings and dispatch-scoped replies — _forward-looking_
+### Routines that call a Realm Function, and dispatch-scoped replies — _forward-looking_
 
-A Trigger Binding may target a Realm Function instead of embedding inline TypeScript. The same binding surface dispatches a manifest-declared function on either execution host:
+A routine may target a Realm Function instead of embedding inline TypeScript. The same routine surface dispatches a manifest-declared function on either execution host:
 
 ```yaml
-# handlers/discord-autoreply.yml
-- id: discord-autoreply
-  name: Reply to questions in the support channel
-  match:
-    signalType: discord.message
-  autonomous: true
-  spec:
-    kind: function
-    function:
-      namespace: discord
-      name: onMessage
+# agents/support.yml
+name: support
+job: Answer questions in the support channel
+routines:
+  - name: discord-autoreply
+    description: Reply to questions in the support channel
+    match:
+      signalType: discord.message
+    spec:
+      kind: function
+      function:
+        namespace: discord
+        name: onMessage
 ```
 
 Rules:
 
-- `function` resolves against the owning realm's manifest. A missing target, or a target carrying `schedule` or `onType`, rejects the binding at load with a recorded problem.
-- The binding is declarative content: it loads (inactive) even when the manifest or executable surface is unavailable, and cannot dispatch in that state.
-- One execution per (signal, binding); two bindings targeting the same function create two executions.
+- `function` resolves against the owning realm's manifest. A missing target, or a target carrying `schedule` or `onType`, rejects the routine at load with a recorded problem.
+- The routine is declarative content: it loads (inactive) even when the manifest or executable surface is unavailable, and cannot dispatch in that state.
+- One execution per (signal, routine); two routines targeting the same function create two executions.
   Before fan-out, the host durably admits autonomous work by atomically inserting its deterministic
   `executionId`, derived from `(adoptionId, trigger-registration generation, concrete trigger
   occurrence)`. The same occurrence therefore retains one id across crash recovery and worker
@@ -2930,13 +2982,13 @@ Rules:
   verifies current `RUNNING` ownership, world epoch, principal authority, and adoption, refusing a
   partitioned stale worker. A host without those controls must declare itself single-instance. v1
   is at-most-once after admission and does not retry guest execution.
-- Trigger Bindings are **inactive until adopted**, regardless of `autonomous`. `autonomous: false` runs the adopted function against a read-only gateway: mutating calls return a coded refusal (`channels.reply` returns `NOT_PERMITTED`). Enforcement is host-side; there is no flag the function is trusted to honor.
-- The dispatch input is trigger-discriminated: `{trigger: "signal", signal: {id, typeName, subject, occurredAt, source, properties}}` for a signal firing; `{trigger: "cron", firedAt: <ISO-8601>}` — no `signal` key — for a scheduled one. A binding may declare both `match` and `schedule`. At load the host validates the target and schema and rejects any trigger shape it can prove incompatible. Immediately before every concrete signal or cron dispatch, it validates the complete input against `inputSchema`; invalid input records a failed dispatch and guest code does not run. Transport, thread, connector, `worldId`, and principal details never appear in either variant.
+- Routines are **inactive until their agent is adopted**. An observing stage runs the function against a read-only gateway: mutating calls return a coded refusal (`channels.reply` returns `NOT_PERMITTED`). Enforcement is host-side; there is no flag the function is trusted to honor.
+- The dispatch input is trigger-discriminated: `{trigger: "signal", signal: {id, typeName, subject, occurredAt, source, properties}}` for a signal firing; `{trigger: "cron", firedAt: <ISO-8601>}` — no `signal` key — for a scheduled one. A routine may declare both `match` and `schedule`. At load the host validates the target and schema and rejects any trigger shape it can prove incompatible. Immediately before every concrete signal or cron dispatch, it validates the complete input against `inputSchema`; invalid input records a failed dispatch and guest code does not run. Transport, thread, connector, `worldId`, and principal details never appear in either variant.
 
 A Realm Function dispatched by a channel signal may reply to the originating thread. The handler receives the trigger-discriminated event as its first argument and `ctx` as its second:
 
 ```js
-// wasm/handlers.js — bound to discord.message by a handlers/ Trigger Binding
+// wasm/handlers.js — invoked on discord.message by the support agent's routine
 export async function onMessage(event, ctx) {
   if (event.trigger !== "signal") return null;                // no reply route off a cron firing
   if (!event.signal.properties.content.includes("?")) return null;
@@ -2948,7 +3000,7 @@ export async function onMessage(event, ctx) {
 }
 ```
 
-`ctx.reply({ text, idempotencyKey })` is the dispatch-scoped reply — sugar over `ctx.gateway.channels.reply`, which takes **no destination and no signal id**: the reply can only reach the thread that triggered the current dispatch, and only while that route is live (connector-configured expiry). It returns `{ status }`, where `status` is one of `SENT` (provider-acknowledged) | `OUTCOME_UNKNOWN` (handoff without acknowledgement) | `NOT_REPLYABLE` (no channel route: cron trigger, non-channel signal) | `NOT_PERMITTED` | `EXPIRED` | `CONNECTOR_UNAVAILABLE` | `REJECTED`. Multiple replies in one execution are serialized by host acceptance order and bounded by a host-configured per-binding and per-route reply budget; exhausting the budget returns `REJECTED`. The receipt key is `(worldId, contextId, executionId, surface, operation, idempotencyKey)`, so the same author key in independent executions never collides. `principalId`, `adoptionId`, `realmDigest`, policy/grant revisions, and `worldEpoch` remain immutable audit or fencing fields on the execution and receipt, not key fields; changing one cannot make the same logical execution spend again. An omitted key is derived from the durably recorded execution-local acceptance sequence. The outbound envelope is `{text}` only. A connector's own outbound messages never fire bindings; the reply budget bounds loops involving other bots that self-echo suppression cannot identify.
+`ctx.reply({ text, idempotencyKey })` is the dispatch-scoped reply — sugar over `ctx.gateway.channels.reply`, which takes **no destination and no signal id**: the reply can only reach the thread that triggered the current dispatch, and only while that route is live (connector-configured expiry). It returns `{ status }`, where `status` is one of `SENT` (provider-acknowledged) | `OUTCOME_UNKNOWN` (handoff without acknowledgement) | `NOT_REPLYABLE` (no channel route: cron trigger, non-channel signal) | `NOT_PERMITTED` | `EXPIRED` | `CONNECTOR_UNAVAILABLE` | `REJECTED`. Multiple replies in one execution are serialized by host acceptance order and bounded by a host-configured per-routine and per-route reply budget; exhausting the budget returns `REJECTED`. The receipt key is `(worldId, contextId, executionId, surface, operation, idempotencyKey)`, so the same author key in independent executions never collides. `principalId`, `adoptionId`, `realmDigest`, policy/grant revisions, and `worldEpoch` remain immutable audit or fencing fields on the execution and receipt, not key fields; changing one cannot make the same logical execution spend again. An omitted key is derived from the durably recorded execution-local acceptance sequence. The outbound envelope is `{text}` only. A connector's own outbound messages never fire routines; the reply budget bounds loops involving other bots that self-echo suppression cannot identify.
 
 Proactive sends to a channel with no triggering signal are a different authority and not part of this contract.
 
@@ -3206,6 +3258,36 @@ Optional. Register custom artifact types the realm introduces, in addition to th
 | `directory` | Yes | Path under world root. **Conventionally `data/<subdir>`** so the artifacts survive factory reset. |
 | `defaultExtension` | No | File extension hint for new artifacts |
 | `servable` | No | If `true`, artifacts of this type are served via the same path resolution as `APP` |
+
+## LLM roles
+
+A realm never names a model. The installing world may not run the model its author used, so a
+realm names a **role**, and each world maps each role to a model it actually has. These role ids
+are part of this contract: a realm that uses one can rely on every conforming host knowing it.
+
+| Role | Intended use |
+|---|---|
+| `chat_best` | High-quality conversational responses — the model a person talks to |
+| `chat_cheap` | Fast, low-cost conversational work where quality matters less |
+| `code_best` | The strongest code generation: building apps, complex transforms |
+| `code_cheap` | Cheaper code generation for simple or bulk edits |
+| `routing` | A small fast model for classification, routing and extraction |
+| `narration` | Rewriting a reply to be spoken aloud |
+| `vc_execution` | Summarising, scoring and labelling query results inside Virtual Cypher: many small calls |
+| `vc_relevance` | Judging whether each result is really *about* a criterion, where a cheap model over-matches |
+| `agentic_rag` | Driving a bounded retrieval loop: searching, reformulating, judging fit |
+
+A prompted action names its role where it would otherwise name a model:
+
+```yaml
+llm:
+  role: code_best
+```
+
+A host resolves an unknown role to its own default model rather than refusing, so a realm written
+against a newer role still runs on an older host, at whatever quality that default gives. An agent
+may say which roles its work leans on, so a world can see before adopting it that, for example, its
+duties need `vc_relevance` mapped to something better than the cheapest model. _Forward-looking._
 
 ## `prompts/`
 
