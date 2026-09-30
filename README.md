@@ -2406,7 +2406,8 @@ scope and overlay metadata; records cannot supply `userId`, `worldId`, `workspac
 `visibleTo` or `__vc*` properties. Sharing uses an explicit host operation.
 Owner producer names take precedence and suppress conflicting captured joins.
 
-This profile has no caching or predicate pushdown. A producer may declare the separate
+This profile has no caching. A producer may declare [filter pushdown](HOSTED_EXECUTION.md#me-captured-producer-pushdown-profile)
+so its handler filters at the source, and the separate
 [paging profile](HOSTED_EXECUTION.md#me-captured-producer-paging-profile) to walk a
 handler's own cursor across multiple calls within one fetch. Me limits each fetch to
 256 keys, 2,048 characters per key, 64 KiB of encoded arguments, 1 MiB of output and

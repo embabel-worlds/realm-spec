@@ -1168,8 +1168,36 @@ over the cap — never a silently truncated result.
 Authority is rechecked before every page and after the last; a revocation partway through
 refuses the whole fetch, never a partial one.
 
-SQL, vector, generative and aggregate producer profiles, result pushdown and partition
-changes remain a separate contract.
+## Me captured producer pushdown profile
+
+A captured producer may name query filters its handler applies itself:
+
+```yaml
+pushdown:
+  - property: verdict
+    argument: verdict
+```
+
+When a query pins `property` on the producer's target label with `=` or `IN`, the handler
+receives `argument` as a list of the string values the query allows, next to the key
+argument. `m.verdict = 'blunder'` arrives as `"verdict": ["blunder"]`, and
+`m.verdict IN ['mistake', 'blunder']` as `"verdict": ["mistake", "blunder"]`. Two filters on
+the same property pass only the values both allow, which can be an empty list. A property the
+query does not filter on, or filters another way (`>`, `CONTAINS`, a function over the value),
+passes nothing, and the handler receives the argument only when there is something to pass.
+
+Pushdown changes what the handler fetches, never what the query returns: the graph applies
+every filter to the returned rows again. A handler that ignores the argument returns the same
+answer after fetching more.
+
+`property` is an identifier and `argument` matches `[a-z][A-Za-z0-9]{0,63}`. A producer declares
+at most 16 rules. The host refuses an argument equal to the key argument or the page argument,
+the same argument named twice, and, at bind time, an argument the handler's input schema closes
+out with `additionalProperties: false`. With paging declared, the pushed arguments go with every
+page. The query diagnostics name the pushed arguments on each call.
+
+SQL, vector, generative and aggregate producer profiles and partition changes remain a
+separate contract.
 
 ## Authenticated source ingress
 
