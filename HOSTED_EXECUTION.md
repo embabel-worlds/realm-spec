@@ -867,11 +867,9 @@ names a method to call, or a `decoration`, which sets fields directly:
  "effect":"private-storage"}
 ```
 
-`target.label` names a type with a registered source contract — the host looks up that
-contract's own label and identity property to check for an existing owned node, rather
-than checking that the calling Realm itself declares the type; a type the Realm declares
-but no source contract registers is refused here, and a registered label the Realm never
-declared is admitted the same way. `target.key` is text, at most 2048 bytes. `method` is required for a `method-write-back` proposal and refused for a
+`target.label` names a label the operator has opened to proposals (see the owner decision
+below). Declaring the type in the Realm is neither needed nor enough: a label outside the
+operator's list is refused however the Realm declares it. `target.key` is text, at most 2048 bytes. `method` is required for a `method-write-back` proposal and refused for a
 `decoration`. `fields` is a nonempty map; the 64-entry limit and the 4-level nesting bound
 apply to every nested object or array in the tree, not only the top level, so a guest
 cannot dodge the entry cap by nesting extra keys one level down. A key reserved for host
@@ -887,19 +885,85 @@ unknown top-level field; a malformed target; `fields` absent, empty, over the en
 depth limit, or holding a reserved key; a negative or fractional `expectedRevision`; and an
 `effect` outside the two named values. No refusal reflects the value that triggered it.
 
-A handler submits a proposal with a `write_propose` host call and gets a proposal id back
-synchronously; it never learns how, or whether, the proposal is later confirmed. The host
-checks that the target belongs to the calling installation's own owner and World before
-accepting it. Each installation holds at most 32 pending proposals at once; a submission beyond that cap
-is refused. Revoking the installation makes its still-pending proposals unusable, but the
-mailbox itself is only cleared opportunistically, on that installation's next submission or
-retrieval — a revoked installation's stale entries can sit in memory until then, though
-they can no longer be taken. Nothing on this path
-applies a proposal to the graph. Submitting a proposal needs its own approval, distinct
-from `cypher_query`: the owner grants it through the same admission preview, adopt and
-upgrade flow as other resources, and it is listed separately from graph-query approval, so
-approving a Realm's reads never also approves its write proposals. The confirmation that
-follows a proposal, and the write it may produce, remain a separate later contract.
+A Wasm handler submits a proposal with `ctx.writePropose(proposal)`, which is the
+`write_propose` host call under a fixed name. It resolves to `{proposalId}` once the proposal
+is filed, and a refusal rejects with one fixed message that names nothing. The handler never
+learns how, or whether, the owner decides:
+
+```typescript
+export async function archiveNote(input, ctx) {
+  const { proposalId } = await ctx.writePropose({
+    version: 1,
+    kind: "method-write-back",
+    target: { label: "Note", key: input.noteId },
+    method: "archive",
+    fields: { archived: true },
+    effect: "private-storage",
+  });
+  return { proposalId };
+}
+```
+
+Before filing, the host checks that the owner has approved write proposals for this
+installation and that the target is exactly one private record the calling handler's own
+owner already holds under that label and key. A proposal for a record the owner does not
+have, or one that someone else can see, is refused. Each installation holds at most 32
+pending proposals at once; a submission beyond that cap is refused. Pending proposals live
+in host memory, so a restart discards them. Revoking or upgrading the installation makes its
+pending proposals unusable; they are cleared the next time that installation submits or the
+owner lists them. Submitting needs its own approval, distinct from `cypher_query`: the owner
+grants it through the same admission preview, adopt and upgrade flow as other resources, and
+it is listed separately from graph-query approval, so approving a Realm's reads never also
+approves its write proposals. A trigger in `observe` mode refuses `write_propose` for the
+whole invocation.
+
+### The owner decision
+
+Nothing is written until the owner accepts. The owner lists a Realm's pending proposals and
+decides each one:
+
+```http
+GET /api/v1/realms/{realmName}/proposals
+POST /api/v1/realms/{realmName}/proposals/{proposalId}/decision
+Content-Type: application/json
+
+{"decision":"accept"}
+```
+
+The list is a JSON array of `{proposalId, kind, target, method, fields, effect,
+expectedRevision}`. The decision body is exactly `{"decision":"accept"}` or
+`{"decision":"reject"}`, at most 256 bytes, with no query string. A decision takes the
+proposal out of the list whatever its outcome, so each proposal is decided once. The answer
+is `{"outcome": ...}`:
+
+| Outcome | Status | Meaning |
+| --- | --- | --- |
+| `APPLIED` | 200 | The write committed. |
+| `REJECTED` | 200 | The owner said no. Nothing was written. |
+| `REFUSED` | 400 | The proposal fails its checks at decision time: the installation was revoked or moved to a new revision, the approval was withdrawn, or the operator's policy does not allow this write. |
+| `CONFLICT` | 409 | The proposal is not pending (already decided or unknown), or `expectedRevision` does not match the record's current revision. |
+| `UNKNOWN` | 503 | The host cannot say whether the write landed. Read the record before proposing again. |
+
+The operator decides what an accepted proposal may do, and a Realm cannot add to it. For
+each label the operator opens, it names the property that identifies a record, optionally a
+revision property, the properties a `decoration` may set, and the methods a
+`method-write-back` may call. A method maps each of its argument names to the property the
+value lands on, and a proposal must supply exactly those arguments. On accept the host also
+requires:
+
+- `effect: "private-storage"`. An `external` proposal is filed and shown, and accepting it is
+  refused.
+- flat `fields`: each value a string of at most 8 KiB, a number, a boolean or null. Nested
+  objects and arrays pass submission and are refused on accept.
+- an `expectedRevision` only where the operator named a revision property. When it did, the
+  proposal's revision must equal the record's, and an applied write moves the record's
+  revision on by one.
+- the record is still exactly one private record of the owner's, checked again under a lock
+  inside the write.
+
+Authority is checked before the write, inside it and just before it commits. A revoke that
+lands mid-write rolls the whole write back. An applied write leaves a private receipt
+recording the proposal, the installation and the kind of write, and changes nothing else.
 
 ## Me captured producer paging profile
 
