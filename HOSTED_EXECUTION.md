@@ -1044,30 +1044,73 @@ The reference browser profile accepts `apps/<name>.html` (or `.htm`) with a matc
 
 `version`, `handlers` and the optional `resources` field described below are the only
 fields accepted. Handler names are unique and must appear in the same captured handler
-manifest. The reference limits are 32 apps per capture, 32 handlers per app, 8 KiB per
-declaration and 1 MiB of UTF-8 HTML per entry point. Unknown fields, duplicate JSON keys
-and unsupported versions are refused.
+manifest. An empty `handlers` list is allowed, for a page that calls nothing back. The
+reference host allows 32 apps per capture, 32 handlers per app and 8 KiB per declaration.
+Unknown fields, duplicate JSON keys and unsupported versions are refused.
+
+Everything an app needs travels inside the page, because the frame has no network. An app
+that carries its own engine, fonts or data set needs room for it, so the size limits are the
+operator's to set. The defaults are:
+
+| Limit | Default |
+| --- | --- |
+| The HTML entry point | 10 MiB |
+| Declared resources per app | 16 |
+| Any one resource | 10 MiB |
+| All of an app's resources together | 10 MiB |
+
+An app over any of these is refused when it is opened. The host does not trim it to fit. Check
+the host's published limits before shipping an app near the defaults.
 
 The browser receives a `realm.call(handler, arguments)` function. It returns a promise for
 the handler's JSON result, or rejects when the operation is refused or unavailable. Arguments
-must be a JSON object. The selected handler must be declared by the app and independently
-approved. Its API, query and channel capabilities retain their separate grants. A request
-cannot select an owner, World, capture or installation through its arguments.
+must be a JSON object and default to `{}`. The selected handler must be declared by the app
+and independently approved. Its API, query and channel capabilities retain their separate
+grants. A request cannot select an owner, World, capture or installation through its
+arguments.
 
-Realm HTML runs in an opaque browser sandbox. It cannot read the owner page's storage,
-cookies or DOM, call arbitrary owner APIs, open popups or submit forms. The reference
-profile requires self-contained HTML with inline or embedded assets; direct network access
-and the general owner app runtime are unavailable. Bundle external code and styles during
-authoring. Realm JavaScript and templates cannot be imported into owner-origin pages through
+One call runs at a time. A second `realm.call` made while the first is still waiting
+rejects straight away with "A Realm call is already running", so an app that fires several
+reads chains them (`await` one before starting the next). A call gives up after about two
+minutes. Every refusal, whatever its cause, rejects with the same message, "Realm call
+refused or unavailable", so an app cannot tell a revoked grant from a failed handler and
+should show one plain error for both. The encoded request is capped at 1 MiB and the handler
+name at 256 characters.
+
+```html
+<script>
+  async function load() {
+    try {
+      const notes = await realm.call("notes.list", { limit: 20 });
+      const tags = await realm.call("notes.tags"); // after the first one settles
+      render(notes, tags);
+    } catch (e) {
+      showError("Could not load your notes.");
+    }
+  }
+  load();
+</script>
+```
+
+Realm HTML runs in a frame sandboxed to scripts only, with an opaque origin. It cannot read
+the owner page's storage, cookies or DOM, call arbitrary owner APIs, open popups, navigate
+the top page or submit forms. The page's content policy blocks every network request
+(`fetch`, `XMLHttpRequest`, WebSocket, remote scripts, styles, images and fonts). Scripts
+may be inline and may use `eval`, so an app can carry a bundled engine. Images and fonts
+work only as `data:` or `blob:` URLs. Bundle external code and styles during authoring. If
+the app reloads or navigates its own frame, the bridge stops answering until the owner
+reopens the app. Realm JavaScript and templates cannot be imported into owner-origin pages through
 app-serving URLs. Owner-authored workspace apps and trusted World-template apps retain
 the host's owner app runtime.
 
 The host mediates calls through a document-bound message channel and a retained session.
 App and handler approval, installation revision and expiry remain attached to nested calls,
 host callbacks and final result release. Revocation or any installation revision change
-invalidates the session. The reference host permits one active call, up to 256 calls and a
-15-minute lifetime per session, with at most 16 sessions per owner and 256 per host. Restart
-discards sessions. Opening a new session requires current approval. The bridge does not retry
+invalidates the session. Every page load opens a session. The reference host permits one
+active call, up to 256 calls and a 15-minute lifetime per session, with at most 256 sessions
+per host. An owner holds at most 16; opening a 17th ends that owner's oldest session, so a
+reload never locks the owner out, and the page that lost its session sees its next call
+refused. Restart discards sessions. Opening a new session requires current approval. The bridge does not retry
 effects automatically; a refused response cannot undo an effect that already completed.
 
 In the reference owner API, `GET /api/v1/realm-browser/{realm}/approvals` lists the current
@@ -1087,11 +1130,12 @@ asset directory, alongside its existing handler allowlist:
 
 Each resource path has the shape `apps/<the entry point's own filename, extension
 included>.assets/<file>.css` or `.js` — an entry point saved as `notes.htm` takes resources
-from `apps/notes.htm.assets/`, not `apps/notes.html.assets/`; at most 16 resources are
-allowed, each at most 262,144 bytes, 1,048,576 bytes combined. The host inlines every declared stylesheet inside its own `<style>` block and
-every script inside its own `<script>` block, in declaration order, ahead of the app's HTML
-and inside the same sandboxed guest document described above. An app that declares no
-resources renders exactly as it did before this profile existed.
+from `apps/notes.htm.assets/`, not `apps/notes.html.assets/`. The count and size limits are
+the operator's, with the defaults in the table above. A path listed twice is refused. The
+host inlines every declared stylesheet inside its own `<style>` block and every script inside
+its own `<script>` block, in declaration order, ahead of the app's HTML and inside the same
+sandboxed guest document described above. An app that declares no resources is served as
+its HTML alone.
 
 Both the entry point's own filename and each resource's own file name are bounded basenames
 — up to 120 characters of letters, digits, `_`, `.` and `-` before the extension, the first
@@ -1104,8 +1148,9 @@ case — refused when the resource is read, never escaped into the page. A resou
 content is otherwise inlined verbatim; it carries no separate sandbox or origin of its own,
 since it becomes part of the same guest document that requested it.
 
-Images, fonts, resources drawn from another origin, component imports and the owner's own
-app runtime remain outside this profile.
+Image and font files, resources drawn from another origin, component imports and the
+owner's own app runtime remain outside this profile. Embed an image or font as a `data:` URL
+inside a stylesheet or script instead.
 
 ## Delegated source ingress
 

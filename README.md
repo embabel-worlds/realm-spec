@@ -3010,6 +3010,14 @@ it wherever the app is listed. An app that declares none is listed as before.
 This is per-app and separate from the realm's own [`icon`](#icons): a realm
 shipping three apps can give each its own.
 
+**A captured realm's apps work differently.** Each page ships with an `apps/<name>.html.app.json`
+declaration naming the handlers it may call, and the owner approves every app on its own. The
+page runs in a sandboxed frame with no network: it reaches the realm only through
+`realm.call(handler, arguments)`, one call at a time, and everything it needs is inlined into
+the page. The rest of this section describes the conventional app runtime, which a captured
+page does not get. See [captured browser apps](HOSTED_EXECUTION.md#captured-browser-apps) for
+the declaration, the operator's size limits (10 MiB by default) and the bridge.
+
 Realm apps must use the same architecture as vibe-coded apps: tool-gateway calls via `fetch('/api/v1/tools/{name}')`, no direct external fetches. They have access to all the user's tools (MCP, learned APIs, etc.) because they run in the user's authenticated session.
 
 **Prefer invoking a named Lens over calling raw tools.** An app that posts to `/api/v1/lenses/{id}/invoke` gets a result the realm has already shaped, scoped and caveated; an app that assembles raw tool calls duplicates that reasoning in a browser where it cannot be tested or reused. Keep the app to presentation: it should choose a Lens and render what comes back, never decide what to fetch. This also honours the rule below — an app must not accept or submit arbitrary Cypher or JavaScript from a browser.
