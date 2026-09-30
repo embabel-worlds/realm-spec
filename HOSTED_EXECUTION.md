@@ -14,6 +14,9 @@ handler. Every host effect checks that retained authority. Retries and nested ca
 it; a newer approval does not authorize an older invocation. Removing a grant blocks later
 operations but cannot undo an effect that has already completed.
 
+In a Wasm guest, every `ctx.gateway.<namespace>.<operation>` call and `ctx.writePropose` returns
+a promise. It resolves to the host's answer or rejects with the refusal.
+
 A source grant has its own revision. It remains stable across unrelated handler or consumer
 approval changes, allowing self-consumption and cyclic pipelines. Removing and reapproving a
 source, changing its artifact or reinstalling the Realm invalidates the old source reference.
@@ -252,8 +255,9 @@ consumer at a time. A consumer that never asked cannot be granted one, and the o
 and withdraw the grant from the same surface as the other approvals. A call from a consumer
 with no grant is refused and no session is ever created, and so is a call from a sender the
 owner has not paired. A refusal is returned to the guest as a code and never rides in an
-exception message, so a Realm can answer with its own pairing hint. A call from a paired sender
-returns the assistant's final message and nothing else; a session evicted mid-turn still
+exception message, so a Realm can answer with its own pairing hint. In a Wasm guest the call
+rejects with an error whose `code` is `ASSISTANT_NOT_GRANTED` or `SENDER_NOT_PAIRED`. A call
+from a paired sender returns the assistant's final message and nothing else; a session evicted mid-turn still
 answers, and the next call gets a fresh one. Withdrawing the grant refuses the call in flight
 and everything after it, while unpairing a sender lets the turn in flight finish and stops the
 next one. What a sender wrote never reaches a log line, a meter or a span.
@@ -343,6 +347,9 @@ The reference host excludes live Realm `events/` files from runtime loading when
 execution is selected. This covers scheduled polls, manual polls, webhook event projection
 and declared-signal discovery, including a World previously loaded in compatibility mode.
 The host checks the execution model before resolving live Realm directories.
+
+With admission on, a captured Realm's `actions/`, `events/` and `webhooks/` are not loaded, and
+each of those kinds the Realm ships is reported once as a loading problem.
 
 Captured data-pipe publication and approved channel consumers keep their existing paths.
 Generic captured polling and webhook event manifests remain unsupported. Explicit owner
@@ -618,7 +625,7 @@ version: 1
 name: catalog
 endpoint: https://api.example.com/graphql
 auth: bearer
-token-env: catalog-token
+credential: catalog-token
 operations:
   - name: productById
     document: "query($id: ID!) { product(id: $id) { name price } }"
@@ -630,14 +637,20 @@ The endpoint is a single fixed HTTPS origin pinned in the manifest: host present
 info, port 443 or the default, no query string, fragment, percent-encoded path segment or
 `.`/`..` traversal segment, and no `{`/`}` placeholder that could turn it into a template —
 reaching it follows the same no-redirect rule an ordinary captured API destination already
-follows. Authentication is a bearer token or an API key in a named header, drawn from the
-owner's wallet the same way an ordinary captured API operation's `token-env` is, plus up to
-16 fixed `X-` headers. The source may name a credential the Realm declares with `credential:`,
-alone or beside a `token-env:` naming the same secret. A query then sends the secret the owner
-bound to that credential, and is refused while nothing is bound. At most 32 operations are declared per Realm, each with at most 32
-variables; a variable is one of four scalar types — string, integer, number or boolean —
+follows. Authentication is a bearer token or an API key in a named `header`, plus up to 16
+fixed `X-` headers. The source names a credential the Realm declares with `credential:`, and a
+query sends the secret the owner bound to that credential and is refused while nothing is
+bound. The legacy `token-env:` spelling, which names an owner wallet entry the way an ordinary
+captured API operation's `token-env` does, is deprecated; a source may carry it alone or beside a
+`credential:` naming the same secret. At most 32 operations are declared per Realm, each with at
+most 32 variables; a variable is one of four scalar types — string, integer, number or boolean —
 with an optional required flag, a length range for string-shaped values (default 0 to 2048,
 capped at 2048), and an optional enumeration of up to 128 allowed values.
+
+A guest calls an operation as `ctx.gateway.<name>.<operation>({variables})`. An operation whose
+call name (`<name>.<operation>`, `<name>_<operation>`, or the two camel-cased and joined with
+`_`) collides with a captured API operation's, or is a host call's own name such as
+`channel_publish`, refuses every operation in the Realm.
 
 The manifest is read from the single fixed path `graphql/operations.yml`; no other file
 name is recognized, and the file itself is capped at 64 KiB. Each persisted document is
@@ -816,7 +829,8 @@ or failed run, or an output that fails to bind this way, is reported to the conv
 and leaves the output unbound; the process is not aborted. Goals that name undeclared types, reuse an owner action or goal name, or duplicate
 another Realm's goal are excluded with a loading problem. The owner may switch a goal off by
 name. Owner-authored planner steps keep their own trust boundary and are the way a chat
-request becomes a Realm input type; Realm `actions/` are not loaded.
+request becomes a Realm input type; Realm `actions/` are not loaded, and a captured Realm that
+ships them gets one loading problem saying so.
 
 ## Me captured trigger profile
 
@@ -1022,7 +1036,8 @@ result that is not an object holding exactly `rows` and `next`; a next cursor th
 text or null, is empty, or carries a control character or invalid Unicode; a next cursor over
 2048 bytes; a next cursor repeating one already seen in the same fetch; a non-null next cursor
 on the final permitted page; more pages than declared; and a cumulative row count or byte total
-over the cap — never a silently truncated result.
+over the cap — never a silently truncated result. A refused producer fetch carries a reason
+code.
 Authority is rechecked before every page and after the last; a revocation partway through
 refuses the whole fetch, never a partial one.
 
@@ -1154,7 +1169,9 @@ operator's to set. The defaults are:
 | All of an app's resources together | 10 MiB |
 
 An app over any of these is refused when it is opened. The host does not trim it to fit. Check
-the host's published limits before shipping an app near the defaults.
+the host's published limits before shipping an app near the defaults. realm-synth holds an app to
+the same defaults unless it is given the host's limits (see
+[app limits and profiles](TYPESCRIPT_REALMS.md#app-limits-and-profiles)).
 
 The browser receives a `realm.call(handler, arguments)` function. It returns a promise for
 the handler's JSON result, or rejects when the operation is refused or unavailable. Arguments

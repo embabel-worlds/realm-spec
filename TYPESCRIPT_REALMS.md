@@ -16,8 +16,9 @@ what the host does with it. The host-side detail lives in
 
 The rules for a conventional realm (no `execution`, or `execution: "conventional"`) are the rest of
 this specification. The two never mix: `triggers`, `queries`, `apps`, `credentials`, `dataPipes`,
-`capturedLenses` and `watches` are refused on a conventional realm, and `goals`, `producers`,
-`apis` and `channels` take the captured forms described here once `execution` is `"captured"`.
+`capturedLenses`, `watches` and `graphql` are refused on a conventional realm, and `goals`,
+`producers`, `apis` and `channels` take the captured forms described here once `execution` is
+`"captured"`.
 
 Most examples below come from one realm, `oncall-radar`, which reads a status page API and tells
 the owner what is down. Channels, dependencies and data pipes use small realms of their own.
@@ -25,6 +26,7 @@ the owner what is down. Channels, dependencies and data pipes use small realms o
 ## Contents
 
 - [Build a realm](#build-a-realm)
+- [App limits and profiles](#app-limits-and-profiles)
 - [Realm metadata](#realm-metadata)
 - [Handlers](#handlers)
 - [The handler context](#the-handler-context)
@@ -73,9 +75,18 @@ bun packages/realm-synth/src/cli.ts my-realm/realm.ts --out my-realm/dist \
 - `--watch` rebuilds in a fresh process on every change under the definition's directory. It
   ignores `.embabel/`, `dist/`, `node_modules/`, dotfiles, the `--out` directory and the
   `--types` file. A failed rebuild prints its message and keeps watching.
-- A refusal prints `synth failed: <message>` and exits with status 1. A usage error exits with
-  status 2. Warnings, such as a deprecated `tokenEnv`, go to standard error and do not stop the
-  build.
+- `--profile` and the `--app-*` flags are described under
+  [app limits and profiles](#app-limits-and-profiles).
+- A refusal prints `synth failed: <message>` and exits with status 1. A usage error prints the
+  reason and the usage text and exits with status 2. Usage errors are an unknown flag, a flag
+  with no value, a second definition file, a size or count synth cannot read, an unknown
+  profile name, and a profile file that is missing, is not JSON or does not follow the profile
+  format.
+- A flag that takes a value always takes the next argument, whatever it looks like: `--out
+  --types` writes to a directory named `--types`. The one argument that is not a flag or a flag's
+  value is the definition file.
+- Warnings, such as a deprecated `tokenEnv`, an undeclared goal type or a feature the chosen
+  profile does not load, go to standard error and do not stop the build.
 
 Synth clears the output directory and writes it again on every run, so keep nothing by hand in
 it. It sorts every key, so the same `realm.ts` always gives the same bytes. It refuses a value
@@ -113,9 +124,11 @@ What lands where:
 | `actions`, `focuses`, `webhooks`, `events` | `actions/<name>.yml`, `focuses/<name>.yml`, `webhooks/<realm name>.yml`, `events/<name>.yml` |
 
 The last row is the conventional form of those fields, and synth writes it for a captured realm
-as well. The reference host does not load `actions/` or `events/` for a captured realm (see the
-[goal profile](HOSTED_EXECUTION.md#me-captured-goal-profile) and
-[legacy event declarations](HOSTED_EXECUTION.md#legacy-event-declarations)), so leave them out.
+as well. With admission on, the reference host does not load a captured realm's
+`actions/`, `events/` or `webhooks/`, and reports each of those kinds once as a loading problem
+(see the [goal profile](HOSTED_EXECUTION.md#me-captured-goal-profile) and
+[legacy event declarations](HOSTED_EXECUTION.md#legacy-event-declarations)). Leave them out.
+`--profile reference-wasm` warns about each one.
 
 Each captured directory (`goals/`, `triggers/`, `producers/`, `lenses/`, `watches/`) holds at most
 32 files, 8 KiB each and 64 KiB together. The host refuses the whole directory past those limits,
@@ -129,9 +142,87 @@ checked name. Under `defineRealm`, a goal, producer or `dataPipes` consumer nami
 realm does not declare is a compile error on that line. A lens declared through `watching`, or a
 channel or consumer declared through `connecting`, is checked too; that error is reported on the
 `defineRealm` argument and names the allowed handlers. An app's `handlers` list is not checked at
-compile time, and synth refuses an undeclared name there. A realm with no `handlers` block may name
-no handler at all. Written with `satisfies Realm`, none of these names are checked by the
-compiler.
+compile time. Written with `satisfies Realm`, none of these names are checked by the compiler.
+
+Synth checks every one of these names as well, whichever way the realm is written. It refuses a
+goal, producer, `dataPipes` consumer, lens, channel, keepalive, `connecting` consumer or app that
+names a handler the realm does not declare, since the host dispatches only to handlers the
+realm's manifest registers. A realm with no `handlers` block declares no handlers, so any handler
+name anywhere in it is refused.
+
+## App limits and profiles
+
+A captured browser app is held to size limits (see [apps](#apps)). The defaults are 10 MiB for the
+page, 10 MiB for any one resource, 10 MiB for all of one app's resources together, and 16
+resources. They match what the reference host runs with out of the box. The host operator sets
+the host's own limits, and a host with larger ones takes larger apps, so each limit synth
+applies can be raised or lowered:
+
+```bash
+bun packages/realm-synth/src/cli.ts realm.ts --out dist --app-limit 32MiB
+```
+
+| Flag | Sets |
+| --- | --- |
+| `--app-limit <size>` | The page, per-resource and total byte limits together. |
+| `--app-page-limit <size>` | The page. |
+| `--app-resource-limit <size>` | Any one resource. |
+| `--app-total-limit <size>` | All of one app's resources together. |
+| `--app-resource-count <n>` | How many resources one app may list. |
+
+- A size is a whole number of bytes, or a whole number with a unit: `K`, `KB` or `KiB`, `M`, `MB`
+  or `MiB`, `G`, `GB` or `GiB`, in any letter case. Every unit is binary, so `32MB` and `32MiB`
+  are both 33,554,432 bytes. A size or count comes to at least 1, and there is no upper cap.
+- A per-limit flag wins over `--app-limit`.
+- A refusal names the limit it hit and the flag that raises it.
+- Raising a limit in synth does not raise the host's. An app over the host's limits is still
+  refused when the owner opens it.
+
+A realm can run in more than one execution environment, and they do not all load the same things.
+`--profile` checks the realm against one of them:
+
+```bash
+bun packages/realm-synth/src/cli.ts realm.ts --out dist --profile reference-wasm
+bun packages/realm-synth/src/cli.ts realm.ts --out dist --profile ./my-host.json
+```
+
+A profile only adds warnings and refusals, and may carry its own app limits. Synth writes every
+file the realm declares whether a profile is given or not. A feature the profile marks `warn`
+prints one warning, starting `PROFILE <name>:` and naming each place the realm uses it, and the
+build carries on. A feature marked `refuse` stops the build with every place it is used. A
+feature left out of the profile is supported.
+
+The two built-in profiles describe the reference host running handlers under Wasm and under
+Docker. They have the same rules and no app limits of their own:
+
+| Feature id | What it finds | `reference-wasm`, `reference-docker` |
+| --- | --- | --- |
+| `layers` | A non-empty `layers` list | refuse |
+| `captured-actions` | `actions` on a captured realm | warn |
+| `captured-events` | `events` on a captured realm | warn |
+| `captured-webhooks` | `webhooks` on a captured realm | warn |
+| `captured-focuses` | `focuses` on a captured realm | supported |
+
+Any other environment is described in a JSON file whose path ends in `.json`:
+
+```json
+{
+  "name": "my-host",
+  "features": { "layers": "supported", "captured-actions": "refuse" },
+  "appLimits": { "pageBytes": 67108864 }
+}
+```
+
+| Field | Rule |
+| --- | --- |
+| `name` | Required, not blank. Messages name the profile by it. |
+| `description` | Optional text. |
+| `features` | Optional. Maps a feature id from the table above to `"supported"`, `"warn"` or `"refuse"`. |
+| `appLimits` | Optional. Any of `pageBytes`, `resourceBytes`, `resourcesTotalBytes` and `resourcesPerApp`, each a whole number of at least 1. |
+
+An unknown field, feature id or limit is refused, so a typo cannot turn a check off. The app limits
+a build uses come from the defaults, then the profile's `appLimits`, then the flags, and each
+later one wins.
 
 ## Realm metadata
 
@@ -232,6 +323,7 @@ the generated types say which members each handler gets.
 | --- | --- | --- |
 | `ctx.log(message)` | every handler | Writes one line to the host log under the realm's name. |
 | `ctx.gateway.<api>.<operation>(args)` | every handler | Calls an approved API operation. The host attaches the owner's bound credential; the guest never sees it. See [APIs](#apis). |
+| `ctx.gateway.<graphql name>.<operation>({variables})` | every handler | Runs one of the realm's persisted GraphQL queries. See [GraphQL](#graphql). |
 | `ctx.gateway.cypher.query({cypher, params})` | every handler | Reads the owner's graph under the separate `cypher_query` approval. See [graph queries](#graph-queries-and-view-references). |
 | `ctx.gateway.channel.publish(...)`, `.position(...)`, `.publishBatch(...)` | every handler | Files events on the realm's own sources. See [publishing events](#publishing-events). |
 | `ctx.deps.<name>` | every handler, when dependencies are declared | A mounted dependency, such as SQLite. See [dependencies](#dependencies). |
@@ -242,9 +334,11 @@ the generated types say which members each handler gets.
 | `ctx.frame`, `ctx.cursor`, `ctx.publish(...)` | consumers declared in `connecting` | The published event, the consumer's cursor, and a publish shortcut. |
 | `ctx.assistant.chat(text, thread)` | consumers that declared `assistant: true` | Asks the owner's assistant and resolves to its final message. |
 
-The generated `ctx.gateway` types each API namespace the realm declares. Every other namespace,
-`cypher` and `channel` included, is typed `unknown`, so a handler that calls one gives it a type
-of its own; the [graph queries](#graph-queries-and-view-references) section shows one.
+The generated `ctx.gateway` types each API namespace and the GraphQL namespace the realm
+declares, and `ctx.gateway.channel` with the receipts the host returns (see
+[publishing events](#publishing-events)). Every other namespace, `cypher` included, is typed
+`unknown`, so a handler that calls one gives it a type of its own; the
+[graph queries](#graph-queries-and-view-references) section shows one.
 
 A channel or consumer handler has an alias of its own, named after the verb it points at:
 
@@ -264,13 +358,18 @@ declares, so synth refuses a type named `RealmTypes`, `HandlerContext`, `Handler
 `WriteProposal`, and, in a realm with channels or consumers, `Frame` and the other channel
 declarations.
 
-Every host call answers with its result or rejects. A refusal carries one fixed message and never
-says which rule failed, so treat it as "not allowed at the moment" and carry on. The assistant
-call is the one exception: its refusal carries a code, `ASSISTANT_NOT_GRANTED` or
-`SENDER_NOT_PAIRED`, so a realm can answer with its own pairing hint.
+Every `ctx.gateway.<namespace>.<operation>` call and `ctx.writePropose` returns a promise, which
+resolves to the result or rejects. A refusal carries one fixed message and never says which rule
+failed, so treat it as "not allowed at the moment" and carry on. The assistant call is the one
+exception: it rejects with an `AssistantRefusal`, an `Error` whose `code` is
+`ASSISTANT_NOT_GRANTED` (the consumer has no assistant grant) or `SENDER_NOT_PAIRED` (the owner
+has not paired this sender), so a realm can answer with its own pairing hint. The code is a
+property of the error and never part of its message. A refusal that gives no reason has no
+`code`. The generated types export `AssistantRefusal` and `AssistantRefusalCode` for a realm that
+declares channels or consumers.
 
 ```typescript
-import type { ReplyConsumerHandler } from "../.embabel/realm.d.ts";
+import type { AssistantRefusal, ReplyConsumerHandler } from "../.embabel/realm.d.ts";
 
 export const reply: ReplyConsumerHandler = async (event, ctx) => {
   const chatId = String(event.chatId);
@@ -278,8 +377,7 @@ export const reply: ReplyConsumerHandler = async (event, ctx) => {
     const answer = await ctx.assistant.chat(String(event.text), chatId);
     await ctx.gateway.telegram.sendMessage({ body: { chat_id: chatId, text: answer } });
   } catch (e) {
-    const reason = e instanceof Error ? e.message : String(e);
-    if (reason.includes("SENDER_NOT_PAIRED")) {
+    if ((e as AssistantRefusal).code === "SENDER_NOT_PAIRED") {
       await ctx.gateway.telegram.sendMessage({
         body: { chat_id: chatId, text: "Ask the owner for a pairing code, then send: pair <code>" },
       });
@@ -385,10 +483,14 @@ What synth checks, which is also what the host refuses at install:
   with every `$ref` pointing under `#/components/`, at most 256 paths, and each operation id
   declared once. `apis/apis.yml` is at most 64 KiB.
 - Exactly one of `credential` or `tokenEnv`, and a `credential` must be declared in
-  `credentials`. `tokenEnv` is deprecated: it matches `[A-Za-z_][A-Za-z0-9_]{0,127}`, may not
-  start with `__embabel_sql_v1__`, and becomes an implicit credential whose id is the variable
-  name, with a warning. Two entries reading one `tokenEnv` must declare the same `auth`.
-  `apis.yml` always carries `credential:`, and `token-env:` beside it on the deprecated path.
+  `credentials`. `tokenEnv` is deprecated in favour of a declared credential: it matches
+  `[A-Za-z_][A-Za-z0-9_]{0,127}`, may not start with `__embabel_sql_v1__`, and becomes an
+  implicit credential, with a warning. The implicit credential's id is the variable name spelled
+  as written, which the declared-id pattern does not cover; the host reads a credential id in
+  either spelling (see [credentials and databases](HOSTED_EXECUTION.md#credentials-and-databases)).
+  Two entries reading one `tokenEnv` must declare the same `auth`. `apis.yml` always carries
+  `credential:`, and `token-env:` beside it on the deprecated path. An `auth: "path"` entry
+  cannot use `tokenEnv`.
 - `operationIds` lists 1 to 128 reads, each a `GET` with no request body. `writeOperationIds`
   lists up to 64 writes, each a `POST`, `PUT`, `PATCH` or `DELETE`. An operation is in one list,
   never both, and every listed id must exist in the document.
@@ -422,18 +524,81 @@ every call.
 
 ## GraphQL
 
-`defineRealm` has no GraphQL field, and synth does not write `graphql/operations.yml`. The host
-reads that file when it is present, following the
-[captured GraphQL operation profile](HOSTED_EXECUTION.md#me-captured-graphql-operation-profile):
-one fixed HTTPS endpoint, persisted query documents only, and variables checked against their
-declaration. The source may name a declared credential with `credential:` in place of
-`token-env:`; a query then sends the secret the owner bound to that credential, and is refused
-while nothing is bound.
+A captured realm may declare one GraphQL source with `graphql`: one fixed HTTPS endpoint and a
+fixed set of persisted queries. Synth writes it to `graphql/operations.yml`, the only path the
+host reads.
 
-A realm that needs GraphQL adds that file to the synthesized output itself. Synth clears the
-output directory on every run, so add it after each run. Synth does not read the file, so a
-credential that only `graphql/operations.yml` names counts as unreferenced and is refused;
-declare such a credential only when an API entry or a channel references it as well.
+```typescript
+credentials: {
+  "catalog-token": { kind: "bearer", description: "A read token for the product catalog." },
+},
+graphql: {
+  name: "catalog",
+  endpoint: "https://api.example.com/graphql",
+  auth: "bearer",
+  credential: "catalog-token",
+  operations: {
+    productById: {
+      document: "query($id: ID!) { product(id: $id) { name price } }",
+      variables: [{ name: "id", type: "string", required: true, maxLength: 64 }],
+    },
+  },
+},
+```
+
+A handler calls each operation under the source's `name`, passing only `variables`, and gets back
+the response's `data` member:
+
+```typescript
+import type { ProductHandler } from "../.embabel/realm.d.ts";
+
+interface ProductData {
+  product: { name: string; price: number } | null;
+}
+
+export const product: ProductHandler = async (input, ctx) => {
+  const data = (await ctx.gateway.catalog.productById({
+    variables: { id: input.id },
+  })) as ProductData;
+  return { product: data.product };
+};
+```
+
+The generated types give each operation an argument typed from its declared variables. A
+required variable is a required field, an optional one may be left out or `null`, an `enum`
+becomes a union of its values, and a variable the operation does not declare is a compile
+error. An operation with no variables takes no argument, or `{}`. The result is `unknown`, so
+narrow it before use.
+
+| Field | Rule |
+| --- | --- |
+| `name` | The gateway namespace: `[A-Za-z_][A-Za-z0-9_-]{0,63}`. |
+| `endpoint` | One fixed `https://` origin on the default port, with no user info, query, fragment, `.` or `..` segment, percent-encoded path or `{` placeholder. |
+| `credential` | A credential the realm declares under `credentials`. Naming it here counts as a reference. |
+| `auth` | `"bearer"`, sent in `Authorization`, or `"api-key"`, which needs `header`. |
+| `header` | `"api-key"` only: the header the key travels in, `[A-Za-z][A-Za-z0-9-]{0,127}`, and not one the host sets itself (`Authorization`, `Cookie`, `Host`, `Idempotency-Key` and the like). |
+| `headers` | Up to 16 fixed headers, each named `X-...`, used once and never the key's own header, holding at most 1,024 printable ASCII characters with no `${` substitution. |
+| `operations` | 1 to 32 persisted queries, keyed by operation name, `[A-Za-z_][A-Za-z0-9_-]{0,63}`. |
+| `operations.<name>.document` | The query text, at most 16 KiB. |
+| `operations.<name>.variables` | Up to 32, each `{name, type, required?, minLength?, maxLength?, enum?}`. `type` is `string` (GraphQL `String` or `ID`), `integer` (`Int`), `number` (`Float`) or `boolean`. `minLength` and `maxLength` are whole numbers from 0 to 2048, and `enum` holds up to 128 strings, finite numbers or booleans. |
+
+What synth checks, which is also what the host refuses at load:
+
+- Each document is exactly one `query`. A mutation, subscription, fragment, `...` spread,
+  `__schema` or `__type` introspection, a second operation or a variable default is refused.
+- The document's variable signature matches the `variables` list exactly: the same names, each
+  once, each `$name: Scalar` with `!` exactly where `required` is true. A list type such as
+  `[String!]` is refused.
+- An operation's call names (`<name>.<operation>`, `<name>_<operation>`, and the two camel-cased
+  and joined with `_`) may not collide with an API operation's, and may not be a host call's own
+  name such as `channel_publish` or `cypher_query`. The host refuses every operation in the realm
+  over one such clash.
+- `graphql/operations.yml` is at most 64 KiB.
+
+A query sends the secret the owner bound to the credential and is refused while nothing is bound.
+The host-side rules, including the checks on each
+supplied value and on the response, are in the
+[captured GraphQL operation profile](HOSTED_EXECUTION.md#me-captured-graphql-operation-profile).
 
 ## Channels
 
@@ -488,9 +653,9 @@ Channel, source and consumer keys are file names: `[a-z][a-z0-9-]{0,63}`. The ho
 reconnects, budgets, limits, cursors and whether a channel starts, so a channel refuses `name`,
 `cursor`, `reconnect`, `autoStart`, `limits`, `budget`, `secret` and `secretRef`. A source refuses
 `name`, `kind` and `installationId`, and a consumer refuses `name` and `checkpoint`. None of the
-files carries a `name`; the file name is the name. When the realm has a `handlers` block, synth
-refuses a channel, keepalive or consumer handler it does not declare, the same check
-`defineRealm` makes at compile time. A duration is a whole number of seconds or minutes, greater
+files carries a `name`; the file name is the name. Synth refuses a channel, keepalive or consumer
+handler the realm does not declare, the same check `defineRealm` makes at compile time, and a
+realm with no `handlers` block declares none. A duration is a whole number of seconds or minutes, greater
 than zero: `"30s"` or `"5m"`.
 
 **Websocket.** The host dials `url` (`wss://`) with the bound credential and hands every frame
@@ -569,8 +734,11 @@ intake: {
   step, and `when.equals` is a string or a finite number. A websocket or long-poll channel may not
   declare `verification`.
 
-A websocket or long-poll URL may carry `{credential}` at most once, and may not point at
-`localhost`, a `.localhost` name or a bare IPv4 or IPv6 address. A channel pointed at an origin
+A websocket or long-poll URL may carry `{credential}` at most once, in its path or query, and
+nothing else in braces: `{token}`, `{Credential}` or a lone `{` or `}` is refused, since the host
+substitutes `{credential}` and nothing else. The URL may not point at `localhost`, a `.localhost`
+name or a bare IPv4 or IPv6 address. Each `channels/<name>.yml` synth writes is at most 64 KiB,
+the most the host reads from one channel file. A channel pointed at an origin
 the operator has not allowed refuses to start. Frame budgets, reconnect backoff and the credential
 rules on outbound bytes are in [channels](HOSTED_EXECUTION.md#channels).
 
@@ -590,8 +758,9 @@ A name may be declared one way or the other, never both.
 
 A **consumer** is a handler that reads one source. Declare it in `connecting`
 (`{ source, handler, assistant? }`) or in `dataPipes.consumers` (`{ handler }`, at most 128). A
-`dataPipes` consumer's handler is written `namespace.verb`; synth checks its spelling, and
-`defineRealm` checks that the realm declares it. `dataPipes` takes only `sources` and
+`dataPipes` consumer's handler is written `namespace.verb`, and must be a handler the realm
+declares: `defineRealm` checks it at compile time, and synth refuses one the realm does not
+declare, since the host refuses that consumer and every trigger bound to it. `dataPipes` takes only `sources` and
 `consumers`, and `data-pipes.yml` is at most 64 KiB.
 
 The consumer is handed each event as its first argument and as `ctx.frame`, and the host
@@ -657,16 +826,42 @@ export const updates: UpdatesResponseHandler = async (body, ctx) => {
 ```
 
 `ctx.publish(source, event, key, options)` files `event`, a JSON object, under one of the realm's
-own sources and resolves to `{id, offset, replayed}`. `key` is the event id, and `options` may
+own sources and resolves to a `Receipt`, `{id, offset, replayed}`, where `id` is the journal
+receipt's id. `key` is the event id, and `options` may
 carry `streamId` and `occurredAt`. The journal matches a retry on source, key, stream and
 payload, so a frame the host redelivers gets the first receipt back (`replayed: true`) and keeps
 the first `occurredAt`. The same event id with a different payload is refused. Only the names in
 the realm's `sources` block compile as `source`.
 
-Any handler can use `ctx.gateway.channel.publish({source, eventId, streamId, occurredAt, payload})`,
-and a poller can commit a page and its cursor together with `position` and `publishBatch`. The
-generated types leave `ctx.gateway.channel` as `unknown`. The limits and retry windows are under
-[publication](HOSTED_EXECUTION.md#publication) and
+Any handler in a captured realm can publish through `ctx.gateway.channel`, which the generated
+types type with the receipts the host returns:
+
+```typescript
+import type { RecordHandler } from "../.embabel/realm.d.ts";
+
+export const record: RecordHandler = async (_input, ctx) => {
+  const { receiptId, offset, replayed } = await ctx.gateway.channel.publish({
+    source: "changes",
+    eventId: "note-42-v3",
+    streamId: "note-42",
+    occurredAt: new Date().toISOString(),
+    payload: { noteId: "note-42" },
+  });
+  ctx.log(`filed ${receiptId} at ${offset}${replayed ? " (replayed)" : ""}`);
+  return {};
+};
+```
+
+| Call | Resolves to |
+| --- | --- |
+| `publish({source, eventId, streamId, occurredAt, payload})` | `ChannelPublishReceipt`: `{receiptId, offset, replayed}` |
+| `publishBatch({source, batchId, expectedPosition, nextPosition, events})` | `ChannelBatchReceipt`: `{receiptId, offsets, replayed}`, one offset per event in order |
+| `position({source})` | `{position}`, a string, or `null` before the first batch |
+
+A poller commits a page and its cursor together with `position` and `publishBatch`; each event in
+`events` is `{eventId, streamId, occurredAt, payload}`. The receipt from `ctx.gateway.channel`
+names its id `receiptId`, and the `ctx.publish` shortcut names it `id`. The limits and retry
+windows are under [publication](HOSTED_EXECUTION.md#publication) and
 [polling positions](HOSTED_EXECUTION.md#polling-positions).
 
 ## Dependencies
@@ -729,7 +924,8 @@ export const addExpense: AddExpenseHandler = async (input, ctx) => {
   the first install that persists, and ship a changed schema under a new dependency key.
 - `layers` takes `name@version` references (a registry id and one to three dot-separated
   numbers), which synth checks and writes, sorted, to `dependencies/manifest.json`. The reference
-  host refuses a realm that declares them, so leave them out.
+  host refuses a realm that declares them, so leave them out. `--profile reference-wasm` and
+  `--profile reference-docker` refuse them too.
 
 ## Types
 
@@ -737,7 +933,7 @@ export const addExpense: AddExpenseHandler = async (input, ctx) => {
 `types/<realm name>.yml`. The generated `.d.ts` has one interface per type. A captured producer's
 `targetLabel` and a proposal's `target.label` are graph labels; declare the types they name here
 so a query and a person can find them. Goals resolve their `input` and `output` against the
-World's types, and synth does not check that they are declared.
+World's types; synth warns about a goal type this realm does not declare (see [goals](#goals)).
 
 ## Producers
 
@@ -810,8 +1006,9 @@ from that list is the next rule to declare. See the [pushdown profile](HOSTED_EX
 join field and every pushdown `property` are identifiers, `[A-Za-z_][A-Za-z0-9_]{0,63}`.
 `page.argument` and every pushdown `argument` match `[a-z][A-Za-z0-9]{0,63}`, and no two of the
 key, page and pushdown arguments may share a name. At most 16 pushdown rules, each listed once.
-Under `defineRealm`, `handler` must be a handler the realm declares; synth checks only that it is
-written `namespace.verb`. If the handler's input schema sets `additionalProperties: false`, list
+`handler` must be a handler the realm declares: `defineRealm` checks it at compile time, and synth
+refuses one the realm does not declare, since the host refuses the producer. If the handler's
+input schema sets `additionalProperties: false`, list
 the page and pushdown arguments in its `properties`, or the host refuses the producer at bind
 time.
 
@@ -822,8 +1019,8 @@ producers chain, and the engine stages each hop after the one before it. See
 [Virtual Cypher §2](VIRTUAL_CYPHER.md#two-concepts-the-rest-of-the-spec-leans-on).
 
 **Limits and scope.** Each fetch is at most 256 keys of up to 2048 characters, 64 KiB of
-arguments, 1 MiB of output and 1,024 rows, across all pages together. Producer results are never
-cached. Only producers from the querying handler's own installation run, each as a nested call
+arguments, 1 MiB of output and 1,024 rows, across all pages together. A refused fetch carries a
+reason code. Producer results are never cached. Only producers from the querying handler's own installation run, each as a nested call
 that needs that handler's grants as well as its own.
 
 ## Graph queries and view references
@@ -902,10 +1099,15 @@ goals: {
 The key is `[a-z][a-z0-9-]{0,63}`. `input` and `output` are type names (`[A-Z][A-Za-z0-9]{0,63}`);
 `input` may be `UserInput`, which reaches the handler as `{"content": text}`, and `output` may
 not. `description` is at most 512 characters. Synth writes the file as `version`, `goal`,
-`handler`, `input`, `output` and `description`. Under `defineRealm`, `handler` must be a handler
-the realm declares; synth checks only that it is written `namespace.verb`, and does not check the
-type names. The host resolves `input` and `output` against the World's declared types, publishes
-the goal as `<key>_goal` and binds the handler's object result as the output type. See the
+`handler`, `input`, `output` and `description`. `handler` must be a handler the realm declares:
+`defineRealm` checks it at compile time, and synth refuses one the realm does not declare. The
+host resolves `input` and `output` against the World's declared types, publishes the goal as
+`<key>_goal` and binds the handler's object result as the output type.
+
+Synth warns when `input` or `output` names a type this realm does not declare (`UserInput` as
+`input` excepted), and the build carries on. The type may come from another realm or from the
+owner, which synth cannot see, so the goal may still work. If nothing in the World declares it, the host
+drops the goal when it loads, and the warning is the first place the author hears of it. See the
 [goal profile](HOSTED_EXECUTION.md#me-captured-goal-profile).
 
 ## Lenses and watches
@@ -983,9 +1185,10 @@ apps: {
   only, each listed once, and synth copies each one. The host inlines each one in its own
   `<style>` or `<script>` block ahead of the page. A stylesheet containing `</style` or a script
   containing `</script` is refused.
-- The operator sets the size limits. The defaults are 10 MiB for the page, 16 resources, 10 MiB
-  for any one resource and 10 MiB for all resources together. Synth refuses an app past these
-  defaults whatever the operator has set.
+- The host operator sets the host's size limits. The defaults are 10 MiB for the page, 16
+  resources, 10 MiB for any one resource and 10 MiB for all resources together. Synth holds an app
+  to the same defaults, and the `--app-*` flags or a profile change what it holds the app to for
+  a host with other limits (see [app limits and profiles](#app-limits-and-profiles)).
 
 Inside the page, `realm.call(handler, args)` calls a handler and resolves to its result:
 
@@ -1090,8 +1293,10 @@ at run time.
 | --- | --- |
 | Files per captured directory | 32, 8 KiB each, 64 KiB together |
 | Captured names (goal, trigger, lens, watch, channel, source, consumer, credential keys) | `[a-z][a-z0-9-]{0,63}` |
+| Channel file | 64 KiB; `{credential}` at most once, nothing else in braces |
 | Credentials | 32; description 512 characters; 1 to 32 oauth2 scopes |
 | API entries / operations | 32 / 128; 64 writes; 64 parameters per operation; 256 paths and 1 MiB per document; 64 KiB `apis.yml`; 16 fixed headers |
+| GraphQL | 1 to 32 operations, 32 variables each, 16 KiB per document, 64 KiB file, 16 fixed headers, 128 enum values |
 | Data-pipe sources, consumers | 128 each; 256 bytes per source field; 64 KiB file |
 | Websocket keepalive | 10 seconds to 5 minutes |
 | Long-poll interval | at least 1 second (default 5), and never below the operator's floor (host) |
@@ -1102,5 +1307,5 @@ at run time.
 | Graph query | 16 KiB statement, 128 parameters, `LIMIT` 1 to 512, 1 MiB of rows (host) |
 | View aliases | 32 |
 | Watches | 16; at least 5 minutes apart; criteria 2048 bytes, judge 1024 bytes; 32 items per run (host) |
-| Apps | 32 apps, 32 handlers and 16 resources each, 8 KiB manifest; 10 MiB page, 10 MiB per resource and in total |
+| Apps | 32 apps, 32 handlers each, 8 KiB manifest; by default 16 resources, 10 MiB page, 10 MiB per resource and in total, changed with the `--app-*` flags or a profile |
 | Write proposals | 64 KiB, 64 entries per object, 4 levels, 2048-byte key, 32 pending per installation (host; the generated types also refuse a fifth level) |

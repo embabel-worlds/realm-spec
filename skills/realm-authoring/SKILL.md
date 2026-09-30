@@ -455,9 +455,14 @@ and the handler types (`--types .embabel/realm.d.ts`);
 [TypeScript realms](../../TYPESCRIPT_REALMS.md) is the full contract, with the owner's approval
 steps at the end. Use `defineRealm` in place of `satisfies Realm`: under it, a goal, producer,
 lens, channel or consumer naming a handler the realm does not declare is a compile error. Synth
-refuses an undeclared handler in an app, a lens, a channel or a consumer, and checks only the
-spelling of a goal's, producer's or `dataPipes` consumer's handler, so the compiler is the check
-that catches those.
+refuses an undeclared handler everywhere a realm names one: a goal, producer, `dataPipes`
+consumer, app, lens, channel or consumer. A realm with no `handlers` block declares none, so
+every handler name in it is refused. An undeclared goal `input` or `output` type is a warning,
+since another realm may declare it; if nothing does, the host drops the goal.
+
+Check the realm against the host it will run on with `--profile reference-wasm` (or a JSON
+profile for another host). It warns about conventional `actions`, `events` and `webhooks` in a
+captured realm, which the reference host does not load, and refuses `layers`.
 
 **A captured producer is a handler.** No `kind`, no `operation`, no `args`, no `cache`:
 
@@ -499,7 +504,8 @@ producers: {
 - Limits per fetch: 256 keys, 1 MiB of output, 1,024 rows across all pages. No result cache.
 
 **Graph reads are `ctx.gateway.cypher.query`, under their own approval.** The generated types
-leave `ctx.gateway.cypher` as `unknown`, so give it a type in the handler:
+type API and GraphQL namespaces and `ctx.gateway.channel`, and leave `ctx.gateway.cypher` as
+`unknown`, so give it a type in the handler:
 
 ```ts
 type CypherGateway = {
@@ -533,9 +539,10 @@ const { rows } = await (ctx.gateway as unknown as CypherGateway).cypher.query({
   each call before the next. Every refusal rejects with the same message; show one plain error.
 - No `fetch`, sockets, remote scripts, styles, images or fonts. Bundle everything; declare CSS
   and JS under `resources` (`apps/<page>.assets/`) and embed images and fonts as `data:` URLs.
-- The operator sets the size limits. The defaults are 10 MiB for the page, 16 resources, and
-  10 MiB for one resource and for all of them together, and synth refuses an app past them.
-  Stay well under them.
+- The host operator sets the size limits. The defaults are 10 MiB for the page, 16 resources,
+  and 10 MiB for one resource and for all of them together, and synth refuses an app past them.
+  For a host with larger limits, raise synth's with `--app-limit 32MiB` or the per-limit flags.
+  Otherwise stay well under them.
 
 **Write through a proposal, never directly.** `ctx.writePropose({ version: 1, kind, target,
 fields, effect, method? })` files a write for the owner to accept and resolves to `{ proposalId }`.
