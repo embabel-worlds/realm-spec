@@ -433,7 +433,9 @@ push.
 Declare sources and consumers in `data-pipes.yml` using the
 [hosted data-pipe contract](../../HOSTED_EXECUTION.md#data-pipes). A source names its stream
 and event type. A consumer names a captured handler; the owner separately approves its exact
-source and handler. A declaration creates no grant.
+source and handler. A declaration creates no grant. In a TypeScript realm, write them as
+`dataPipes` in `realm.ts`, and declare channel-fed sources and consumers with `connecting`; see
+[sources, consumers and triggers](../../TYPESCRIPT_REALMS.md#sources-consumers-and-triggers).
 
 Use `gateway.channel.publish` in a captured Docker handler or `ctx.gateway.channel.publish`
 in a Wasm handler. Keep `streamId`, `eventId` and payload stable on retry. The journal matches a retry on those,
@@ -448,10 +450,14 @@ approval.
 ## Captured realms: producers, graph reads, apps and proposals
 
 A captured realm runs from a copy the owner admitted, and every capability is its own owner
-approval. Write it as one `realm.ts` with `defineRealm` and let `realm-synth` generate the files;
+approval. Write it as one `realm.ts` with `defineRealm` and let `realm-synth` generate the files
+and the handler types (`--types .embabel/realm.d.ts`);
 [TypeScript realms](../../TYPESCRIPT_REALMS.md) is the full contract, with the owner's approval
-steps at the end. `defineRealm` is what checks every `namespace.verb` you name, so use it over
-`satisfies Realm`.
+steps at the end. Use `defineRealm` in place of `satisfies Realm`: under it, a goal, producer,
+lens, channel or consumer naming a handler the realm does not declare is a compile error. Synth
+refuses an undeclared handler in an app, a lens, a channel or a consumer, and checks only the
+spelling of a goal's, producer's or `dataPipes` consumer's handler, so the compiler is the check
+that catches those.
 
 **A captured producer is a handler.** No `kind`, no `operation`, no `args`, no `cache`:
 
@@ -484,17 +490,27 @@ producers: {
 - Only `=` and `IN` push. `>`, `CONTAINS` and a function over the value are applied by the graph
   after the fetch. Say so in the target type's description, so nobody assumes they are cheap.
 - If the handler's input schema has `additionalProperties: false`, list the page and pushdown
-  arguments in `properties`, or the host refuses the producer at bind time.
+  arguments in `properties`, or the host refuses the producer at bind time. List them in
+  `properties` anyway: the generated `<Verb>Input` type only has the fields the schema declares.
 - A query reaches the target only along a join from a bound anchor. `MATCH (i:Incident)` on its
   own is refused; `MATCH (s:Service {serviceId: $id})-[:HAS_INCIDENT]->(i)` works. One
   producer's target can anchor the next producer's join, so chain them where a source is keyed
   on another source's records.
 - Limits per fetch: 256 keys, 1 MiB of output, 1,024 rows across all pages. No result cache.
 
-**Graph reads are `ctx.gateway.cypher.query`, under their own approval.**
+**Graph reads are `ctx.gateway.cypher.query`, under their own approval.** The generated types
+leave `ctx.gateway.cypher` as `unknown`, so give it a type in the handler:
 
 ```ts
-const { rows } = await ctx.gateway.cypher.query({
+type CypherGateway = {
+  cypher: {
+    query(request: { cypher: string; params?: Record<string, unknown> }): Promise<{
+      rows: Record<string, unknown>[];
+    }>;
+  };
+};
+
+const { rows } = await (ctx.gateway as unknown as CypherGateway).cypher.query({
   cypher: "MATCH (s:Service)-[:HAS_INCIDENT]->(i:Incident) WHERE s.team = $team " +
           "RETURN s.name AS service, i.incidentId AS incident LIMIT 100",
   params: { team: input.team },
@@ -511,14 +527,15 @@ const { rows } = await ctx.gateway.cypher.query({
 
 **Browser apps run sandboxed with no network.**
 
-- Declare each page under `apps` with the handlers it may call. The page reaches the realm
-  only through `realm.call(handler, args)`.
+- Declare each page under `apps` with the handlers it may call; synth refuses a handler the
+  realm does not declare. The page reaches the realm only through `realm.call(handler, args)`.
 - **One `realm.call` at a time.** A second call while one is waiting rejects at once, so `await`
   each call before the next. Every refusal rejects with the same message; show one plain error.
 - No `fetch`, sockets, remote scripts, styles, images or fonts. Bundle everything; declare CSS
   and JS under `resources` (`apps/<page>.assets/`) and embed images and fonts as `data:` URLs.
 - The operator sets the size limits. The defaults are 10 MiB for the page, 16 resources, and
-  10 MiB for one resource and for all of them together. Stay well under them.
+  10 MiB for one resource and for all of them together, and synth refuses an app past them.
+  Stay well under them.
 
 **Write through a proposal, never directly.** `ctx.writePropose({ version: 1, kind, target,
 fields, effect, method? })` files a write for the owner to accept and resolves to `{ proposalId }`.
