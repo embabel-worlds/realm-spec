@@ -1026,7 +1026,7 @@ producers chain, and the engine stages each hop after the one before it. See
 
 **Limits and scope.** Each fetch is at most 256 keys of up to 2048 characters, 64 KiB of
 arguments, 1 MiB of output and 1,024 rows, across all pages together. A refused fetch carries a
-reason code. Producer results are never cached. Only producers from the querying handler's own installation run, each as a nested call
+[reason code](HOSTED_EXECUTION.md#me-captured-producer-paging-profile). Producer results are never cached. Only producers from the querying handler's own installation run, each as a nested call
 that needs that handler's grants as well as its own.
 
 ## Graph queries and view references

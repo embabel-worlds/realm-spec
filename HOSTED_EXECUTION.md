@@ -1043,10 +1043,29 @@ result that is not an object holding exactly `rows` and `next`; a next cursor th
 text or null, is empty, or carries a control character or invalid Unicode; a next cursor over
 2048 bytes; a next cursor repeating one already seen in the same fetch; a non-null next cursor
 on the final permitted page; more pages than declared; and a cumulative row count or byte total
-over the cap — never a silently truncated result. A refused producer fetch carries a reason
-code.
+over the cap — never a silently truncated result.
 Authority is rechecked before every page and after the last; a revocation partway through
 refuses the whole fetch, never a partial one.
+
+A refused producer fetch carries one reason code. The query error reads
+`Captured producer refused (<CODE>)` and never includes the handler's own words.
+
+| Code | Meaning |
+|---|---|
+| `NOT_CURRENT` | The owner's grants or the producer's binding are gone. |
+| `WRONG_OWNER` | Someone other than the owner, or another World, asked. |
+| `CANCELLED` | The query was cancelled before the fetch finished. |
+| `KEY_BOUND` | Too many keys, or a key too long or not encodable. |
+| `HANDLER_FAILED` | The handler threw, or the call to it was refused. |
+| `RESULT_NOT_JSON` | The handler's answer was not JSON. |
+| `RESULT_NOT_OBJECT` | The handler's answer was not a list of objects. |
+| `ROW_BOUND` | More rows than one fetch may carry. |
+| `RESERVED_FIELD` | A row used a field name the host keeps for itself. |
+| `PAGE_SHAPE` | A page was not `{rows, next}`, or its cursor was not usable text. |
+| `PAGE_BOUND` | More pages than declared, or a next cursor on the last permitted page. |
+| `CURSOR_REPEAT` | A next cursor repeated one already seen in the same fetch. |
+| `ARGUMENT_BYTES` | The encoded arguments were over the limit. |
+| `RESULT_BYTES` | The answer, or all pages together, were over the byte limit. |
 
 ## Me captured producer pushdown profile
 
