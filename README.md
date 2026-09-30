@@ -2078,8 +2078,10 @@ Three consequences of the table worth stating:
 
 ### Authoring a wasm realm
 
-A realm written with `defineRealm` gets every file below generated from one `realm.ts`; see
-[TypeScript realms](TYPESCRIPT_REALMS.md). By hand, the minimum is three files — the realm, the handlers, and the manifest that registers them:
+A realm written with `defineRealm` gets `realm.yml` and `dist/manifest.json` generated from one
+`realm.ts`, and synth copies the handler entry it names (`wasm/handlers.ts` by default) beside
+them; see [TypeScript realms](TYPESCRIPT_REALMS.md). By hand, a realm needs at least the three
+files below: the realm, the handlers and the manifest that registers them.
 
 ```yaml
 # realm.yml
