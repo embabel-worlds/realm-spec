@@ -2377,6 +2377,8 @@ after output validation. Validation cannot reverse effects the handler already m
 - The identity model: execution is bound independently to a world and acting principal by the host; no host puts a credential or scope key inside the unit.
 - Declarative schemas remain independent of placement. Activating a declaration requires host support and the applicable Realm and resource approvals.
 
+### Captured handler producers
+
 The current Me captured-execution profile excludes producers and virtual joins loaded from live
 Realm files. Owner-authored definitions remain available. Producer execution and cache reuse
 retain World and declaration checks; shared cache partitions include both. The legacy Wasm
@@ -2409,7 +2411,43 @@ Owner producer names take precedence and suppress conflicting captured joins.
 This profile has no caching. A producer may declare [filter pushdown](HOSTED_EXECUTION.md#me-captured-producer-pushdown-profile)
 so its handler filters at the source, and the separate
 [paging profile](HOSTED_EXECUTION.md#me-captured-producer-paging-profile) to walk a
-handler's own cursor across multiple calls within one fetch. Me limits each fetch to
+handler's own cursor across multiple calls within one fetch.
+
+```yaml
+# producers/incidents-by-service.yml
+version: 1
+name: incidents-by-service
+handler: status.incidents
+keyArgument: serviceIds
+joins:
+  - {targetLabel: Incident, anchorLabel: Service, relationship: HAS_INCIDENT,
+     keyField: serviceId, recordKeyField: serviceId}
+page: {argument: cursor, maxPages: 4}
+pushdown:
+  - {property: impact, argument: impact}
+  - {property: status, argument: status}
+```
+
+```typescript
+// wasm/handlers.ts
+export async function incidents(input, ctx) {
+  // input.serviceIds: string[]; input.cursor: absent on the first page
+  // input.impact / input.status: string[], present only when the query pinned them
+  const page = await ctx.gateway.statuspage.listIncidents({
+    services: input.serviceIds.join(","),
+    impact: input.impact?.join(","),
+    status: input.status?.join(","),
+    after: input.cursor,
+  });
+  return { rows: page.items, next: page.nextCursor ?? null };
+}
+```
+
+A query reaches the producer only by traversing one of its joins from a bound anchor, as in
+[Virtual Cypher §2](VIRTUAL_CYPHER.md#two-concepts-the-rest-of-the-spec-leans-on). A producer's
+target may anchor another producer's join, so producers chain. Declare a pushdown rule for
+every property the handler can filter on, since a filter left undeclared makes the handler
+fetch everything the key allows. Me limits each fetch to
 256 keys, 2,048 characters per key, 64 KiB of encoded arguments, 1 MiB of output and
 1,024 rows. It accepts 32 flat declaration files, 8 KiB per file, 64 KiB total and
 eight joins per binding. All fields shown are required; unknown fields, duplicate
