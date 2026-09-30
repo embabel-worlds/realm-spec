@@ -96,9 +96,11 @@ and verified declaration. `streamId` identifies a logical event stream within th
 It does not select another source or World.
 
 Publication returns `{receiptId, offset, replayed}` after the durable append. Keep the
-producer identity, stream ID, event ID, timestamp and payload stable on retry. An identical
-retry returns the original receipt; conflicting content for the same retry identity is
-refused. A receipt confirms acceptance, not completed downstream effects.
+producer identity, stream ID, event ID and payload stable on retry. A retry is the same event
+when its source, event ID, stream ID and payload match, whatever its `occurredAt` says: it
+returns the original receipt, and the first stored time stands. A different payload or stream
+under the same event ID is refused. A receipt confirms acceptance, not completed downstream
+effects.
 
 The governed reference implementation accepts at most 64 KiB UTF-8 JSON with nesting depth
 32 and string values up to 65,536 characters. It rejects extra fields, duplicate keys,
@@ -382,8 +384,8 @@ host's free-space reserve; without it the host refuses as full rather than rewri
 Exact retries hold inside bounded windows after reclamation. The reference host defaults to
 keeping the latest 256 batch receipts per source, configurable from 16 through 65,536, and
 the identities of the last 256 reclaimed events, configurable from 0 through 65,536: inside those
-windows an identical retry returns its receipt or the original offsets and conflicting
-content is refused; outside them a retry is appended as a new event. This is the
+windows a retry of the same event returns its receipt or the original offsets, even when it
+carries a fresh `occurredAt`, and conflicting content is refused; outside them a retry is appended as a new event. This is the
 at-least-once boundary between a host receipt and an external effect. A positioned batch
 whose exact receipt is still within the retained window replays that receipt even when its
 expected position no longer matches the source's current position; a positioned batch is
@@ -980,9 +982,10 @@ revision. The owner and selected World come from authentication, and the stream 
 type come from the verified declaration. Payload fields cannot override that authority.
 The request is strict JSON, at most 64 KiB, with the journal's existing event limits.
 
-HTTP 200 returns `{receiptId, offset, replayed}` after durable append. Retry the exact event
-ID and content after an uncertain response; a restart returns the same receipt. Changed
-content for an existing event ID returns 409. Capacity returns 429 and storage failure 503.
+HTTP 200 returns `{receiptId, offset, replayed}` after durable append. Retry the same event
+ID, stream and payload after an uncertain response; a restart returns the same receipt. A
+retry stamped with a later `occurredAt` is still the same event and keeps the first time.
+Changed payload or stream for an existing event ID returns 409. Capacity returns 429 and storage failure 503.
 Admission is checked again during the write. Acknowledgment confirms storage, not successful
 consumer execution. World load restores approved source bindings and replays pending offers.
 
@@ -1120,8 +1123,9 @@ header over a secure transport is a deployment responsibility; the receiver itse
 bearer syntax and request shape and does not require or verify TLS on this route. The host
 derives attribution and limits independently of untrusted event data.
 
-Append MUST commit event, attribution, receipt and quota consumption atomically. Exact
-response-loss retries return the same receipt without spending quota again. Rotation MUST
+Append MUST commit event, attribution, receipt and quota consumption atomically. A
+response-loss retry of the same event returns the same receipt without spending quota again,
+and a fresh `occurredAt` on the retry does not make it a new event. Rotation MUST
 invalidate the old verifier while preserving delegation identity, expiry, quota and retry
 identity. Expiry and revocation deny new appends and receipt replay; a recorded event does
 not restore authority. A different delegation cannot reuse another submitter's event ID to
