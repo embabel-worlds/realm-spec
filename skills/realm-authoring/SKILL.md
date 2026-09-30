@@ -62,7 +62,8 @@ checkout is mounted.
 | fetch a type **on demand** by traversal | `types/` `virtualJoins:` + `producers/` | "Joining types on demand" (Virtual Cypher) |
 | a named, parameterized ANSWER a caller runs by name | `views/` | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
 | query the graph from a code_mode script or skill | `gateway.kg.query` | "CypherScript" |
-| query the graph from a WASM HANDLER | `ctx.cypher.query` — see the warning under CypherScript | "CypherScript" |
+| query the graph from a WASM HANDLER | `ctx.gateway.cypher.query` | "CypherScript" and "Captured realms" |
+| a CAPTURED realm written in TypeScript (`defineRealm`) | `realm.ts`, built by `realm-synth` | TYPESCRIPT_REALMS.md, and "Captured realms" below |
 | hand-authored gateway methods / **verbs** | `src/api/*.ts` + `tests/` | "`src/` and `tests/`" |
 | prove the answer surface survives the author | `tests/questions.yml` + `tests/verify.sh` | "`tests/`" — REQUIRED once anything takes words from a person |
 | an MCP server (last resort — prefer `apis/` for anything API-backed) | `mcp/` | "`mcp/`" |
@@ -191,8 +192,8 @@ have different admitted operations.
 Where supported, `ctx.gateway.cypher.query({cypher, params})` binds values through `params`;
 arrays and nested objects remain structured. Raw SQL gateway calls are not a portable guest
 capability. External SQL uses approved producers or typed operations. The governed captured
-path reaches Cypher through the same call once the owner separately approves `cypher_query`.
-Check the
+path reaches Cypher through the same call once the owner separately approves `cypher_query`;
+the rules for that call are under "Captured realms" below. Check the
 [hosted execution contract](../../HOSTED_EXECUTION.md#reference-implementation) before using
 a host-resource callback.
 
@@ -443,3 +444,85 @@ quota. The returned receipt confirms durable acceptance; downstream effects stil
 idempotency. All retained data and dependencies remain within host-enforced Realm limits.
 Private SQLite is a dependency, not an external SQL gateway or a substitute for source
 approval.
+
+## Captured realms: producers, graph reads, apps and proposals
+
+A captured realm runs from a copy the owner admitted, and every capability is its own owner
+approval. Write it as one `realm.ts` with `defineRealm` and let `realm-synth` generate the files;
+[TypeScript realms](../../TYPESCRIPT_REALMS.md) is the full contract, with the owner's approval
+steps at the end. `defineRealm` is what checks every `namespace.verb` you name, so use it over
+`satisfies Realm`.
+
+**A captured producer is a handler.** No `kind`, no `operation`, no `args`, no `cache`:
+
+```ts
+producers: {
+  "incidents-by-service": {
+    handler: "oncall.incidents",
+    keyArgument: "serviceIds",
+    joins: [{ targetLabel: "Incident", anchorLabel: "Service", relationship: "HAS_INCIDENT",
+              keyField: "serviceId", recordKeyField: "serviceId" }],
+    page: { argument: "cursor", maxPages: 4 },
+    pushdown: [
+      { property: "impact", argument: "impact" },
+      { property: "status", argument: "status" },
+      { property: "component", argument: "component" },
+    ],
+  },
+},
+```
+
+- The handler gets the keys as a list under `keyArgument` and returns records that carry their
+  key under `recordKeyField`. With `page`, it returns `{ rows, next }` and gets `next` back under
+  the page argument on the following call, up to `maxPages` (1 to 16). `next: null` stops it.
+- **Cover EVERY filter the source can apply with a `pushdown` rule.** The handler gets the values
+  an `=` or `IN` allows as a list of strings under the rule's argument, on every page. A filter you
+  leave out makes the handler fetch everything the key allows, and the answer comes out the same,
+  so nothing tells you. Read the source's own parameter list and map each one. Where the host shows a
+  query's `apiCallLog`, it names the arguments that reached the handler, so a filter missing
+  there is the next rule to write.
+- Only `=` and `IN` push. `>`, `CONTAINS` and a function over the value are applied by the graph
+  after the fetch. Say so in the target type's description, so nobody assumes they are cheap.
+- If the handler's input schema has `additionalProperties: false`, list the page and pushdown
+  arguments in `properties`, or the host refuses the producer at bind time.
+- A query reaches the target only along a join from a bound anchor. `MATCH (i:Incident)` on its
+  own is refused; `MATCH (s:Service {serviceId: $id})-[:HAS_INCIDENT]->(i)` works. One
+  producer's target can anchor the next producer's join, so chain them where a source is keyed
+  on another source's records.
+- Limits per fetch: 256 keys, 1 MiB of output, 1,024 rows across all pages. No result cache.
+
+**Graph reads are `ctx.gateway.cypher.query`, under their own approval.**
+
+```ts
+const { rows } = await ctx.gateway.cypher.query({
+  cypher: "MATCH (s:Service)-[:HAS_INCIDENT]->(i:Incident) WHERE s.team = $team " +
+          "RETURN s.name AS service, i.incidentId AS incident LIMIT 100",
+  params: { team: input.team },
+});
+```
+
+- End with a literal `LIMIT` from 1 to 512, name and label every node, and pass every value
+  through `params`.
+- It sees only what the owner owns outright. Variable-length paths, named paths, list
+  comprehensions, procedures and most functions are refused, and every refusal is the same
+  message, so keep queries plain.
+- Read the owner's own views through `queries: { views: [{ alias, view }] }`; each alias is its
+  own approval.
+
+**Browser apps run sandboxed with no network.**
+
+- Declare each page under `apps` with the handlers it may call. The page reaches the realm
+  only through `realm.call(handler, args)`.
+- **One `realm.call` at a time.** A second call while one is waiting rejects at once, so `await`
+  each call before the next. Every refusal rejects with the same message; show one plain error.
+- No `fetch`, sockets, remote scripts, styles, images or fonts. Bundle everything; declare CSS
+  and JS under `resources` (`apps/<page>.assets/`) and embed images and fonts as `data:` URLs.
+- The operator sets the size limits. The defaults are 10 MiB for the page, 16 resources, and
+  10 MiB for one resource and for all of them together. Stay well under them.
+
+**Write through a proposal, never directly.** `ctx.writePropose({ version: 1, kind, target,
+fields, effect, method? })` files a write for the owner to accept and resolves to `{ proposalId }`.
+The handler never learns the outcome. The target must be one private record the owner already
+has, under a label the operator opened to proposals. Accepting applies flat scalar `fields` with
+`effect: "private-storage"` only. Keep a proposal small and name exactly the record it changes.
+
