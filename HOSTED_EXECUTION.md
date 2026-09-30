@@ -4,6 +4,9 @@ A host admits a captured Realm artifact and its requested capabilities before ex
 The selected backend receives the program, bounded arguments and mediated callbacks. It does
 not receive a World object, host filesystem path, credential store or provider token.
 
+An author writing a captured realm in TypeScript starts from [TypeScript realms](TYPESCRIPT_REALMS.md),
+which shows each declaration in `realm.ts` form and links back to the sections here.
+
 ## Admission
 
 An invocation retains its World, Realm installation, artifact digest, approval revision and
@@ -629,7 +632,9 @@ info, port 443 or the default, no query string, fragment, percent-encoded path s
 reaching it follows the same no-redirect rule an ordinary captured API destination already
 follows. Authentication is a bearer token or an API key in a named header, drawn from the
 owner's wallet the same way an ordinary captured API operation's `token-env` is, plus up to
-16 fixed `X-` headers. At most 32 operations are declared per Realm, each with at most 32
+16 fixed `X-` headers. The source may name a credential the Realm declares with `credential:`,
+alone or beside a `token-env:` naming the same secret. A query then sends the secret the owner
+bound to that credential, and is refused while nothing is bound. At most 32 operations are declared per Realm, each with at most 32
 variables; a variable is one of four scalar types — string, integer, number or boolean —
 with an optional required flag, a length range for string-shaped values (default 0 to 2048,
 capped at 2048), and an optional enumeration of up to 128 allowed values.

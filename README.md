@@ -9,6 +9,11 @@ guest to bypass those checks.
 
 > **Status: living draft.** Sections marked _forward-looking_ describe shape that is settled but may still be in implementation across hosts. Other sections describe portable declarations and trusted-host formats; capability support differs by host profile. Where this document cites concrete defaults or behaviour of "the reference host", it means the host implementation this spec is developed against; those values are informative, not part of the contract.
 
+**Writing a captured realm in TypeScript?** [TypeScript realms](TYPESCRIPT_REALMS.md) walks through
+`defineRealm` from end to end: handlers and their context, credentials, APIs, channels, sources and
+consumers, dependencies, producers, graph queries, goals, lenses, watches, apps, write proposals,
+and the owner approvals each one needs.
+
 ---
 
 ## Repository convention
@@ -2073,7 +2078,8 @@ Three consequences of the table worth stating:
 
 ### Authoring a wasm realm
 
-The minimum is three files — the realm, the handlers, and the manifest that registers them:
+A realm written with `defineRealm` gets every file below generated from one `realm.ts`; see
+[TypeScript realms](TYPESCRIPT_REALMS.md). By hand, the minimum is three files — the realm, the handlers, and the manifest that registers them:
 
 ```yaml
 # realm.yml
@@ -2447,7 +2453,8 @@ A query reaches the producer only by traversing one of its joins from a bound an
 [Virtual Cypher §2](VIRTUAL_CYPHER.md#two-concepts-the-rest-of-the-spec-leans-on). A producer's
 target may anchor another producer's join, so producers chain. Declare a pushdown rule for
 every property the handler can filter on, since a filter left undeclared makes the handler
-fetch everything the key allows. Me limits each fetch to
+fetch everything the key allows. [TypeScript realms](TYPESCRIPT_REALMS.md#producers) shows the
+same producer written with `defineRealm`. Me limits each fetch to
 256 keys, 2,048 characters per key, 64 KiB of encoded arguments, 1 MiB of output and
 1,024 rows. It accepts 32 flat declaration files, 8 KiB per file, 64 KiB total and
 eight joins per binding. All fields shown are required; unknown fields, duplicate
