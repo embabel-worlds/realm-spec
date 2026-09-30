@@ -21,6 +21,12 @@ Document RAG over an external store has exactly three lanes. Pick per content ty
 A store usually spans lanes: Drive file listings are KG (a `driveFiles` producer); a Google Doc's
 *content* is an ingested document; a live sheet's cells are live ops.
 
+**Declaring instead of coding.** When the content is text the realm can render from data the world
+holds, or pages the host can fetch unaided, no handler is needed: declare a `lane: documents` source
+in `sources.yml` (README, "`lane: documents`") and the host ingests, versions, refreshes and prunes it
+under the same `uri` contract as §3. The surface below is for sources that need the realm's own code —
+OAuth, change feeds, multi-step exports.
+
 ## 2. The ingest surface (assistant-provided, source-neutral)
 
 Two gateway methods, available to every realm handler as `ctx.ingest.*`:
