@@ -5,7 +5,8 @@ the handler code it runs. `defineRealm` from
 [`@embabel/realm-types`](https://github.com/embabel-worlds/embabel-ts) checks the object while you
 write it, and `realm-synth` from the same repository turns it into the files this specification
 describes: `realm.yml`, `dist/manifest.json`, `producers/`, `channels/`, `apps/` and the rest.
-The host never reads `realm.ts`. It reads what synth wrote.
+It also writes the TypeScript types the handlers import. The host never reads `realm.ts`. It reads
+what synth wrote.
 
 This document covers realms written with `execution: "captured"`. A captured realm runs from a
 verified copy the owner has admitted, and every capability it reaches is approved by the owner on
@@ -15,8 +16,11 @@ what the host does with it. The host-side detail lives in
 
 The rules for a conventional realm (no `execution`, or `execution: "conventional"`) are the rest of
 this specification. The two never mix: `triggers`, `queries`, `apps`, `credentials`, `dataPipes`,
-`capturedLenses` and `watches` are refused on a conventional realm, and `goals`, `producers` and
-`apis` take the captured forms described here once `execution` is `"captured"`.
+`capturedLenses` and `watches` are refused on a conventional realm, and `goals`, `producers`,
+`apis` and `channels` take the captured forms described here once `execution` is `"captured"`.
+
+Most examples below come from one realm, `oncall-radar`, which reads a status page API and tells
+the owner what is down. Channels, dependencies and data pipes use small realms of their own.
 
 ## Contents
 
@@ -43,8 +47,10 @@ this specification. The two never mix: `triggers`, `queries`, `apps`, `credentia
 
 ## Build a realm
 
+Run synth from a checkout of the embabel-ts repository:
+
 ```bash
-# Scaffold realm.ts, the handler file and the project files.
+# Scaffold package.json, tsconfig.json, README.md, realm.ts and the handler file.
 bun packages/realm-synth/src/cli.ts init my-realm --runtime typescript
 
 # Write the specification files, and the handler types.
@@ -52,22 +58,45 @@ bun packages/realm-synth/src/cli.ts my-realm/realm.ts --out my-realm/dist \
   --types my-realm/.embabel/realm.d.ts
 
 # Re-run on every change.
-bun packages/realm-synth/src/cli.ts my-realm/realm.ts --out my-realm/dist --watch
+bun packages/realm-synth/src/cli.ts my-realm/realm.ts --out my-realm/dist \
+  --types my-realm/.embabel/realm.d.ts --watch
 ```
 
+- `init <dir>` refuses a directory that is not empty. `--runtime` is `typescript` (the default),
+  `python` or `compiled`. The scaffolded `realm.ts` is a conventional realm written with
+  `satisfies Realm`. For a captured realm, add `execution: "captured"` and wrap the object in
+  `defineRealm`.
+- With neither `--out` nor `--types`, synth prints every file it would write and writes nothing.
+- `--types` picks its language from the realm's `runtime`: a `.d.ts` or `.ts` path for
+  TypeScript, `.py` or `.pyi` for Python, and `.rs` for `compiled`. Any other pairing is refused.
+  There is no types emitter for `ruby` or `lua`.
+- `--watch` rebuilds in a fresh process on every change under the definition's directory. It
+  ignores `.embabel/`, `dist/`, `node_modules/`, dotfiles, the `--out` directory and the
+  `--types` file. A failed rebuild prints its message and keeps watching.
+- A refusal prints `synth failed: <message>` and exits with status 1. A usage error exits with
+  status 2. Warnings, such as a deprecated `tokenEnv`, go to standard error and do not stop the
+  build.
+
 Synth clears the output directory and writes it again on every run, so keep nothing by hand in
-it. It sorts every key, so the same `realm.ts` always gives the same bytes. It refuses a value with no
-file form: a function, a `Date`, a `BigInt`, a `Map` or `Set`, a non-finite number, a circular
-reference, or a top-level `undefined`. It copies the handler entry, every file that entry
-imports, dependency init scripts, the icon, app pages and app resources into the output, and
-refuses any of them that resolves outside the realm directory.
+it. It sorts every key, so the same `realm.ts` always gives the same bytes. It refuses a value
+with no file form: a function, a symbol, a `Date`, a `BigInt`, a `Map` or `Set`, a non-finite
+number, a circular reference, or `undefined` in an array. An object key whose value is
+`undefined` is left out. The text fields of goals, triggers, producers, lenses, watches, data
+pipes, view references, apps, credentials and API entries refuse control characters, a newline
+included, and unpaired surrogates.
+
+Synth copies the handler entry, every file the entry reaches through a relative value import
+(type-only imports are skipped), dependency init scripts, a file-path icon, app pages and app
+resources into the output. It refuses any of them that is missing or that resolves outside the
+realm directory, including through a symlink, and it refuses a copy or a vendored document that
+would land on a path it already writes.
 
 What lands where:
 
 | You write | Synth writes |
 | --- | --- |
-| `name`, `version`, `host`, `description`, `icon`, `tags`, `exports` | `realm.yml` |
-| `handlers` | `dist/manifest.json` |
+| `name`, `version`, `host`, `description`, `author`, `url`, `icon`, `tags`, `exports`, `retry` | `realm.yml` |
+| `handlers`, `entry`, `generatedAt` | `dist/manifest.json` |
 | `credentials` | `credentials.yml` |
 | `apis` | `apis/apis.yml` and each vendored document under `apis/` |
 | `channels`, `sources`, `consumers` | `channels/<name>.yml`, `sources/<name>.yml`, `consumers/<name>.yml` |
@@ -81,16 +110,28 @@ What lands where:
 | `capturedLenses` | `lenses/<name>.yml` |
 | `watches` | `watches/<name>.yml` |
 | `apps` | `apps/<page>.app.json`, the page and its resources |
+| `actions`, `focuses`, `webhooks`, `events` | `actions/<name>.yml`, `focuses/<name>.yml`, `webhooks/<realm name>.yml`, `events/<name>.yml` |
+
+The last row is the conventional form of those fields, and synth writes it for a captured realm
+as well. The reference host does not load `actions/` or `events/` for a captured realm (see the
+[goal profile](HOSTED_EXECUTION.md#me-captured-goal-profile) and
+[legacy event declarations](HOSTED_EXECUTION.md#legacy-event-declarations)), so leave them out.
 
 Each captured directory (`goals/`, `triggers/`, `producers/`, `lenses/`, `watches/`) holds at most
 32 files, 8 KiB each and 64 KiB together. The host refuses the whole directory past those limits,
 so synth refuses first. Every captured file is stamped `version: 1`, and the name a file carries
-comes from its key in `realm.ts`. You never write `version`, `name`, `goal`, `trigger` or `id`
-yourself; the types make them compile errors.
+comes from its key in `realm.ts`: `goal` in a goal, `trigger` in a trigger, `name` in a producer
+or watch, `id` in a lens. You never write `version`, `name`, `goal`, `trigger` or `id` yourself;
+the types make them compile errors, and synth writes its own values over them.
 
 Wrap the realm in `defineRealm`. It is what makes every `namespace.verb` you write elsewhere a
-checked name: a lens, app, channel or consumer naming a handler the realm does not declare is a
-compile error on the line that named it.
+checked name. Under `defineRealm`, a goal, producer or `dataPipes` consumer naming a handler the
+realm does not declare is a compile error on that line. A lens declared through `watching`, or a
+channel or consumer declared through `connecting`, is checked too; that error is reported on the
+`defineRealm` argument and names the allowed handlers. An app's `handlers` list is not checked at
+compile time, and synth refuses an undeclared name there. A realm with no `handlers` block may name
+no handler at all. Written with `satisfies Realm`, none of these names are checked by the
+compiler.
 
 ## Realm metadata
 
@@ -104,18 +145,22 @@ export default defineRealm({
   execution: "captured",
   description: "Open incidents on the status pages you depend on.",
   tags: ["status", "incidents"],
-  handlers: { /* ... */ },
+  handlers: {
+    /* ... */
+  },
 });
 ```
 
 | Field | Rule |
 | --- | --- |
 | `name`, `version` | Required, non-empty. |
-| `host` | `"wasm"` or `"docker"`. Declare `"wasm"` for a TypeScript realm. Left out, the host infers placement from the files on disk (see [placement](README.md#placement)), and a guess is the last thing a captured realm wants. |
+| `host` | `"wasm"` or `"docker"`, written to `realm.yml` only when present. Declare `"wasm"` for a TypeScript realm. Left out, the host infers placement from the files on disk (see [placement](README.md#placement)), and a guess is the last thing a captured realm wants. |
 | `execution` | `"captured"` switches synth to the captured profiles. It is not written to `realm.yml`; the host runs the realm captured once the owner admits it. |
-| `runtime` | The guest language: `"typescript"` (the default), `"python"`, `"ruby"`, `"lua"` or `"compiled"`. TypeScript is the only one a host builds from source. A realm in any other language cannot declare channels, sources or consumers. |
-| `entry` | The handler source file, relative to the realm. Defaults to `wasm/handlers.ts`. |
-| `icon` | An `https://` URL, or a file in the realm that synth copies. |
+| `runtime` | The guest language: `"typescript"` (the default), `"python"`, `"ruby"`, `"lua"` or `"compiled"`. TypeScript is the only one a host builds from source. Any other value is written to `dependencies/manifest.json`. A realm in any other language cannot declare channels, sources or consumers. |
+| `entry` | The handler source file, relative to the realm, with no leading `/`, no `\` and no `..` segment. Defaults to `wasm/handlers.ts`, or `wasm/handlers.py` for Python and `wasm/src/lib.rs` for `compiled`. A declared entry must exist and is also written to `dist/manifest.json`. |
+| `icon` | A URL starting `http://` or `https://`, written as is, or a realm-relative file, which must exist and which synth copies. |
+| `description`, `author`, `url`, `tags`, `exports`, `retry` | Written to `realm.yml`. `tags` and `exports` are written only when non-empty. |
+| `generatedAt` | The timestamp in `dist/manifest.json`. Defaults to `1970-01-01T00:00:00Z`, so the output does not change from run to run. |
 
 ## Handlers
 
@@ -126,11 +171,16 @@ A handler is a named verb in a namespace. Every other part of the realm names it
 handlers: {
   incidents: {
     namespace: "oncall",
-    description: "Unresolved incidents on one status page, a page at a time.",
+    description: "Unresolved incidents for a batch of services, a page at a time.",
     input: {
       type: "object",
-      properties: { pageId: { type: "array", items: { type: "string" } }, cursor: { type: "string" } },
-      required: ["pageId"],
+      properties: {
+        serviceIds: { type: "array", items: { type: "string" } },
+        cursor: { type: "string" },
+        impact: { type: "array", items: { type: "string" } },
+        status: { type: "array", items: { type: "string" } },
+      },
+      required: ["serviceIds"],
     },
     output: { type: "object" },
   },
@@ -143,33 +193,40 @@ types (`--types`) give each one its input, output and context:
 
 ```typescript
 // wasm/handlers.ts
-import type { IncidentsHandler } from "../.embabel/realm.d.ts";
+import type { SweepHandler } from "../.embabel/realm.d.ts";
 
-export const incidents: IncidentsHandler = async (input, ctx) => {
-  ctx.log(`fetching ${input.pageId.length} pages`);
-  return { rows: [], next: null };
+export const sweep: SweepHandler = async (_input, ctx) => {
+  ctx.log("sweeping status pages");
+  return {};
 };
 ```
 
 - The verb must be a JavaScript identifier. Two verbs whose generated aliases collide
   (`FooHandler`) are refused.
-- `input` and `output` are JSON Schema fragments. Left out, each is `{"type": "object"}`. The
-  host holds them to the [handler schema profile](README.md#me-captured-handler-schema-profile):
-  a bounded subset of JSON Schema, checked before binding, with input validated before the
-  handler runs and output validated before the result is released. `$ref`, `pattern`, `format`
-  and `uniqueItems` refuse the binding.
+- `input` and `output` are JSON Schema fragments. Left out, each is `{"type": "object"}` in the
+  manifest. The host holds them to the
+  [handler schema profile](README.md#me-captured-handler-schema-profile): a bounded subset of JSON
+  Schema, checked before binding, with input validated before the handler runs and output
+  validated before the result is released. `$ref`, `pattern`, `format` and `uniqueItems` refuse
+  the binding.
+- The generated types name each verb three times: `<Verb>Input`, `<Verb>Output` and
+  `<Verb>Handler`, where `<Verb>` is the verb with its first letter upper-cased. An input schema
+  with no properties types as `Record<string, never>`, and an output schema with no properties as
+  `unknown`. `<Verb>Handler` is `(input, ctx: HandlerContext) => Promise<Output>`.
 - `schedule` is a six-field cron expression (second, minute, hour, day of month, month, day of
-  week). A scheduled handler is called with `{}`, so its `input` may require nothing. A schedule
-  may not sit on a type method, and may not also be declared with `defineSchedule` in the
-  handler source.
-- `onType` turns the handler into a method on a graph label. `className` is refused on a Wasm
-  realm.
+  week). A scheduled handler is called with `{}`, so its `input` may list no `required` field. A
+  schedule may not sit on a handler with `onType`, and may not also be declared with
+  `defineSchedule("<verb>", ...)` in a TypeScript entry.
+- `onType` turns the handler into a method on a graph label, and may not be blank. `className`
+  names the class the sandbox instantiates for that method: it needs `onType`, may not be blank,
+  and is refused when `host` is `"wasm"`.
 - Declaring a handler grants it nothing. The owner approves each handler at
   [admission](#owner-approval-step-by-step).
 
 ## The handler context
 
-A handler is called as `handler(input, ctx)`. What `ctx` carries depends on how it was called.
+A handler is called as `handler(input, ctx)`. What `ctx` carries depends on how it was called, and
+the generated types say which members each handler gets.
 
 | Member | Where | What it does |
 | --- | --- | --- |
@@ -182,23 +239,49 @@ A handler is called as `handler(input, ctx)`. What `ctx` carries depends on how 
 | `ctx.frame`, `ctx.cursor`, `ctx.publish(...)` | channel handlers | The frame that caused the dispatch, the cursor the last dispatch kept, and a publish shortcut. |
 | `ctx.headers` | webhook handlers | The headers of the verified request. |
 | `ctx.stream.send(text)`, `ctx.stream.close()` | websocket handlers | Writes to the channel's own socket, or asks the host to reconnect it. |
-| `ctx.frame`, `ctx.publish(...)` | consumer handlers | The published event, and a publish shortcut. |
+| `ctx.frame`, `ctx.cursor`, `ctx.publish(...)` | consumers declared in `connecting` | The published event, the consumer's cursor, and a publish shortcut. |
 | `ctx.assistant.chat(text, thread)` | consumers that declared `assistant: true` | Asks the owner's assistant and resolves to its final message. |
 
+The generated `ctx.gateway` types each API namespace the realm declares. Every other namespace,
+`cypher` and `channel` included, is typed `unknown`, so a handler that calls one gives it a type
+of its own; the [graph queries](#graph-queries-and-view-references) section shows one.
+
+A channel or consumer handler has an alias of its own, named after the verb it points at:
+
+| Declared as | Alias | Called as | Resolves to |
+| --- | --- | --- | --- |
+| websocket `onFrame` or `keepalive.handler` | `<Verb>FrameHandler` | `(frame, ctx: ChannelCtx & StreamCtx)` | `{cursor?}` |
+| long-poll `onResponse` | `<Verb>ResponseHandler` | `(frame, ctx: ChannelCtx)` | `{cursor?, cursorParam?}` |
+| webhook `onRequest` | `<Verb>RequestHandler` | `(frame, ctx: ChannelCtx & RequestCtx)` | `{cursor?}` |
+| `connecting` consumer | `<Verb>ConsumerHandler` | `(event, ctx: HandlerContext & ConsumerCtx)`, plus `AssistantCtx` with `assistant: true` | a JSON object |
+
+A frame is the provider's text or a control frame (`Frame`). Only the handler a channel names as
+its `keepalive.handler` is typed to receive the keepalive tick; every other channel handler gets
+`FrameWithoutKeepalive`. Two channels or consumers pointing at one verb share its alias, and synth
+refuses them when they would need different ones. A `dataPipes` consumer gets the plain
+`<Verb>Handler` and `HandlerContext`. The generated names may not collide with a type the realm
+declares, so synth refuses a type named `RealmTypes`, `HandlerContext`, `Handlers` or
+`WriteProposal`, and, in a realm with channels or consumers, `Frame` and the other channel
+declarations.
+
 Every host call answers with its result or rejects. A refusal carries one fixed message and never
-says which rule failed, so treat it as "not allowed at the moment" and carry on. The assistant call is
-the one exception: it rejects with a code, `ASSISTANT_NOT_GRANTED` or `SENDER_NOT_PAIRED`, so a
-realm can answer with its own pairing hint.
+says which rule failed, so treat it as "not allowed at the moment" and carry on. The assistant
+call is the one exception: its refusal carries a code, `ASSISTANT_NOT_GRANTED` or
+`SENDER_NOT_PAIRED`, so a realm can answer with its own pairing hint.
 
 ```typescript
+import type { ReplyConsumerHandler } from "../.embabel/realm.d.ts";
+
 export const reply: ReplyConsumerHandler = async (event, ctx) => {
+  const chatId = String(event.chatId);
   try {
-    const answer = await ctx.assistant.chat(String(event.text), String(event.chatId));
-    await ctx.gateway.telegram.sendMessage({ body: { chat_id: event.chatId, text: answer } });
+    const answer = await ctx.assistant.chat(String(event.text), chatId);
+    await ctx.gateway.telegram.sendMessage({ body: { chat_id: chatId, text: answer } });
   } catch (e) {
-    if (String(e.message).includes("SENDER_NOT_PAIRED")) {
+    const reason = e instanceof Error ? e.message : String(e);
+    if (reason.includes("SENDER_NOT_PAIRED")) {
       await ctx.gateway.telegram.sendMessage({
-        body: { chat_id: event.chatId, text: "Ask the owner for a pairing code, then send: pair <code>" },
+        body: { chat_id: chatId, text: "Ask the owner for a pairing code, then send: pair <code>" },
       });
     }
   }
@@ -213,13 +296,25 @@ secret to each declared credential when approving the realm.
 
 ```typescript
 credentials: {
-  bot: {
-    kind: "bearer",
-    scheme: "Bot",
-    provider: "discord",
-    description: "A bot token for the bot the assistant answers as.",
-    docs: "https://discord.com/developers/applications",
+  "statuspage-key": {
+    kind: "api-key",
+    provider: "statuspage",
+    description: "An API key for the status page account the radar reads.",
+    docs: "https://developer.statuspage.io",
   },
+},
+```
+
+A bearer credential whose provider wants a word other than `Bearer` in front of the token names
+it with `scheme`. A Discord bot token is sent as `Bot <token>`:
+
+```typescript
+bot: {
+  kind: "bearer",
+  scheme: "Bot",
+  provider: "discord",
+  description: "A bot token for the bot the assistant answers as.",
+  docs: "https://discord.com/developers/applications",
 },
 ```
 
@@ -230,15 +325,17 @@ credentials: {
 | `description` | Required, at most 512 characters. The approval screen shows it to the owner. |
 | `provider` | Optional, `[A-Za-z0-9][A-Za-z0-9_.-]{0,63}`. |
 | `docs` | Optional `https://` link, at most 512 characters. |
-| `scheme` | `bearer` only: the word sent before the token in `Authorization`, 1 to 32 printable characters with no spaces. Defaults to `Bearer`. |
-| `scopes` | `oauth2` only, and required there: 1 to 32 scopes. |
+| `scheme` | `bearer` only: the word sent before the token in `Authorization`, 1 to 32 printable ASCII characters with no spaces. Defaults to `Bearer`, which is not written to the file. |
+| `scopes` | `oauth2` only, and required there: 1 to 32 distinct scopes, each at most 128 characters. |
 
 `value`, `env`, `tokenEnv` and `walletItem` are refused, so a realm cannot ship or point at a
-secret. A credential nothing references is refused, since it would ask the owner for a secret no
-call uses. An API entry, a channel, a webhook signature or a GraphQL source can reference one.
-Binding, rotation and revocation are described under
-[credentials](HOSTED_EXECUTION.md#credentials) in the hosted contract. An `oauth2` credential is
-accepted in the declaration, and binding one is refused by the reference host.
+secret, and so is any other field not in the table. A credential nothing references is refused,
+since it would ask the owner for a secret no call uses. Synth counts a reference from an API
+entry's `credential` (or its deprecated `tokenEnv`), a channel's `credential` and a webhook
+signature's `credential`. `credentials.yml` lists the credentials sorted by id. Binding, rotation
+and revocation are described under [credentials](HOSTED_EXECUTION.md#credentials) in the hosted
+contract. An `oauth2` credential is accepted in the declaration, and binding one is refused by
+the reference host.
 
 ## APIs
 
@@ -248,46 +345,76 @@ call.
 ```typescript
 apis: {
   statuspage: {
-    url: "statuspage.json",          // a file under apis/, vendored
-    name: "statuspage",              // the gateway namespace
+    url: "statuspage.json", // a file under apis/, vendored
+    name: "statuspage", // the gateway namespace
     type: "openapi",
     auth: "api-key",
     credential: "statuspage-key",
     headers: { "X-Client": "realm-oncall-radar" },
-    operationIds: ["listUnresolvedIncidents"],
+    operationIds: ["listUnresolvedIncidents", "listIncidents"],
     writeOperationIds: ["acknowledgeIncident"],
   },
 },
 ```
 
-The generated gateway has one typed method per listed operation, and nothing else:
-`ctx.gateway.statuspage.listUnresolvedIncidents({ page_id })`. A write takes its request body under
-the reserved `body` argument, so an operation may not declare a parameter named `body`. The
-response comes back as the parsed JSON body with no envelope.
+The generated gateway has one method per listed operation under `ctx.gateway.<name>`. A read takes
+an untyped arguments object: `ctx.gateway.statuspage.listIncidents({ services })`. A write takes
+an arguments interface built from the vendored document, holding its path and query parameters
+and its request body under the reserved `body` argument, and a field the operation does not
+declare is a compile error:
+
+```typescript
+await ctx.gateway.statuspage.acknowledgeIncident({
+  incidentId: input.incidentId,
+  body: { note: "Seen by the on-call radar" },
+});
+```
+
+A write whose parameters or body synth cannot read from the document falls back to the untyped
+arguments object, with a comment in the generated file saying why. An operation may not declare a
+parameter named `body`. Every call resolves to `unknown`: the response comes back as the parsed
+JSON body with no envelope, so narrow it before use.
 
 What synth checks, which is also what the host refuses at install:
 
-- At most 32 entries and 128 operations across them. `name` is
-  `[A-Za-z_][A-Za-z0-9_-]{0,63}` and unique.
-- `url` is a bare `*.json` filename under `apis/`, at most 1 MiB, OpenAPI 3.x, with every `$ref`
-  pointing under `#/components/`.
-- Exactly one of `credential` or `tokenEnv`. `tokenEnv` is deprecated and turned into an implicit
-  credential with a warning.
+- At most 32 entries and 128 operations across them. The entry's key is a JavaScript identifier.
+  `name` is `[A-Za-z_][A-Za-z0-9_-]{0,63}` and unique. Two operations may share an id in
+  different namespaces, and are refused when their qualified names collide
+  (`<name>.<id>`, `<name>_<id>`, or the two camel-cased and joined with `_`).
+- `url` is a bare filename, `[A-Za-z0-9_-]+\.json`, under `apis/`, at most 1 MiB, OpenAPI 3.x,
+  with every `$ref` pointing under `#/components/`, at most 256 paths, and each operation id
+  declared once. `apis/apis.yml` is at most 64 KiB.
+- Exactly one of `credential` or `tokenEnv`, and a `credential` must be declared in
+  `credentials`. `tokenEnv` is deprecated: it matches `[A-Za-z_][A-Za-z0-9_]{0,127}`, may not
+  start with `__embabel_sql_v1__`, and becomes an implicit credential whose id is the variable
+  name, with a warning. Two entries reading one `tokenEnv` must declare the same `auth`.
+  `apis.yml` always carries `credential:`, and `token-env:` beside it on the deprecated path.
 - `operationIds` lists 1 to 128 reads, each a `GET` with no request body. `writeOperationIds`
   lists up to 64 writes, each a `POST`, `PUT`, `PATCH` or `DELETE`. An operation is in one list,
   never both, and every listed id must exist in the document.
-- The document has exactly one `https` server on port 443, with no user info, query, fragment or
-  server variables, and no per-path or per-operation server override.
-- Parameters are inline `query` or `path` scalars, at most 64 per operation. A request body is
-  `application/json` with an object schema.
-- Security is exactly one scheme with no scopes. For `bearer` it is an `http` scheme whose word
-  matches the credential's `scheme`. For `api-key` it names a header or query field, and the
-  header may not be one the host owns (`Authorization`, `Cookie`, `Host`, `Content-Type` and the
-  like).
-- `auth: "path"` puts the credential in the URL: the document writes `{credential}` once, in the
-  server URL or an operation path, and nowhere else. The generated client takes no argument for
-  it.
-- Up to 16 fixed `X-` headers with printable ASCII values.
+- The document has exactly one `https` server on port 443, with no user info, query, fragment,
+  server variables, percent-encoded path, `.` or `..` segment or `{` placeholder (other than
+  `{credential}` under `auth: "path"`), and no per-path or per-operation server override.
+- An operation path matches `^/[A-Za-z0-9_~./{}-]*$` with no `.` or `..` segment. Parameters are
+  declared inline, in `query` or `path`, with a `string`, `integer`, `number` or `boolean`
+  schema: at most 64 per operation, named `[A-Za-z_][A-Za-z0-9_-]{0,63}`, none repeated across
+  the path item and the operation. A path parameter is `required`, and the path's placeholders
+  and its path parameters match exactly. An `enum` holds at most 128 non-null scalars, and
+  `minLength` and `maxLength` are whole numbers from 0 to 2048.
+- A request body holds only `content`, with one media type, `application/json`, whose `schema`
+  is an object.
+- Security is exactly one requirement naming one scheme, with no scopes. For `bearer` it is an
+  `http` scheme whose word matches the credential's `scheme`. For `api-key` it is an `apiKey`
+  scheme in a header or the query, named `[A-Za-z][A-Za-z0-9-]{0,127}`, and the header may not
+  be one the host owns (`Authorization`, `Cookie`, `Host`, `Content-Type` and the like). The
+  field the credential travels in may not also be a fixed header or a parameter.
+- `auth: "path"` puts the credential in the URL and needs `credential`. The document writes
+  `{credential}` in the server URL or in the path of a declared operation, so that each declared
+  operation's full URL carries it exactly once, in the path, never in a query string. `security`
+  is absent or empty, and no operation takes a `credential` parameter. The generated client takes
+  no argument for it.
+- Up to 16 fixed headers, each named `X-...` and holding at most 1,024 printable ASCII
+  characters, with no `${` substitution. Two header names that differ only in case are refused.
 
 Each operation is approved by the owner on its own, reads and writes under separate grants; see
 [captured API operations](HOSTED_EXECUTION.md#captured-api-operations) for what the host does on
@@ -301,14 +428,19 @@ reads that file when it is present, following the
 one fixed HTTPS endpoint, persisted query documents only, and variables checked against their
 declaration. The source may name a declared credential with `credential:` in place of
 `token-env:`; a query then sends the secret the owner bound to that credential, and is refused
-while nothing is bound. A realm that needs GraphQL adds that file to the synthesized output
-itself, after synth has run.
+while nothing is bound.
+
+A realm that needs GraphQL adds that file to the synthesized output itself. Synth clears the
+output directory on every run, so add it after each run. Synth does not read the file, so a
+credential that only `graphql/operations.yml` names counts as unreferenced and is refused;
+declare such a credential only when an API entry or a channel references it as well.
 
 ## Channels
 
 A channel is a live connection the host holds for the realm. Declare channels with `connecting`,
 which checks that every credential, channel and source a declaration names is declared right
-beside it:
+beside it. `connecting` takes all four blocks, `credentials`, `channels`, `sources` and
+`consumers`; pass `{}` for one you do not need.
 
 ```typescript
 import { connecting, defineRealm } from "@embabel/realm-types";
@@ -321,6 +453,17 @@ export default defineRealm({
   handlers: {
     updates: { namespace: "telegram" },
     reply: { namespace: "telegram" },
+  },
+  apis: {
+    telegram: {
+      url: "telegram.json",
+      name: "telegram",
+      type: "openapi",
+      auth: "path",
+      credential: "bot",
+      operationIds: ["getMe"],
+      writeOperationIds: ["sendMessage"],
+    },
   },
   ...connecting({
     credentials: {
@@ -342,8 +485,13 @@ export default defineRealm({
 ```
 
 Channel, source and consumer keys are file names: `[a-z][a-z0-9-]{0,63}`. The host owns
-reconnects, budgets, limits, cursors and whether a channel starts, so `name`, `cursor`,
-`reconnect`, `autoStart`, `limits`, `budget`, `secret` and `secretRef` are refused on all three.
+reconnects, budgets, limits, cursors and whether a channel starts, so a channel refuses `name`,
+`cursor`, `reconnect`, `autoStart`, `limits`, `budget`, `secret` and `secretRef`. A source refuses
+`name`, `kind` and `installationId`, and a consumer refuses `name` and `checkpoint`. None of the
+files carries a `name`; the file name is the name. When the realm has a `handlers` block, synth
+refuses a channel, keepalive or consumer handler it does not declare, the same check
+`defineRealm` makes at compile time. A duration is a whole number of seconds or minutes, greater
+than zero: `"30s"` or `"5m"`.
 
 **Websocket.** The host dials `url` (`wss://`) with the bound credential and hands every frame
 to `onFrame`.
@@ -366,8 +514,9 @@ socket: {
 - `keepalive.every` is between 10 seconds and 5 minutes. Only the keepalive handler gets the
   tick, and only while the socket is up.
 - `handshake` is for a provider that hands out its socket URL from an API call. The host calls
-  the named operation, reads `field` from the answer and connects there. The operation must be
-  one the realm's `apis` allow.
+  the named operation, reads `field` from the answer and connects there. Under `defineRealm`, a
+  realm that declares `apis` gets a compile error for an operation none of them lists as a read
+  or a write; the operation is written `<name>.<operationId>`.
 - `ctx.stream.send(text)` writes a frame; write `{credential}` where the token belongs and the
   host substitutes it on the way out. `ctx.stream.close()` ends the connection once the handler
   returns; the next frames are a `close` with reason `guest` and then an `open`.
@@ -375,8 +524,9 @@ socket: {
 **Long-poll.** The host fetches `url` (`https://`) every `every` and hands the body to
 `onResponse`.
 
-- `every` is at least `1s` and defaults to `5s`. The operator's floor wins over what the realm
-  declares, so a realm cannot poll faster than the host allows.
+- `every` is at least `1s` and defaults to `5s`, which synth writes into the file. The
+  operator's floor wins over what the realm declares, so a realm cannot poll faster than the host
+  allows.
 - The handler returns `{cursor, cursorParam}` to say where the next fetch starts: `cursor` is
   the value and `cursorParam` the query parameter it travels as. Return `cursorParam` on every
   response so a restart keeps it.
@@ -388,7 +538,7 @@ socket: {
 
 **Webhook.** The provider calls the host, which verifies the signature and hands the verified
 body to `onRequest`. The host mints the receiving URL when the owner approves the channel, so a
-webhook declares no `url`.
+webhook declares no `url` and no top-level `credential`; the signature names it.
 
 ```typescript
 intake: {
@@ -409,17 +559,20 @@ intake: {
 
 - `scheme` is `hmac-sha256` (needs `header`) or `ed25519` (needs `timestamp`). `encoding` is
   `hex` or `base64`. `template` may use only `{method}`, `{fullUrl}`, `{body}` and `{timestamp}`.
-  `timestamp.unit` is `s` or `ms`.
+  `timestamp.unit` is `s` or `ms`, and `timestamp.toleranceSeconds` is a whole number above zero.
 - A request is dispatched only after its signature verifies. A changed body or a timestamp
   outside the window is refused before any handler runs.
 - `verification` answers a provider's endpoint check without dispatching anything: when
   `when.field` equals `when.equals`, the host replies with the named field's value (`echo`) or a
-  constant (`body`, at most 1 KiB of JSON). It applies only after the signature passes.
+  constant (`body`, at most 1 KiB of JSON). It applies only after the signature passes. Exactly
+  one of `echo` or `body`. `when.field` and `echo` are dotted paths into the body with no empty
+  step, and `when.equals` is a string or a finite number. A websocket or long-poll channel may not
+  declare `verification`.
 
-For every transport: the URL may carry `{credential}` at most once, and may not point at
-`localhost` or a bare IP address; a channel pointed at an origin the operator has not allowed
-refuses to start. Frame budgets, reconnect backoff and the credential rules on outbound bytes are
-in [channels](HOSTED_EXECUTION.md#channels).
+A websocket or long-poll URL may carry `{credential}` at most once, and may not point at
+`localhost`, a `.localhost` name or a bare IPv4 or IPv6 address. A channel pointed at an origin
+the operator has not allowed refuses to start. Frame budgets, reconnect backoff and the credential
+rules on outbound bytes are in [channels](HOSTED_EXECUTION.md#channels).
 
 ## Sources, consumers and triggers
 
@@ -427,19 +580,24 @@ A **source** is a named stream of events. It is what the owner grants and what a
 There are two ways to declare one:
 
 - `sources` in `connecting`, fed by one of the realm's channels:
-  `{ channel: "updates", description: "..." }`. The description is required; the owner reads it
-  when deciding.
+  `{ channel: "updates", description: "..." }`. The description is required and may not be
+  blank; the owner reads it when deciding.
 - `dataPipes.sources`, a stream the realm's own handlers publish to:
-  `{ stream: "events", type: "note.changed" }`. At most 128, each value at most 256 bytes.
+  `{ stream: "events", type: "note.changed" }`. At most 128; the name, `stream` and `type` are
+  each at most 256 bytes.
 
 A name may be declared one way or the other, never both.
 
 A **consumer** is a handler that reads one source. Declare it in `connecting`
-(`{ source, handler, assistant? }`) or in `dataPipes.consumers` (`{ handler }`). The consumer is
-handed each event as its first argument and as `ctx.frame`, and the host checkpoints only after
-the handler succeeds. Delivery is at least once, so give every effect its own idempotency key.
-`assistant: true` asks for the separate grant that lets the consumer call `ctx.assistant.chat`;
-the owner also pairs each sender the assistant may answer (see
+(`{ source, handler, assistant? }`) or in `dataPipes.consumers` (`{ handler }`, at most 128). A
+`dataPipes` consumer's handler is written `namespace.verb`; synth checks its spelling, and
+`defineRealm` checks that the realm declares it. `dataPipes` takes only `sources` and
+`consumers`, and `data-pipes.yml` is at most 64 KiB.
+
+The consumer is handed each event as its first argument and as `ctx.frame`, and the host
+checkpoints only after the handler succeeds. Delivery is at least once, so give every effect its
+own idempotency key. `assistant: true` asks for the separate grant that lets the consumer call
+`ctx.assistant.chat`; the owner also pairs each sender the assistant may answer (see
 [pairing](HOSTED_EXECUTION.md#pairing)).
 
 A consumer may read another realm's source. The owner grants each consumer one exact source: a
@@ -450,6 +608,10 @@ the consumer receives whatever that source carries.
 A **trigger** narrows what a consumer sees and says what it may do:
 
 ```typescript
+handlers: {
+  record: { namespace: "notes" },
+  index: { namespace: "notes" },
+},
 dataPipes: {
   sources: { changes: { stream: "notes", type: "note.changed" } },
   consumers: { index: { handler: "notes.index" } },
@@ -459,9 +621,10 @@ triggers: {
 },
 ```
 
-- `source` and `consumer` name `dataPipes` declarations.
-- `input` picks from `offset`, `eventId`, `streamId`, `type`, `occurredAt`, `gap` and `payload`;
-  left out, the consumer gets all seven.
+- The key is `[a-z][a-z0-9-]{0,63}`. `source` and `consumer` name `dataPipes` declarations,
+  which synth checks.
+- `input` picks from `offset`, `eventId`, `streamId`, `type`, `occurredAt`, `gap` and `payload`,
+  each once; left out, the consumer gets all seven. `description` is at most 512 characters.
 - `mode: "observe"` lets the handler read and refuses, for the whole invocation, every publish,
   every write proposal and every approved API write. `mode: "apply"` type-checks, and the host
   refuses it at bind time.
@@ -471,30 +634,39 @@ triggers: {
 
 ## Publishing events
 
-A channel or consumer handler publishes with the shortcut on its context:
+A channel or `connecting` consumer handler publishes with the shortcut on its context:
 
 ```typescript
+import type { UpdatesResponseHandler } from "../.embabel/realm.d.ts";
+
 export const updates: UpdatesResponseHandler = async (body, ctx) => {
-  const batch = JSON.parse(String(body));
+  if (typeof body !== "string") return {};
+  const batch = JSON.parse(body);
   let offset: number | undefined;
   for (const update of batch.result) {
-    await ctx.publish("messages", { text: update.message.text, chatId: update.message.chat.id },
-      String(update.update_id), { streamId: String(update.message.chat.id) });
+    await ctx.publish(
+      "messages",
+      { text: update.message.text, chatId: update.message.chat.id },
+      String(update.update_id),
+      { streamId: String(update.message.chat.id) },
+    );
     offset = update.update_id + 1;
   }
   return offset === undefined ? {} : { cursor: String(offset), cursorParam: "offset" };
 };
 ```
 
-`ctx.publish(source, event, key, options)` files `event` under one of the realm's own sources and
-resolves to `{id, offset, replayed}`. `key` is the event id. The journal matches a retry on
-source, key, stream and payload, so a frame the host redelivers gets the first receipt back
-(`replayed: true`) and keeps the first `occurredAt`. The same event id with a different payload
-is refused. Only the realm's declared source names compile.
+`ctx.publish(source, event, key, options)` files `event`, a JSON object, under one of the realm's
+own sources and resolves to `{id, offset, replayed}`. `key` is the event id, and `options` may
+carry `streamId` and `occurredAt`. The journal matches a retry on source, key, stream and
+payload, so a frame the host redelivers gets the first receipt back (`replayed: true`) and keeps
+the first `occurredAt`. The same event id with a different payload is refused. Only the names in
+the realm's `sources` block compile as `source`.
 
 Any handler can use `ctx.gateway.channel.publish({source, eventId, streamId, occurredAt, payload})`,
 and a poller can commit a page and its cursor together with `position` and `publishBatch`. The
-limits and retry windows are under [publication](HOSTED_EXECUTION.md#publication) and
+generated types leave `ctx.gateway.channel` as `unknown`. The limits and retry windows are under
+[publication](HOSTED_EXECUTION.md#publication) and
 [polling positions](HOSTED_EXECUTION.md#polling-positions).
 
 ## Dependencies
@@ -507,7 +679,7 @@ dependencies: {
   db: {
     module: "sqlite3-wasi",
     version: "3.50",
-    sha256: "<64 lowercase hex characters>",
+    sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
     persistent: true,
     init: "db/schema.sql",
   },
@@ -515,47 +687,57 @@ dependencies: {
 ```
 
 ```typescript
+import type { AddExpenseHandler } from "../.embabel/realm.d.ts";
+
 export const addExpense: AddExpenseHandler = async (input, ctx) => {
   await ctx.deps.db.exec("INSERT INTO expenses (amount, note) VALUES (?, ?)", [input.amount, input.note]);
   const rows = await ctx.deps.db.exec("SELECT sum(amount) AS total FROM expenses");
-  return { total: rows[0].total };
+  return { total: rows[0]?.total ?? 0 };
 };
 ```
 
 - The key becomes `ctx.deps.<key>`: a JavaScript identifier, and not `log` or `gateway`.
-- `module` is a registry id, `version` an exact version such as `3.50`, and `sha256` the digest
-  of the module's bytes. The host refuses a module the operator has not allowed, and one whose
-  bytes do not hash to `sha256`. Either refusal takes every handler in the realm dark, including
-  the ones that never touch the dependency. The reference host allows `sqlite3-wasi` and
-  `h3-wasi`, at most eight dependencies, and modules up to 32 MiB.
+  `ctx.deps` exists only when the realm declares a dependency.
+- `module` is a registry id (`[a-z0-9][a-z0-9-]*`), `version` an exact version such as `3.50`
+  (one to three dot-separated numbers), and `sha256` the digest of the module's bytes, 64
+  lowercase hex characters. The host refuses a module the operator has not allowed, and one
+  whose bytes do not hash to `sha256`. Either refusal takes every handler in the realm dark,
+  including the ones that never touch the dependency. The reference host allows `sqlite3-wasi`
+  and `h3-wasi`, at most eight dependencies, and modules up to 32 MiB.
 - SQLite has one method, `exec(sql, params)`, which resolves to rows as plain objects. Bind
   values through `params` (strings, numbers or null). A `sqlite3-wasi` dependency may not declare
   `methods`.
-- Any other module declares the `methods` it calls, each with numeric `args` and a `returns`
-  type from `i32`, `i64`, `f32` and `f64`. An `i64` travels as a decimal string, since values
-  such as an H3 cell id do not fit a JavaScript number. The operator's allowlist decides what a
-  module may really do; a declared method the operator has not allowed refuses at call time.
+- Any other module may declare the `methods` it calls, each with `args` and a `returns` type
+  from `i32`, `i64`, `f32` and `f64`, and the generated types give `ctx.deps.<key>` exactly those
+  methods. An `i64` travels as a decimal string, since values such as an H3 cell id do not fit a
+  JavaScript number. A module with no declared methods is typed `unknown`. The operator's
+  allowlist decides what a module may really do; a declared method the operator has not allowed
+  refuses at call time.
 - Without `persistent`, state lives for one dispatch and starts empty each time.
 - With `persistent: true`, the host keeps one database for each world, realm and dependency. It
   restores the database at the start of a dispatch and saves it only when the dispatch succeeds
   and the output passes validation; a failed or refused dispatch leaves the stored rows as they
   were.
-- `init` is a script, relative to the realm, run against empty state: once per dispatch for
-  ephemeral state, or once when a persistent database is created. The host copies it from the
+- `init` is a script, relative to the realm with no leading `/` and no `..`, run against empty
+  state: once per dispatch for ephemeral state, or once when a persistent database is created.
+  Synth refuses a missing file and copies it into the output. The host copies it from the
   admitted capture (at most 1 MiB), so editing the file later changes nothing for the admitted
   version.
 - The host records the module, version, digest and init script's hash beside a persistent
   database. Change any of them and the host reports a mismatch and refuses to reuse the database.
   It neither wipes nor migrates it, and there is no migration step, so settle the schema before
   the first install that persists, and ship a changed schema under a new dependency key.
-- The types accept `layers` (`name@version`), and the reference host refuses a realm that
-  declares them, so leave them out.
+- `layers` takes `name@version` references (a registry id and one to three dot-separated
+  numbers), which synth checks and writes, sorted, to `dependencies/manifest.json`. The reference
+  host refuses a realm that declares them, so leave them out.
 
 ## Types
 
 `types` works as in a conventional realm (see [`types/`](README.md#types)) and synth writes it to
-`types/<realm name>.yml`. A captured producer's `targetLabel` and a proposal's `target.label` are
-graph labels; declare the types they name here so a query and a person can find them.
+`types/<realm name>.yml`. The generated `.d.ts` has one interface per type. A captured producer's
+`targetLabel` and a proposal's `target.label` are graph labels; declare the types they name here
+so a query and a person can find them. Goals resolve their `input` and `output` against the
+World's types, and synth does not check that they are declared.
 
 ## Producers
 
@@ -587,20 +769,27 @@ not supply `userId`, `worldId`, `workspaceId`, `visibleTo` or any property start
 the host owns those.
 
 ```typescript
+import type { IncidentsHandler } from "../.embabel/realm.d.ts";
+
+interface IncidentPage {
+  items: Record<string, unknown>[];
+  nextCursor?: string;
+}
+
 export const incidents: IncidentsHandler = async (input, ctx) => {
-  const page = await ctx.gateway.statuspage.listIncidents({
+  const page = (await ctx.gateway.statuspage.listIncidents({
     services: input.serviceIds.join(","),
-    impact: input.impact?.join(","),   // present only when the query pinned impact
+    impact: input.impact?.join(","), // present only when the query pinned impact
     status: input.status?.join(","),
-    after: input.cursor,               // absent on the first page
-  });
+    after: input.cursor, // absent on the first page
+  })) as IncidentPage;
   return { rows: page.items, next: page.nextCursor ?? null };
 };
 ```
 
-**Joins.** 1 to 8 joins, each naming the label it produces (`targetLabel`), the stored label it
-starts from (`anchorLabel`), the relationship, the anchor property whose values become keys
-(`keyField`), and the record field carrying the key back (`recordKeyField`).
+**Joins.** 1 to 8 distinct joins, each naming the label it produces (`targetLabel`), the stored
+label it starts from (`anchorLabel`), the relationship, the anchor property whose values become
+keys (`keyField`), and the record field carrying the key back (`recordKeyField`).
 
 **Paging.** With `page`, the handler returns `{rows, next}`. The host calls it again with
 `next` under `page.argument` until `next` is null or `maxPages` (1 to 16) is reached. A repeated
@@ -617,11 +806,14 @@ the answer is identical, so nothing tells you it happened. Where the host shows 
 diagnostics, they name the arguments that reached the handler on each call; a filter missing
 from that list is the next rule to declare. See the [pushdown profile](HOSTED_EXECUTION.md#me-captured-producer-pushdown-profile).
 
-**Arguments.** `keyArgument` and join fields are identifiers. `page.argument` and every pushdown
-`argument` match `[a-z][A-Za-z0-9]{0,63}`, and no two of the key, page and pushdown arguments may
-share a name. At most 16 pushdown rules. If the handler's input schema sets
-`additionalProperties: false`, list the page and pushdown arguments in its `properties`, or the
-host refuses the producer at bind time.
+**Names and arguments.** The producer's key is `[a-z][a-z0-9._-]{0,63}`. `keyArgument`, every
+join field and every pushdown `property` are identifiers, `[A-Za-z_][A-Za-z0-9_]{0,63}`.
+`page.argument` and every pushdown `argument` match `[a-z][A-Za-z0-9]{0,63}`, and no two of the
+key, page and pushdown arguments may share a name. At most 16 pushdown rules, each listed once.
+Under `defineRealm`, `handler` must be a handler the realm declares; synth checks only that it is
+written `namespace.verb`. If the handler's input schema sets `additionalProperties: false`, list
+the page and pushdown arguments in its `properties`, or the host refuses the producer at bind
+time.
 
 **Reaching a producer.** A query reaches the target label only by traversing one of its joins
 from a bound anchor: a stored node pinned by a value or narrowed by a predicate. A bare
@@ -636,11 +828,24 @@ that needs that handler's grants as well as its own.
 
 ## Graph queries and view references
 
-A handler reads the owner's graph with `ctx.gateway.cypher.query`:
+A handler reads the owner's graph with `ctx.gateway.cypher.query`. The generated types leave
+`cypher` as `unknown`, so give the call a type in the handler:
 
 ```typescript
+import type { OpenBySeverityHandler } from "../.embabel/realm.d.ts";
+
+interface CypherGateway {
+  cypher: {
+    query(request: { cypher: string; params?: Record<string, unknown> }): Promise<{
+      rows: Record<string, unknown>[];
+      warnings: unknown[];
+    }>;
+  };
+}
+
 export const openBySeverity: OpenBySeverityHandler = async (input, ctx) => {
-  const { rows } = await ctx.gateway.cypher.query({
+  const gateway = ctx.gateway as unknown as CypherGateway;
+  const { rows } = await gateway.cypher.query({
     cypher: `MATCH (s:Service)-[:HAS_INCIDENT]->(i:Incident)
              WHERE s.team = $team AND i.impact IN $impacts
              RETURN s.name AS service, i.incidentId AS incident
@@ -675,8 +880,8 @@ queries: {
 
 A statement may then write `MATCH (s:services)`; the host inlines the view in its place.
 `alias` is `[a-z][a-z0-9_]{0,63}`, `view` is `[A-Za-z][A-Za-z0-9_]{0,63}`, and the list holds at
-most 32 entries, each alias and each view once. A view that references another view, takes
-parameters or is materialized is refused. See
+most 32 entries, each alias and each view once. An empty list is written to the file too. A view
+that references another view, takes parameters or is materialized is refused. See
 [view references](HOSTED_EXECUTION.md#view-references).
 
 ## Goals
@@ -696,14 +901,19 @@ goals: {
 
 The key is `[a-z][a-z0-9-]{0,63}`. `input` and `output` are type names (`[A-Z][A-Za-z0-9]{0,63}`);
 `input` may be `UserInput`, which reaches the handler as `{"content": text}`, and `output` may
-not. The host publishes the goal as `<key>_goal` and binds the handler's object result as the
-output type. See the [goal profile](HOSTED_EXECUTION.md#me-captured-goal-profile).
+not. `description` is at most 512 characters. Synth writes the file as `version`, `goal`,
+`handler`, `input`, `output` and `description`. Under `defineRealm`, `handler` must be a handler
+the realm declares; synth checks only that it is written `namespace.verb`, and does not check the
+type names. The host resolves `input` and `output` against the World's declared types, publishes
+the goal as `<key>_goal` and binds the handler's object result as the output type. See the
+[goal profile](HOSTED_EXECUTION.md#me-captured-goal-profile).
 
 ## Lenses and watches
 
 A captured lens is a view the owner opens, produced by one of the realm's handlers. A watch
 re-reads a lens on a schedule and tells the owner about new items. Declare them together with
-`watching`, so a watch can only name a lens declared beside it:
+`watching`, so a watch can only name a lens declared beside it. `watching` takes both blocks,
+`capturedLenses` and `watches`:
 
 ```typescript
 import { defineRealm, watching } from "@embabel/realm-types";
@@ -728,21 +938,26 @@ export default defineRealm({
 
 **Lenses.** Use `capturedLenses`; the conventional `lenses` field is refused on a captured realm.
 The key is the lens id (`[a-z][a-z0-9-]{0,63}`), `name` is at most 128 characters and
-`description` at most 512. `result` is `"json"` (the default, data only) or `"content"`, where the
-handler returns `focus`, `data`, `presentation` and `complete`, and the owner's `cypher_query`
-approval is needed too. See [captured handler binding](README.md#captured-handler-binding).
+`description` at most 512. Synth refuses a lens whose handler the realm does not declare.
+`result` is `"json"` (the default, data only) or `"content"`, where the handler returns `focus`,
+`data`, `presentation` and `complete`, and the owner's `cypher_query` approval is needed too. See
+[captured handler binding](README.md#captured-handler-binding).
 
-**Watches.** At most 16. The schedule is six-field cron and may fire at most once every five
-minutes; synth walks the expression over a two-year window and refuses one that fires too
-often or never. `criteria` is at most 2048 bytes and `judge`, when present, at most 1024. A watch
-has no field for where results go: the host alone decides how the owner hears about them.
+**Watches.** At most 16. The key is `[a-z][a-z0-9-]{0,63}`, and `lens` names a lens the realm
+declares. The schedule is six-field cron, at most 64 characters, written with digits, `*`, `-`,
+`,` and `/`, plus `?` in the two day fields; month and weekday names, `L`, `W`, `#` and macros
+are refused. When both day fields are restricted, a day must match both. Synth walks the
+expression in UTC from 30 December 2023 to 2 January 2026 and refuses one that fires less than
+five minutes apart or never fires. `criteria` is one line of at most 2048 bytes, and `judge`,
+when present, is not empty and at most 1024 bytes. A watch has no field for where results go: the
+host alone decides how the owner hears about them.
 
 For a watch, the lens handler returns a top-level `items` array. The first run takes a baseline
 and tells the owner nothing. A run may carry at most 32 items, 8 of them new, and deliver at most
-4 to the owner; a run past any of these is refused whole, and the host does not trim it. A run's outcome is `BASELINED`, `DELIVERED`, `NOTHING_NEW`,
-`REFUSED` or `FAILED`. What a watch has seen survives an approved upgrade; a changed capture takes
-a fresh baseline. The owner approves each watch on its own, and approving a watch approves
-nothing else.
+4 to the owner; a run past any of these is refused whole, and the host does not trim it. A run's
+outcome is `BASELINED`, `DELIVERED`, `NOTHING_NEW`, `REFUSED` or `FAILED`. What a watch has seen
+survives an approved upgrade; a changed capture takes a fresh baseline. The owner approves each
+watch on its own, and approving a watch approves nothing else.
 
 ## Apps
 
@@ -758,15 +973,19 @@ apps: {
 ```
 
 - The key is the page's file name, `[A-Za-z0-9][A-Za-z0-9_.-]{0,119}` ending in `.html` or
-  `.htm`, and synth copies `apps/<key>` from the realm. At most 32 apps.
-- `handlers` lists what the page may call, each a declared `namespace.verb`, at most 32. It may
-  be empty. Each listed handler still needs its own approval, and the owner approves the app
-  itself separately.
-- `resources` lists stylesheets and scripts from `apps/<key>.assets/`, `.css` or `.js` only, each
-  listed once. The host inlines each one in its own `<style>` or `<script>` block ahead of the
-  page. A stylesheet containing `</style` or a script containing `</script` is refused.
+  `.htm`, and synth copies `apps/<key>` from the realm, refusing the app when the page is
+  missing. At most 32 apps, and each `apps/<key>.app.json` is at most 8 KiB.
+- `handlers` lists what the page may call, each a declared `namespace.verb`, at most 32, each
+  once. It may be empty. The compiler does not check these names; synth refuses one the realm
+  does not declare. Each listed handler still needs its own approval, and the owner approves the
+  app itself separately.
+- `resources` lists up to 16 stylesheets and scripts from `apps/<key>.assets/`, `.css` or `.js`
+  only, each listed once, and synth copies each one. The host inlines each one in its own
+  `<style>` or `<script>` block ahead of the page. A stylesheet containing `</style` or a script
+  containing `</script` is refused.
 - The operator sets the size limits. The defaults are 10 MiB for the page, 16 resources, 10 MiB
-  for any one resource and 10 MiB for all resources together.
+  for any one resource and 10 MiB for all resources together. Synth refuses an app past these
+  defaults whatever the operator has set.
 
 Inside the page, `realm.call(handler, args)` calls a handler and resolves to its result:
 
@@ -793,6 +1012,8 @@ A captured realm never writes to the owner's graph directly. It files a proposal
 accepts or rejects it.
 
 ```typescript
+import type { RecordIncidentHandler } from "../.embabel/realm.d.ts";
+
 export const recordIncident: RecordIncidentHandler = async (input, ctx) => {
   const { proposalId } = await ctx.writePropose({
     version: 1,
@@ -808,12 +1029,16 @@ export const recordIncident: RecordIncidentHandler = async (input, ctx) => {
 
 - `kind` is `method-write-back` (with `method`) or `decoration` (no `method`; sets `fields`
   directly). `effect` is `private-storage` or `external`.
-- `target.label` is a label the operator has opened to proposals, and `target.key` (at most 2048
-  bytes) must name exactly one private record the owner already holds.
+- `target.label` starts with an upper-case letter and `method` with a lower-case one; the host
+  checks the rest of each name. `target.label` is a label the operator has opened to proposals,
+  and `target.key` (at most 2048 bytes) must name exactly one private record the owner already
+  holds.
 - `fields` has 1 to 64 entries in any one object, nests at most four levels, and may not use
   `userId`, `worldId`, `workspaceId`, `visibleTo`, `owner`, `ownerId`, `labels` or any name
-  starting with `_`, at any depth. The generated types turn most of these rules into compile
-  errors. The document is at most 64 KiB.
+  starting with `_`, at any depth. The generated types make a reserved name, a fifth level or a
+  field the proposal does not declare a compile error, even for a proposal built as a separate
+  value first. The document is at most 64 KiB. `WRITE_PROPOSAL_LIMITS` in
+  `@embabel/realm-types` holds these numbers.
 - `expectedRevision` (optional, a whole number) makes the write conditional on the record's
   current revision.
 - The promise resolves to `{proposalId}` once the proposal is filed. It never tells the handler
@@ -858,20 +1083,24 @@ unusable.
 
 ## Limits at a glance
 
+Synth enforces every limit below except the ones marked host, which the reference host enforces
+at run time.
+
 | What | Limit |
 | --- | --- |
 | Files per captured directory | 32, 8 KiB each, 64 KiB together |
-| Credentials | 32 |
-| API entries / operations | 32 / 128; 64 writes; 64 parameters per operation; 1 MiB per document |
-| Data-pipe sources, consumers | 128 each |
+| Captured names (goal, trigger, lens, watch, channel, source, consumer, credential keys) | `[a-z][a-z0-9-]{0,63}` |
+| Credentials | 32; description 512 characters; 1 to 32 oauth2 scopes |
+| API entries / operations | 32 / 128; 64 writes; 64 parameters per operation; 256 paths and 1 MiB per document; 64 KiB `apis.yml`; 16 fixed headers |
+| Data-pipe sources, consumers | 128 each; 256 bytes per source field; 64 KiB file |
 | Websocket keepalive | 10 seconds to 5 minutes |
-| Long-poll interval | at least 1 second, and never below the operator's floor |
+| Long-poll interval | at least 1 second (default 5), and never below the operator's floor (host) |
 | Webhook verification reply | 1 KiB |
-| Dependencies | 8 on the reference host; modules up to 32 MiB; init script up to 1 MiB |
+| Dependencies | 8 on the reference host, modules up to 32 MiB, init script up to 1 MiB (host) |
 | Producer joins / pushdown rules / pages | 8 / 16 / 16 |
-| Producer fetch | 256 keys, 64 KiB arguments, 1 MiB output, 1,024 rows |
-| Graph query | 16 KiB statement, 128 parameters, `LIMIT` 1 to 512, 1 MiB of rows |
+| Producer fetch | 256 keys, 64 KiB arguments, 1 MiB output, 1,024 rows (host) |
+| Graph query | 16 KiB statement, 128 parameters, `LIMIT` 1 to 512, 1 MiB of rows (host) |
 | View aliases | 32 |
-| Watches | 16; at least 5 minutes apart; 32 items per run |
-| Apps | 32 apps, 32 handlers each; defaults of 10 MiB page, 16 resources, 10 MiB per resource and in total |
-| Write proposals | 64 KiB, 64 entries per object, 4 levels, 32 pending per installation |
+| Watches | 16; at least 5 minutes apart; criteria 2048 bytes, judge 1024 bytes; 32 items per run (host) |
+| Apps | 32 apps, 32 handlers and 16 resources each, 8 KiB manifest; 10 MiB page, 10 MiB per resource and in total |
+| Write proposals | 64 KiB, 64 entries per object, 4 levels, 2048-byte key, 32 pending per installation (host; the generated types also refuse a fifth level) |
