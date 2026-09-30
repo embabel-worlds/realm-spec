@@ -60,6 +60,7 @@ realm-name/
 ├── apis/                 # API entries (YAML)
 │   └── my-api.yml
 ├── keys.yml              # The API keys the realm needs, and how to check them (optional)
+├── credentials.yml       # Captured realms: the credentials the owner binds (optional)
 ├── src/                  # Hand-authored TypeScript handlers (optional)
 │   └── api/
 │       └── my-handlers.ts
@@ -1284,6 +1285,10 @@ documented below are compatibility features for local or explicitly first-party/
 installations. Their trust tier is adoption-visible and they never become marketplace-safe merely
 because they run in Docker.
 
+The typed credential slot is a [key entry](#keysyml--the-keys-a-realm-needs) in a conventional
+realm and a declared credential the owner binds in a captured realm. See
+[keys and declared credentials](#keys-and-declared-credentials) for which applies where.
+
 ```yaml
 # apis/petstore.yml
 - url: https://petstore3.swagger.io/api/v3/openapi.json
@@ -1301,7 +1306,7 @@ because they run in Docker.
 | `name` | recommended | Gateway namespace — `gateway.<name>.*`. Falls back to a slugified spec title if omitted. **Always set this** in published realms so the prompt examples work regardless of the spec's `info.title`. |
 | `type` | no | `openapi` (default) or `graphql`. |
 | `auth` | no | `none` (default), `bearer`, `api-key`, `oauth2`. See **Auth** below. |
-| `token-env` | with bearer / api-key | Env-var or credential-store key holding the token. |
+| `token-env` | with bearer / api-key | Env-var or credential-store key holding the token. Deprecated in favour of a [key entry](#keysyml--the-keys-a-realm-needs) for the same variable, or of a declared credential in a captured realm. |
 | `headers` | no | Custom HTTP headers; values support `${VAR}` interpolation from credential store / env. |
 | `oauth2` | with `auth: oauth2` | OAuth2 config — see **OAuth2** below. |
 | `tags` | no | Allowlist of OpenAPI tag names. Filters huge specs to a coarse subset. |
@@ -1397,6 +1402,8 @@ tier, `token-env` and `${VAR}` may then resolve from that world's credential sto
 `set NAME = ...` in chat or via the admin UI), followed by the process environment. Process fallback
 is unavailable in shared multi-world or untrusted marketplace deployments. Missing credentials mean
 the entry is skipped at world load with a logged warning; the API never appears in the gateway.
+A captured realm's API operations read only the owner's wallet, through the credential the owner
+bound, and never fall back to the process environment.
 
 ### OAuth2
 
@@ -1503,6 +1510,10 @@ gets one, the value(s) it takes, and how the host can tell whether a value works
 declaration to ask for the key by name, show it on the realm's settings, check a value before
 storing it, and re-check a stored value while it is in use.
 
+Key entries belong to conventional realms. A captured realm declares credentials the owner binds
+instead, which is the recommended path for a new realm.
+[Keys and declared credentials](#keys-and-declared-credentials) compares the two.
+
 ```yaml
 # keys.yml
 - name: brave
@@ -1542,7 +1553,7 @@ storing it, and re-check a stored value while it is in use.
 | `description` | no | One line on what the key unlocks. |
 | `getKeyUrl` | no | Where somebody obtains a key. |
 | `fields` | no | The values the key takes. Defaults to one field whose `variable` is `name` upper-snake-cased (`brave-search` → `BRAVE_SEARCH`). |
-| `fields[].variable` | yes | The credential name the value is stored and resolved under — the same name `token-env` and `${VAR}` in `apis/` refer to. |
+| `fields[].variable` | yes | The credential name the value is stored and resolved under — the same name `token-env` and `${VAR}` in `apis/` refer to. A captured realm names no variable; see [keys and declared credentials](#keys-and-declared-credentials). |
 | `fields[].displayName` | no | Defaults to the entry's `displayName`. |
 | `fields[].secret` | no | Default `true`. `false` marks a value safe to show back, like a project id. |
 | `validate` | no | How to check the values. Without it a key can be set but never checked. |
@@ -1603,6 +1614,8 @@ anything from the response that could identify the key.
   names a read.
 - **Declared keys are the typed credential slot** the [trust tiers](#apis) require: a marketplace realm
   declares its keys here rather than relying on `token-env` resolving from the environment.
+  This applies to a conventional realm. A captured realm's typed slot is a declared credential
+  the owner binds, and a captured realm never resolves a secret from the environment.
 
 ### Realms that declare nothing
 
@@ -1619,9 +1632,42 @@ credential variable the realm's APIs refer to (`token-env`, `${VAR}` in `headers
 A declared entry takes precedence over a derived one for the same variable, so a realm can adopt
 `keys.yml` one key at a time.
 
+A derived entry resolves the way `token-env` does, so the process environment fallback applies
+only in the local or first-party tier described under [Auth](#auth).
+
 **Load problems.** A `validate.api` the realm does not declare, a `validate.operation` that API does
 not have, an `interpret` naming no Realm Function, or two entries claiming one `variable`, is a
 recorded problem. The entry still loads, without `validate`.
+
+### Keys and declared credentials
+
+A realm asks for a secret in one of two ways, and both keep working. A key entry in `keys.yml`
+names the variable a value is stored under. A declared credential in `credentials.yml` names a
+purpose, and the owner binds a wallet item to it. Declared credentials are the recommended path
+for new realms.
+
+| | Key entry (`keys.yml`) | Declared credential (`credentials.yml`) |
+| --- | --- | --- |
+| Applies to | Conventional realms: one installed from a directory, a first-party or org-reviewed realm, or a local one. | Captured realms, which run from a copy the owner admitted. See [hosted execution](HOSTED_EXECUTION.md#credentials). |
+| The realm names | The variable, which `token-env` and `${VAR}` in `apis/` also name. | A purpose: kind, provider, description, docs link. Never a variable or where the secret lives. |
+| The value comes from | A person sets the key, and the host stores it under the variable. | The owner binds a pasted secret or an existing wallet item when approving the realm. |
+| The host reads it from | The world's credential store, then the process environment in the local or first-party tier ([Auth](#auth)). | The owner's wallet only. |
+| Checking a value | `validate`, with an optional `interpret`. | No check. Binding an existing item checks only that its stored type fits the credential's kind. |
+| Changing the value | Replace it, and the host re-checks it. | An approved API operation is pinned to the value it was approved with; a different value needs approval again. |
+| Values | One or more fields, each secret or not. | One secret per credential. |
+
+`token-env` is deprecated in favour of either declaration: a key entry for the variable in a
+conventional realm, or a declared credential referenced with `credential:` in a captured realm.
+Hosts still read it. A captured API entry that still uses `token-env` gets an implicit credential
+whose id is the variable, the same name a derived key entry for that variable takes.
+
+**When both name one secret.** A key entry and a captured realm reach the same wallet item when a
+captured API entry still reads it through `token-env`, or when the owner binds a declared
+credential to an existing item a key entry stored. Both then use one value. Replacing or deleting
+that key through the key entry stops every captured API operation approved with the old value,
+until the owner approves the new one or the approved value is restored. Hosts do not yet warn
+before such a replacement, so expect to re-approve a captured realm's operations after changing a
+key it shares.
 
 ## `src/` and `tests/` — hand-authored TypeScript handlers
 
@@ -2636,7 +2682,7 @@ into the consequence engine. The payload cannot select or override that route.
 |---|---|---|
 | `type` | yes | Name of a type declared in this realm (or another loaded realm) whose `parents` includes `Signal`. |
 | `webhook.signature` | yes | Signature scheme the host's built-in verifiers handle. |
-| `webhook.signature-secret` | conditional | Env-var name holding the shared secret. Required for any non-`none` scheme. |
+| `webhook.signature-secret` | conditional | Env-var name holding the shared secret. Required for any non-`none` scheme. Conventional realms only: a captured realm's webhook channel names a declared credential in `signature.credential` (see [TypeScript realms](TYPESCRIPT_REALMS.md#channels)). |
 | `webhook.tenancy` | yes | Strategy for routing the inbound webhook to a world. |
 | `webhook.mapping` | yes | Map of type-property → JSONPath. Every required property of the `Signal` parent (`id`, `occurredAt`, `sourceKind`, `sourceId`) must be covered. |
 | `webhook.tier-when` | no | Tier-override map. Each entry's value is a Jinja boolean expression evaluated against the parsed payload. First true wins; default tier is `AMBIENT`. |

@@ -198,8 +198,11 @@ one.
 
 ## Credentials
 
-A Realm declares the credentials it needs by purpose — kind, provider, description and docs
-link — and never says what the secret is or where it lives. Five kinds are accepted and
+A captured Realm declares the credentials it needs in `credentials.yml` by purpose (kind,
+provider, description and docs link), and never says what the secret is or where it lives. A
+conventional Realm names its keys in `keys.yml` instead; both work, and
+[keys and declared credentials](README.md#keys-and-declared-credentials) says which applies
+where. Declared credentials are the recommended path for new Realms. Five kinds are accepted and
 anything else is refused. Only an authorization-flow credential carries scopes, and it names at
 least one. A bearer credential may name the scheme word its token is sent under, and a scheme
 the host would not put in a header is refused. Two entries may not claim one id, a docs link
@@ -419,7 +422,9 @@ connection and remains available when the configured target has been removed.
 
 The legacy `token-env` spelling, which names a wallet entry directly on a captured API
 operation, is deprecated in favour of a declared credential the owner binds, and an entry
-migrated to a declared credential appears in the declared list alongside the native kinds. A
+migrated to a declared credential appears in the declared list alongside the native kinds. The
+wallet entry it names may be one a conventional Realm's key entry also stores; see
+[keys and declared credentials](README.md#keys-and-declared-credentials). A
 declared credential's id is read in either of the two spellings the wire carries, and an id the
 host will not read a credential under is refused.
 
@@ -432,15 +437,17 @@ to an external datasource. The host channel journal is a separate delivery facil
 A captured Realm may declare approved API operations in `apis/apis.yml` using vendored
 OpenAPI documents. Each operation binds a fixed destination and a key from the owner's
 wallet. In the governed profile, `token-env` identifies a wallet entry; it does not authorize
-an environment-variable fallback. The guest supplies operation arguments, never credentials,
-headers, server overrides or an alternative URL.
+an environment-variable fallback. The fallback a conventional Realm may use in the local or
+first-party tier ([Auth](README.md#auth)) never applies to a captured Realm. The guest supplies
+operation arguments, never credentials, headers, server overrides or an alternative URL.
 
 Owner preview shows the captured digest, installation revision, operation destination and
 required wallet key name. Grant and revoke requests select the displayed installation and
 revision. Granting an operation binds the current wallet value. Changing or deleting that
 value prevents its use while the value is absent or differs from the approved value.
-A different value requires approval. Restoring the identical approved value resumes access;
-explicit operation or Realm revocation prevents that. Revocation remains available after
+A different value requires approval. That holds however the value changed, including a person
+replacing a key entry that stores the same wallet entry. Restoring the identical approved value
+resumes access; explicit operation or Realm revocation prevents that. Revocation remains available after
 key deletion. These mutations advance the Realm installation revision, so
 older retained invocations become stale.
 

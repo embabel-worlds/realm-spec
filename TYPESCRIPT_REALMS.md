@@ -389,8 +389,14 @@ export const reply: ReplyConsumerHandler = async (event, ctx) => {
 
 ## Credentials
 
-A realm says what it needs to authenticate and never what the secret is. The owner binds a real
-secret to each declared credential when approving the realm.
+A captured realm says what it needs to authenticate and never what the secret is. The owner binds
+a real secret to each declared credential when approving the realm. This is the recommended way
+for any new realm to ask for a secret.
+
+A conventional realm asks for its keys another way, with [`keys.yml`](README.md#keysyml--the-keys-a-realm-needs)
+entries that name the variable a key is stored under. Both declarations work, and each applies
+to its own kind of realm; [keys and declared credentials](README.md#keys-and-declared-credentials)
+says which applies where and what happens when both name one secret.
 
 ```typescript
 credentials: {
@@ -426,11 +432,11 @@ bot: {
 | `scheme` | `bearer` only: the word sent before the token in `Authorization`, 1 to 32 printable ASCII characters with no spaces. Defaults to `Bearer`, which is not written to the file. |
 | `scopes` | `oauth2` only, and required there: 1 to 32 distinct scopes, each at most 128 characters. |
 
-`value`, `env`, `tokenEnv` and `walletItem` are refused, so a realm cannot ship or point at a
-secret, and so is any other field not in the table. A credential nothing references is refused,
-since it would ask the owner for a secret no call uses. Synth counts a reference from an API
-entry's `credential` (or its deprecated `tokenEnv`), a channel's `credential` and a webhook
-signature's `credential`. `credentials.yml` lists the credentials sorted by id. Binding, rotation
+`value`, `env`, `tokenEnv` and `walletItem` are refused, so a captured realm cannot ship or point
+at a secret, and so is any other field not in the table. A credential nothing references is
+refused, since it would ask the owner for a secret no call uses. Synth counts a reference from an
+API entry's `credential` (or its deprecated `tokenEnv`), a channel's `credential`, a webhook
+signature's `credential` and the [GraphQL](#graphql) source's `credential`. `credentials.yml` lists the credentials sorted by id. Binding, rotation
 and revocation are described under [credentials](HOSTED_EXECUTION.md#credentials) in the hosted
 contract. An `oauth2` credential is accepted in the declaration, and binding one is refused by
 the reference host.

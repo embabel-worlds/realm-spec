@@ -59,8 +59,21 @@ _Avoid_: URL scheme, deep link when meaning this contract
 **Key Entry**:
 A credential a Realm declares it needs: a name, one or more fields each stored under a credential
 variable, and optionally how the host checks a value. The realm names the check; the host makes it,
-and realm code never sees a value.
+and realm code never sees a value. A conventional Realm declares Key Entries in `keys.yml`; a
+captured Realm uses Declared Credentials.
 _Avoid_: secret, config entry, API key when meaning the declaration rather than the value
+
+**Declared Credential**:
+A credential a captured Realm declares it needs, by purpose: kind, provider, description and docs
+link. It never names a variable or says where the secret lives. The recommended way for a new
+Realm to ask for a secret.
+_Avoid_: Key Entry, secret, token-env
+
+**Credential Binding**:
+The owner's choice of wallet item for one Declared Credential, made when approving the Realm. The
+host reads that item and puts it on the wire itself; an approved API operation stays pinned to
+the value it was approved with.
+_Avoid_: key value, secret reference
 
 **Knowledge Context**:
 A named confidentiality boundary for knowledge or memory within one world. Its identity and access

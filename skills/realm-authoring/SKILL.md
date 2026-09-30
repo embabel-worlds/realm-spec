@@ -56,6 +56,9 @@ checkout is mounted.
 | a deterministic rule over a signal | `actions/` (FQN `PolicyActionSpec`) | "Deterministic rules" |
 | a domain / signal / mirror type | `types/` | "`types/`" |
 | call an external REST/GraphQL API | `apis/` (+ vendored spec) | "`apis/`" (auth, OAuth2) |
+| ask for an API key (conventional realm) | `keys.yml` | "`keys.yml`", "Keys and declared credentials" |
+| ask for a secret the owner binds (captured realm, recommended for new realms) | `credentials` in `realm.ts` | TYPESCRIPT_REALMS.md "Credentials" |
+| call a GraphQL API from a captured realm | `graphql` in `realm.ts` | TYPESCRIPT_REALMS.md "GraphQL" |
 | a shared IDENTITY other realms attach to (an account, a product, a site) | `types/` `spine:` | Virtual Cypher §5.4.1 — see "Joining OTHER realms" below |
 | attach your records to a spine (yours, another realm's, or Person/Organization) | `types/` `hub:` on the property carrying the key | Virtual Cypher §5.4 |
 | a shared KIND of record (every ticket is a `SupportCase`) | `types/` `parents:` | LABELS_AND_COMPOSITION.md |
@@ -407,7 +410,14 @@ push.
 
 - Credentials stay in host-managed, owner-scoped storage. Governed guests use approved
   operations and sources; they receive no secrets or general credential lookup. Ambient
-  environment variables do not authorize credential use.
+  environment variables do not authorize credential use for a captured realm; only a
+  conventional realm in the local or first-party tier may resolve `token-env` from the
+  environment.
+- **A captured realm declares credentials; a conventional realm declares `keys.yml` entries.**
+  Both work. New realms should be captured and declare credentials the owner binds. `token-env`
+  is deprecated in favour of either. A captured API operation is pinned to the value it was
+  approved with, so changing a key that a key entry and a captured realm share means approving
+  that operation again.
 - **Descriptions are for an LLM planner** — write them as routing signal, not prose.
 - **Stable ids.** Renaming a `name` (realm/action/type/command) breaks every installed
   world wired to it — that's a major version bump.
