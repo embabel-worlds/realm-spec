@@ -2459,8 +2459,8 @@ fetch everything the key allows. [TypeScript realms](TYPESCRIPT_REALMS.md#produc
 same producer written with `defineRealm`. Me limits each fetch to
 256 keys, 2,048 characters per key, 64 KiB of encoded arguments, 1 MiB of output and
 1,024 rows. It accepts 32 flat declaration files, 8 KiB per file, 64 KiB total and
-eight joins per binding. All fields shown are required; unknown fields, duplicate
-names or joins, aliases, tags and undeclared handlers are refused. These are host
+eight joins per binding. `page` and `pushdown` are optional; every other field shown is
+required. Unknown fields, duplicate names or joins, aliases, tags and undeclared handlers are refused. These are host
 profile limits, independent of backend placement.
 
 A handler grant does not grant API or datasource access. Each host call still needs
