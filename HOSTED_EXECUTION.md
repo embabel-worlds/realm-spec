@@ -679,8 +679,8 @@ separate contract.
 `ctx.gateway.cypher.query({cypher, params})` reads owned graph data and returns
 `{rows, warnings, coverage}`. Pass values through `params`, as a JSON object or a JSON string.
 The owner must approve `cypher_query` separately from the handler. List resources at
-`GET /realms/{realmName}/resource-approvals`; grant or revoke with
-`POST /realms/{realmName}/resource-approvals/cypher_query/{grant|revoke}` and
+`GET /api/v1/realms/{realmName}/resource-approvals`; grant or revoke with
+`POST /api/v1/realms/{realmName}/resource-approvals/cypher_query/{grant|revoke}` and
 `{installationId, expectedRevision}`. Each change advances the installation revision.
 
 Give every newly bound node a label and a name, and end the statement with a literal
@@ -701,12 +701,10 @@ querying handler's admission and each API operation still needs its own approval
 Legacy SQL, model-backed producers and implicit identity enrichment are excluded.
 Producer records have no shared query cache, and materialization is rolled back.
 
-Requests are capped at 128 KiB, with 16 KiB statements and 128 parameters. The query
-executor's own output — the `rows` array, at most 512 entries — is checked against a
-1 MiB bound; the `coverage` list is assembled and attached to the response afterward,
-without a further size check, so a response near that bound plus a coverage list
-carrying long partition identifiers can exceed 1 MiB overall, though the host's outer
-4 MiB gateway response limit still applies. A host that supports this profile limits a
+Requests are capped at 128 KiB, with 16 KiB statements and 128 parameters. The `rows`
+array, at most 512 entries, is checked against a 1 MiB bound, and the host's outer 4 MiB
+gateway response limit still applies. `warnings` carries the engine's warnings. `coverage` is
+present and empty in this profile. A host that supports this profile limits a
 query transaction to 15 seconds and buffers at most 4,096 rows or 4 MiB per statement.
 These buffering limits apply after driver decoding; database memory limits remain deployment
 configuration. Engines without bounded query execution refuse captured queries.
@@ -717,6 +715,33 @@ const result = await ctx.gateway.cypher.query({
   params: { status: "unpaid" },
 });
 ```
+
+A Docker handler makes the same call as `gateway.cypher.query`. A refusal rejects with one
+fixed message, so the handler cannot learn which rule it broke. The rows come back as the
+query projected them; return scalar properties (`b.id AS id`) when the handler needs plain
+values.
+
+A statement may cross into the Realm's own [captured producers](#me-captured-producer-paging-profile).
+Each producer's join makes its target label reachable, and the host calls the producer's
+handler as a nested call of the querying handler, so the producer runs only while that
+handler's own grants hold. The ordinary Virtual Cypher rules apply: a producer's target label
+must be reached along its declared join from a bound anchor, and a naked
+`MATCH (i:Incident)` is refused. An anchor is bound by a pin or a predicate on a stored node
+the owner holds. A producer's target may anchor another producer's join, so producers chain:
+
+```typescript
+// Service is stored; Incident and Postmortem come from two captured producers.
+const result = await ctx.gateway.cypher.query({
+  cypher: `MATCH (s:Service)-[:HAS_INCIDENT]->(i:Incident)-[:HAS_POSTMORTEM]->(p:Postmortem)
+           WHERE s.team = $team AND i.impact IN ['critical', 'major']
+           RETURN s.name AS service, i.incidentId AS incident, p.summary AS summary
+           LIMIT 50`,
+  params: { team: "payments" },
+});
+```
+
+Fetched records are materialized for the statement and rolled back afterwards; nothing a
+producer returns is kept in the graph.
 
 ### View references
 
