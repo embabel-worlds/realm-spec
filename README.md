@@ -1638,35 +1638,34 @@ shape; its async methods are the affordances.
 import { Entity } from "@embabel/runtime-types";
 import type { StreamingShow } from "../types/movie";
 
-// The gateway ops this type calls, typed. Until `embabel-realm sync` generates the
-// host's `GatewayContext`, the realm types the slice it uses and reads it through
-// `this.api`, so bodies and return types are fully typed — no `unknown`.
+/** The gateway ops this type calls: the type argument to `Entity`. */
 interface MovieGateway {
   streamingAvailability: { getShow(args: { id: string; country: string }): Promise<StreamingShow> };
 }
 
 /** A film in the knowledge graph. Identity is `imdbId`. */
-export class Movie extends Entity {
+export class Movie extends Entity<MovieGateway> {
   imdbId!: string;
   title?: string;
 
-  private get api(): MovieGateway {
-    return this.gateway as unknown as MovieGateway;
-  }
-
   /** Where this movie is streaming in a country (ISO-3166 alpha-2, lowercase). */
   async streaming(args: { country: string }): Promise<StreamingShow> {
-    return this.api.streamingAvailability.getShow({ id: this.imdbId, country: args.country });
+    return this.gateway.streamingAvailability.getShow({ id: this.imdbId, country: args.country });
   }
 }
 ```
 
 There is no `ctx`/`self` plumbing: `this` is the object the host hydrated from the
-entity's fields, and `this.gateway` is the injected context (typed loosely until
-`sync` lands — read it through a typed `this.api` accessor, as above, for real
-result types). Each method's single `args` parameter and return type drive the
-JSON Schema; the first JSDoc paragraph is the LLM-visible description, exactly as
-for namespace functions.
+entity's fields, and `this.gateway` is the injected context. **Name the gateway once,
+as `Entity`'s type argument**: `this.gateway` is then typed with exactly the ops the
+type calls, so every body and return type is real, with no cast. Without a type
+argument the gateway is `GenericGatewayContext`, typed loosely; once `sync` generates
+the host's `GatewayContext`, `Entity<GatewayContext>` types every op the host offers.
+
+Each method's single parameter and return type drive the JSON Schema: a method that
+needs one value takes it bare (`comment(body: string)`), one that needs several takes
+one options object (`bookCall(call: CallBooking)`). The first JSDoc paragraph is the
+LLM-visible description, exactly as for namespace functions.
 
 Extending `Entity` is what makes the host recognise `Movie` as a type, and it
 brings **`neighbors()`** for free — graph navigation (`movie.neighbors({ hops })`)
@@ -1683,14 +1682,13 @@ tested in milliseconds with no live server:
 ```ts
 // tests/movie.test.ts — hermetic, no live API
 import { entityForTest, mockGateway } from "@embabel/runtime-types";
-import type { GenericGatewayContext } from "@embabel/runtime-types";
-import { Movie } from "../src/api/movie";
+import { Movie, type MovieGateway } from "../src/api/movie";
 
 const getShow = vi.fn().mockResolvedValue({ streamingOptions: { au: [] } });
 const movie = entityForTest(
   Movie,
   { imdbId: "tt0113451" },
-  mockGateway<GenericGatewayContext>({ streamingAvailability: { getShow } }),
+  mockGateway<MovieGateway>({ streamingAvailability: { getShow } }),
 );
 
 await movie.streaming({ country: "au" });
@@ -1720,10 +1718,58 @@ So a virtual type's class gives its on-demand instances behaviour:
   `GatewayContext` exposes.
 
 A read materialises transient nodes and rolls them back; an effectful method commits
-to the real source (the rollback never touches that side-effect). A program reads,
-then acts: `const rows = await gateway.cypher.query({ cypher }); hydrateByType(rows,
-{ GitHubIssue }, gateway).filter(i => i.needsTriage()).forEach(i => i.addLabels('stale'))`.
+to the real source (the rollback never touches that side-effect).
 `realm-github` is the worked example (`GitHubIssue` / `GitHubPullRequest`).
+
+#### Acting on what a query finds
+
+The point of type methods is that code navigates the graph to what it needs and then
+works on it there, the way an object model does. In a script:
+
+```js
+// 1. Read with gateway.cypher.query: every node in its rows carries __type and __labels,
+//    virtual nodes included, so the host knows what each one is.
+const { rows } = await gateway.cypher.query({ cypher: `
+  MATCH (b:OdooBook)-[:HAS_CUSTOMER]->(c:OdooCustomer)
+  WHERE c.name = 'Acme Corporation' RETURN c` });
+
+// 2. Bind a row. state.set reads the row's labels, so state.get returns it with every
+//    method its labels carry, from any realm. No type to name, no class to import.
+state.set("acme", rows[0].c);
+const acme = state.get("acme");
+
+// 3. Work on it.
+await acme.addNote("Second failed payment this month; chasing.");
+await acme.scheduleFollowUp({ summary: "Call about the failed payments", due: "2026-10-15", kind: "call" });
+```
+
+- **Read with `gateway.cypher.query`, not `gateway.kg.query`.** `kg.query` returns plain
+  rows for answering a question, with the type tags removed; a row from it knows no methods.
+- **Methods compose through labels.** A node is the intersection of its labels, so a
+  vendor node that declares `parents: [CrmAccount]` answers to its own type's methods
+  and to any method declared for `CrmAccount`. `x.is(SomeType)` narrows a row whose type
+  is known only at runtime.
+- **A program that imports the classes** can hydrate instead: `hydrateByType(rows,
+  { GitHubIssue }, gateway)` returns typed instances.
+
+#### Designing write methods
+
+A type's write methods are what an agent will do to a customer, a deal or a ticket, so
+design them for that caller:
+
+- **Name the action in the business's words, and use the same name across realms.** A
+  CRM realm's customer offers `addNote`, `scheduleFollowUp`, `bookCall`, whatever the
+  vendor calls them, so a routine written against one stack reads the same against
+  another. The method hides the vendor's call shape (`ids: [id]`, Odoo's command lists,
+  Chatwoot's message types).
+- **Make the safe outcome the default.** A note is internal unless asked otherwise; a
+  calendar booking sends no invitation unless asked; a message to the customer needs an
+  explicit flag. Something that cannot be recalled happens only when the caller says so.
+- **Check before writing.** Validate dates, ids and required fields in the method and
+  throw with the reason; an exception before the call is better than a bad record after it.
+  A graph id is a string; convert it to the source's own id type in one checked place.
+- **Each method calls one declared verb**, so what can change in the source is visible in
+  `apis/` with its effect metadata, and approving a method is approving that verb.
 
 ### Manifest format
 
