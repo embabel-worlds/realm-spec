@@ -3115,11 +3115,17 @@ is a leg of the guarantee that evaluation terminates:
 `none(…)` is `NOT any(…)`, and both `all(…)` and `single(…)` can be falsified by a member a later
 round adds — all three are the same non-monotone self-reference as `NOT`, whatever they look like,
 so all three are refused. Say it the monotone way instead: `any(…)` and `EXISTS` only become more
-true as membership grows, which is exactly what the fixpoint needs. One caution, because the engine
-does not yet catch it: a negation written as a COUNT COMPARISON (`size([x IN xs WHERE x:Derived])
-= 0`) or as a `CASE` that inverts the label is equally unsound and is currently **admitted**. Such a
-rule settles on the first or second round onto a set that contradicts its own body, and the round
-cap will not save you because nothing is still moving. Do not write one.
+true as membership grows, which is exactly what the fixpoint needs.
+
+The rule is monotonicity, not the word NOT, and it is checked position by position: a reference to
+the derived label must sit where a new member can only make the body MORE true. A negation in any
+other spelling is refused the same way — a count compared from above (`size([x IN xs WHERE
+x:Derived]) = 0`, `COUNT { (p)-[:R]->(:Derived) } <= 3`), a `CASE` that inverts the label, an
+`OPTIONAL MATCH` of it followed by `IS NULL`, a `SKIP`/`LIMIT` a new member could push a row out of.
+Count members from below instead (`>= n`), or use `any(…)`/`EXISTS`; `sum(CASE WHEN x:Derived THEN 1
+ELSE 0 END) >= n` is admitted because it only grows. Such a rule would otherwise settle at once on a
+set its own body contradicts, which the round cap cannot notice because nothing is still moving — so
+a body the host cannot prove monotone is refused rather than trusted.
 
 A rule set that breaks the fragment fails validation with a message naming the rule and the
 property it broke; it never half-installs. A conforming set's MEMBERSHIP is guaranteed to
