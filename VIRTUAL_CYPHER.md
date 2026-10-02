@@ -916,6 +916,19 @@ in the publisher's date format. Numbered parts are URL-encoded; malformed dates 
   composite parts `{key1}`..`{key9}` — any key token makes the producer **one download per
   anchor**, appropriate only for a genuine per-entity or per-window export.
 - Every value is a **string**. A leading-zero identifier survives; arithmetic is the query's job.
+- **A cell holding several values is one string until the realm says otherwise.** Published tables
+  often store a one-to-many relation in one delimited cell — a person's children as
+  `gershom_1302,eliezer_1114`. A producer's `compute:` turns it into a list, one Cypher expression
+  over the record `r`:
+
+  ```yaml
+  compute:
+    childIds: "[c IN split(r.children, ',') WHERE trim(c) <> '' | trim(c)]"
+  ```
+
+  A join keyed on `childIds` then looks up each element (§5.1, a list-valued `keyField`), at every hop of
+  a variable-length walk (§5.12). Keyed on the raw cell, it looks up the whole string as one key and
+  finds nobody — with no error, because a key that matches no row is an ordinary answer.
 - Omitting `keyColumn` returns the whole table for every key. Legitimate for a small catalogue,
   wrong for anything large.
 
@@ -1133,6 +1146,9 @@ RETURN o.companyNumber, [r IN relationships(p) | r.sourceId]
   the walk without a fetch, and fetched hops extend past the held data. Convergent paths dedupe
   to one node.
 - Cycles terminate. A loop's closing edge appears in results; nothing is fetched twice.
+- A **list-valued** `keyField` is its elements at every hop, as it is for a single hop: a person whose
+  `childIds` lists three children continues the walk three ways. A walk that read the list as one key
+  stopped after the first generation without a warning, because the tree simply appeared to end.
 - Rollups and subtree sweeps (`count`, `sum`, generation slices `*k..k`, path predicates) compose
   as ordinary Cypher over the resolved tree, and the same rows always yield the same tree.
 
