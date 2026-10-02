@@ -59,8 +59,21 @@ _Avoid_: URL scheme, deep link when meaning this contract
 **Key Entry**:
 A credential a Realm declares it needs: a name, one or more fields each stored under a credential
 variable, and optionally how the host checks a value. The realm names the check; the host makes it,
-and realm code never sees a value.
+and realm code never sees a value. A conventional Realm declares Key Entries in `keys.yml`; a
+captured Realm uses Declared Credentials.
 _Avoid_: secret, config entry, API key when meaning the declaration rather than the value
+
+**Declared Credential**:
+A credential a captured Realm declares it needs, by purpose: kind, provider, description and docs
+link. It never names a variable or says where the secret lives. The recommended way for a new
+Realm to ask for a secret.
+_Avoid_: Key Entry, secret, token-env
+
+**Credential Binding**:
+The owner's choice of wallet item for one Declared Credential, made when approving the Realm. The
+host reads that item and puts it on the wire itself; an approved API operation stays pinned to
+the value it was approved with.
+_Avoid_: key value, secret reference
 
 **Knowledge Context**:
 A named confidentiality boundary for knowledge or memory within one world. Its identity and access
@@ -71,3 +84,33 @@ _Avoid_: world, user context
 The exclusively active runtime epoch of one durable world. A new incarnation fences stale execution
 after restore, migration, or administrative transfer without changing the world's identity.
 _Avoid_: world version, cloned world
+
+
+## Channels
+
+**Channel**:
+A general data pipe carrying provider messages, webhook events, database changes or
+Realm-produced events. A conversational provider connection is one channel adapter.
+
+**Channel Source**:
+An approved producer identity and stream within a World. Realm sources retain their
+installation, artifact digest, source name and source-grant revision. Host provider sources
+retain their provider registration and revision.
+
+**Source Grant Revision**:
+A host-assigned revision identifying one active source approval. Unrelated handler or consumer
+approvals preserve it. Source removal/reapproval, artifact change and reinstall invalidate it.
+It does not replace an invocation's retained approval revision.
+
+**Channel Consumer**:
+An independently approved reader of one exact source, with a durable cursor. A Realm consumer
+maps its name to a captured handler and also requires handler approval.
+
+**Journal Receipt**:
+Confirmation that an event append is durable under the host's storage contract. It does not
+confirm completion of consumer processing or external effects.
+
+**Consumer Checkpoint**:
+A durable position advanced after an offered record prefix succeeds under current admission.
+An uncheckpointed offer may be replayed, so effects need stable idempotency keys. Records that
+every adopted consumer has checkpointed past may be reclaimed by the host.

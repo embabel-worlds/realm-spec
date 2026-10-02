@@ -166,6 +166,12 @@ it can hit the source's result cap before your matches (see §3.5).
 **Declared:** a `pushdown:` rule on the `issuesByAuthor` producer mapping the `html_url` predicate
 to a `repo:{value}` qualifier (with a `valuePattern` regex to extract `owner/repo` from a URL).
 
+**A captured realm's handler producer** declares pushdown as `property` and `argument` pairs.
+The handler receives every value an `=` or `IN` allows as a list of strings under that
+argument, and applies it however its source spells a filter. The graph still runs the `WHERE`,
+so the guarantee above holds unchanged
+([hosted profile](HOSTED_EXECUTION.md#me-captured-producer-pushdown-profile)).
+
 **If your source's query is JSON, not text** — an Odoo domain, an Elasticsearch `bool.filter`, a
 GraphQL `where:` — declare `argPath` + `clause` instead of `qualifier`. The clause is placed in the
 producer's own `args`, addressed the way `keyArg` is, with a trailing `-` meaning "append here":

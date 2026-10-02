@@ -56,13 +56,17 @@ checkout is mounted.
 | a deterministic rule over a signal | `actions/` (FQN `PolicyActionSpec`) | "Deterministic rules" |
 | a domain / signal / mirror type | `types/` | "`types/`" |
 | call an external REST/GraphQL API | `apis/` (+ vendored spec) | "`apis/`" (auth, OAuth2) |
+| ask for an API key (conventional realm) | `keys.yml` | "`keys.yml`", "Keys and declared credentials" |
+| ask for a secret the owner binds (captured realm, recommended for new realms) | `credentials` in `realm.ts` | TYPESCRIPT_REALMS.md "Credentials" |
+| call a GraphQL API from a captured realm | `graphql` in `realm.ts` | TYPESCRIPT_REALMS.md "GraphQL" |
 | a shared IDENTITY other realms attach to (an account, a product, a site) | `types/` `spine:` | Virtual Cypher §5.4.1 — see "Joining OTHER realms" below |
 | attach your records to a spine (yours, another realm's, or Person/Organization) | `types/` `hub:` on the property carrying the key | Virtual Cypher §5.4 |
 | a shared KIND of record (every ticket is a `SupportCase`) | `types/` `parents:` | LABELS_AND_COMPOSITION.md |
 | fetch a type **on demand** by traversal | `types/` `virtualJoins:` + `producers/` | "Joining types on demand" (Virtual Cypher) |
 | a named, parameterized ANSWER a caller runs by name | `views/` | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
 | query the graph from a code_mode script or skill | `gateway.kg.query` | "CypherScript" |
-| query the graph from a WASM HANDLER | `ctx.cypher.query` — see the warning under CypherScript | "CypherScript" |
+| query the graph from a WASM HANDLER | `ctx.gateway.cypher.query` | "CypherScript" and "Captured realms" |
+| a CAPTURED realm written in TypeScript (`defineRealm`) | `realm.ts`, built by `realm-synth` | TYPESCRIPT_REALMS.md, and "Captured realms" below |
 | hand-authored gateway methods / **verbs** | `src/api/*.ts` + `tests/` | "`src/` and `tests/`" |
 | prove the answer surface survives the author | `tests/questions.yml` + `tests/verify.sh` | "`tests/`" — REQUIRED once anything takes words from a person |
 | an MCP server (last resort — prefer `apis/` for anything API-backed) | `mcp/` | "`mcp/`" |
@@ -184,18 +188,17 @@ Which mechanism for which situation: the table in Virtual Cypher §5.4.3.
 
 ## CypherScript (querying the graph from realm code)
 
-> **A WASM handler is not a `code_mode` script, and this section's `gateway.*` examples do not
-> run there.** A handler in `wasm/handlers.ts` is `export function name(args, ctx)` — args
-> FIRST, and the surface is `ctx.gateway`. There is no global `gateway`: writing the code below
-> verbatim inside a handler fails at the first call with `gateway is not defined`. The host tools
-> granted inside wasm are `cypher_query`, `sql_query` and `sql_update` — `gateway.kg.query` is
-> NOT one of them, so a handler reads the graph with `ctx.gateway.cypher.query`. An evaluation
-> followed this section literally, got `gateway is not defined`, and recovered the real signature
-> only by disassembling the sandbox shim.
->
-> Note the sharp edge while it lasts: `cypher_query` takes no `params`, so a handler cannot yet
-> bind a user-supplied value into a graph read. Filter in JS over a bounded read rather than
-> concatenating a value into the Cypher string.
+A Wasm handler has the signature `export function name(args, ctx)` and accesses the gateway
+through `ctx.gateway`. Code-mode scripts use `gateway` directly. These execution surfaces
+have different admitted operations.
+
+Where supported, `ctx.gateway.cypher.query({cypher, params})` binds values through `params`;
+arrays and nested objects remain structured. Raw SQL gateway calls are not a portable guest
+capability. External SQL uses approved producers or typed operations. The governed captured
+path reaches Cypher through the same call once the owner separately approves `cypher_query`;
+the rules for that call are under "Captured realms" below. Check the
+[hosted execution contract](../../HOSTED_EXECUTION.md#reference-implementation) before using
+a host-resource callback.
 
 A handler / decoration / skill runs **CypherScript** in `code_mode`: TS/JS that interleaves
 `await gateway.kg.query({cypher, params})` (graph reads through Virtual Cypher — scoped,
@@ -405,8 +408,16 @@ push.
 
 ## Hard rules (don't get these wrong)
 
-- **No secrets in the realm.** Reference them by env-var/credential-store name; OAuth client
-  creds live in the host admin, never the repo.
+- Credentials stay in host-managed, owner-scoped storage. Governed guests use approved
+  operations and sources; they receive no secrets or general credential lookup. Ambient
+  environment variables do not authorize credential use for a captured realm; only a
+  conventional realm in the local or first-party tier may resolve `token-env` from the
+  environment.
+- **A captured realm declares credentials; a conventional realm declares `keys.yml` entries.**
+  Both work. New realms should be captured and declare credentials the owner binds. `token-env`
+  is deprecated in favour of either. A captured API operation is pinned to the value it was
+  approved with, so changing a key that a key entry and a captured realm share means approving
+  that operation again.
 - **Descriptions are for an LLM planner** — write them as routing signal, not prose.
 - **Stable ids.** Renaming a `name` (realm/action/type/command) breaks every installed
   world wired to it — that's a major version bump.
@@ -426,3 +437,126 @@ push.
 - **A realm people ask in words ships `tests/questions.yml`.** Views passing by name proves a
   different code path from the one users meet. Include the adversarial half — what the realm
   cannot answer, asked repeatedly — because that is where a generator invents.
+
+## Channel sources and consumers
+
+Declare sources and consumers in `data-pipes.yml` using the
+[hosted data-pipe contract](../../HOSTED_EXECUTION.md#data-pipes). A source names its stream
+and event type. A consumer names a captured handler; the owner separately approves its exact
+source and handler. A declaration creates no grant. In a TypeScript realm, write them as
+`dataPipes` in `realm.ts`, and declare channel-fed sources and consumers with `connecting`; see
+[sources, consumers and triggers](../../TYPESCRIPT_REALMS.md#sources-consumers-and-triggers).
+
+Use `gateway.channel.publish` in a captured Docker handler or `ctx.gateway.channel.publish`
+in a Wasm handler. Keep `streamId`, `eventId` and payload stable on retry. The journal matches a retry on those,
+so a retry that stamps a new `occurredAt` still gets the first receipt and keeps the first time.
+Receipt and tombstone retention windows are bounded: a retry within them returns
+its receipt or original offsets, while a retry outside them can append again and consume
+quota. The returned receipt confirms durable acceptance; downstream effects still require
+idempotency. All retained data and dependencies remain within host-enforced Realm limits.
+Private SQLite is a dependency, not an external SQL gateway or a substitute for source
+approval.
+
+## Captured realms: producers, graph reads, apps and proposals
+
+A captured realm runs from a copy the owner admitted, and every capability is its own owner
+approval. Write it as one `realm.ts` with `defineRealm` and let `realm-synth` generate the files
+and the handler types (`--types .embabel/realm.d.ts`);
+[TypeScript realms](../../TYPESCRIPT_REALMS.md) is the full contract, with the owner's approval
+steps at the end. Use `defineRealm` in place of `satisfies Realm`: under it, a goal, producer,
+lens, channel or consumer naming a handler the realm does not declare is a compile error. Synth
+refuses an undeclared handler everywhere a realm names one: a goal, producer, `dataPipes`
+consumer, app, lens, channel or consumer. A realm with no `handlers` block declares none, so
+every handler name in it is refused. An undeclared goal `input` or `output` type is a warning,
+since another realm may declare it; if nothing does, the host drops the goal.
+
+Check the realm against the host it will run on with `--profile reference-wasm` (or a JSON
+profile for another host). It warns about conventional `actions`, `events` and `webhooks` in a
+captured realm, which the reference host does not load, and refuses `layers`.
+
+**A captured producer is a handler.** No `kind`, no `operation`, no `args`, no `cache`:
+
+```ts
+producers: {
+  "incidents-by-service": {
+    handler: "oncall.incidents",
+    keyArgument: "serviceIds",
+    joins: [{ targetLabel: "Incident", anchorLabel: "Service", relationship: "HAS_INCIDENT",
+              keyField: "serviceId", recordKeyField: "serviceId" }],
+    page: { argument: "cursor", maxPages: 4 },
+    pushdown: [
+      { property: "impact", argument: "impact" },
+      { property: "status", argument: "status" },
+      { property: "component", argument: "component" },
+    ],
+  },
+},
+```
+
+- The handler gets the keys as a list under `keyArgument` and returns records that carry their
+  key under `recordKeyField`. With `page`, it returns `{ rows, next }` and gets `next` back under
+  the page argument on the following call, up to `maxPages` (1 to 16). `next: null` stops it.
+- **Cover EVERY filter the source can apply with a `pushdown` rule.** The handler gets the values
+  an `=` or `IN` allows as a list of strings under the rule's argument, on every page. A filter you
+  leave out makes the handler fetch everything the key allows, and the answer comes out the same,
+  so nothing tells you. Read the source's own parameter list and map each one. Where the host shows a
+  query's `apiCallLog`, it names the arguments that reached the handler, so a filter missing
+  there is the next rule to write.
+- Only `=` and `IN` push. `>`, `CONTAINS` and a function over the value are applied by the graph
+  after the fetch. Say so in the target type's description, so nobody assumes they are cheap.
+- If the handler's input schema has `additionalProperties: false`, list the page and pushdown
+  arguments in `properties`, or the host refuses the producer at bind time. List them in
+  `properties` anyway: the generated `<Verb>Input` type only has the fields the schema declares.
+- A query reaches the target only along a join from a bound anchor. `MATCH (i:Incident)` on its
+  own is refused; `MATCH (s:Service {serviceId: $id})-[:HAS_INCIDENT]->(i)` works. One
+  producer's target can anchor the next producer's join, so chain them where a source is keyed
+  on another source's records.
+- Limits per fetch: 256 keys, 1 MiB of output, 1,024 rows across all pages. No result cache.
+
+**Graph reads are `ctx.gateway.cypher.query`, under their own approval.** The generated types
+type API and GraphQL namespaces and `ctx.gateway.channel`, and leave `ctx.gateway.cypher` as
+`unknown`, so give it a type in the handler:
+
+```ts
+type CypherGateway = {
+  cypher: {
+    query(request: { cypher: string; params?: Record<string, unknown> }): Promise<{
+      rows: Record<string, unknown>[];
+    }>;
+  };
+};
+
+const { rows } = await (ctx.gateway as unknown as CypherGateway).cypher.query({
+  cypher: "MATCH (s:Service)-[:HAS_INCIDENT]->(i:Incident) WHERE s.team = $team " +
+          "RETURN s.name AS service, i.incidentId AS incident LIMIT 100",
+  params: { team: input.team },
+});
+```
+
+- End with a literal `LIMIT` from 1 to 512, name and label every node, and pass every value
+  through `params`.
+- It sees only what the owner owns outright. Variable-length paths, named paths, list
+  comprehensions, procedures and most functions are refused, and every refusal is the same
+  message, so keep queries plain.
+- Read the owner's own views through `queries: { views: [{ alias, view }] }`; each alias is its
+  own approval.
+
+**Browser apps run sandboxed with no network.**
+
+- Declare each page under `apps` with the handlers it may call; synth refuses a handler the
+  realm does not declare. The page reaches the realm only through `realm.call(handler, args)`.
+- **One `realm.call` at a time.** A second call while one is waiting rejects at once, so `await`
+  each call before the next. Every refusal rejects with the same message; show one plain error.
+- No `fetch`, sockets, remote scripts, styles, images or fonts. Bundle everything; declare CSS
+  and JS under `resources` (`apps/<page>.assets/`) and embed images and fonts as `data:` URLs.
+- The host operator sets the size limits. The defaults are 10 MiB for the page, 16 resources,
+  and 10 MiB for one resource and for all of them together, and synth refuses an app past them.
+  For a host with larger limits, raise synth's with `--app-limit 32MiB` or the per-limit flags.
+  Otherwise stay well under them.
+
+**Write through a proposal, never directly.** `ctx.writePropose({ version: 1, kind, target,
+fields, effect, method? })` files a write for the owner to accept and resolves to `{ proposalId }`.
+The handler never learns the outcome. The target must be one private record the owner already
+has, under a label the operator opened to proposals. Accepting applies flat scalar `fields` with
+`effect: "private-storage"` only. Keep a proposal small and name exactly the record it changes.
+

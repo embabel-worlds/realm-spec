@@ -2,9 +2,17 @@
 
 Realms are self-contained, declarative bundles of agent capabilities that can be installed into an Embabel-based host. Each realm is a git repository (no JVM bytecode, no native binaries) that provides actions, types, APIs, MCP servers, commands, webhooks, event sources, Trigger Bindings, skills, prompts, and apps. The host platform reads the realm and wires its contents into the running agent.
 
-This document is the spec.
+The [hosted execution contract](HOSTED_EXECUTION.md) defines captured execution, channel
+publication, finite capacity and credential mediation. It also records the governed reference
+implementation's current support. Trusted-host examples below do not authorize a governed
+guest to bypass those checks.
 
-> **Status: living draft.** Sections marked _forward-looking_ describe shape that is settled but may still be in implementation across hosts. Everything else describes the format current Embabel hosts already consume. Where this document cites concrete defaults or behaviour of "the reference host", it means the host implementation this spec is developed against; those values are informative, not part of the contract.
+> **Status: living draft.** Sections marked _forward-looking_ describe shape that is settled but may still be in implementation across hosts. Other sections describe portable declarations and trusted-host formats; capability support differs by host profile. Where this document cites concrete defaults or behaviour of "the reference host", it means the host implementation this spec is developed against; those values are informative, not part of the contract.
+
+**Writing a captured realm in TypeScript?** [TypeScript realms](TYPESCRIPT_REALMS.md) walks through
+`defineRealm` from end to end: handlers and their context, credentials, APIs, channels, sources and
+consumers, dependencies, producers, graph queries, goals, lenses, watches, apps, write proposals,
+and the owner approvals each one needs.
 
 ---
 
@@ -47,11 +55,12 @@ realm-name/
 │   └── my-views.yml
 ├── rules/                # DERIVE rule sets (YAML, optional) — derived labels/relationships, one rule set per file
 │   └── my-rules.yml
-├── lenses/               # Named focused experiences (YAML, optional) — CypherScript/fixed/anchor/module
+├── lenses/               # Named lenses (YAML, optional) — captured handlers or host-specific definitions
 │   └── my-lens.yml
 ├── apis/                 # API entries (YAML)
 │   └── my-api.yml
 ├── keys.yml              # The API keys the realm needs, and how to check them (optional)
+├── credentials.yml       # Captured realms: the credentials the owner binds (optional)
 ├── src/                  # Hand-authored TypeScript handlers (optional)
 │   └── api/
 │       └── my-handlers.ts
@@ -67,7 +76,8 @@ realm-name/
 │   └── my-webhook.yml
 ├── events/               # Event ingestion — push + poll
 │   └── my-source.yml
-├── channels/             # Realm-shipped channel connectors (YAML)
+├── data-pipes.yml        # Captured channel source and consumer declarations
+├── channels/             # Realm-shipped provider connector drafts (YAML)
 │   └── my-channel.yml
 ├── handlers/             # Trigger Bindings — reactions to signals/cron the user adopts
 │   └── my-handler.yml
@@ -220,6 +230,9 @@ about 40px: this is a tile, not an illustration.
 it in `apps/`. Same principle, existing convention, no new field.
 
 ## `actions/`
+
+Me keeps this legacy host configuration outside Realm execution. Use the
+[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for Me Realms.
 
 Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape; the framework's `NameOrClassTypeIdResolver` resolves either a registered short name (e.g. `action`, `goal`) **or a fully-qualified class name** (`com.example.MyCustomActionSpec`) to an `ActionSpec` class on the classpath. Host extensions can use either path.
 
@@ -374,6 +387,12 @@ When the cheap policy doesn't match, its `hasRun_<name>=TRUE` blocks re-picking;
 Actions are deployed to the host's planner on world load.
 
 ## `goals/`
+
+Me keeps this legacy host configuration outside Realm execution. For Me Realms, declare a
+version-1 [captured goal](HOSTED_EXECUTION.md#me-captured-goal-profile) that binds one approved
+handler to Realm-declared input and output types; a legacy file of the shape below inside a
+captured Realm is reported and never parsed. See the
+[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration).
 
 Goal specifications — multi-step workflows composed of actions.
 
@@ -600,7 +619,7 @@ Producer `kind`s:
 | kind | fetch | notes |
 |------|-------|-------|
 | `remote` (alias `api`) | a `gateway.<name>.*` op (realm handler or learned API) — a **RemoteRepository** | list mode (`keyArg` → array) or string mode (`keyTemplate` + `{keys}`); `records` JSONPaths the response |
-| `sql` | a SELECT against a realm/world `datasource`, or a read-only stored procedure's result set (`procedure:`) | keys expand into `IN (…)`; rows are the records; SELECT-only, wallet/env creds. A `procedure:` is called once per key on a read-only datasource and rolled back after the read — see Virtual Cypher §5.15.1 |
+| `sql` | a SELECT against a host-configured realm/world `datasource`, or a read-only stored procedure's result set (`procedure:`) | keys expand into `IN (…)`; rows are the records; SELECT-only. The host mediates approved credentials and operations; governed captured callers require a retained resource receiver. A `procedure:` is called once per key on a read-only datasource and rolled back after the read — see Virtual Cypher §5.15.1 |
 | `compute` | an in-process computation over the keys | scores / rollups / synthesis — no external I/O; *local*, so NOT a RemoteRepository |
 | `vector` | top-k **semantic similarity** to the anchor | for joins with no key — similarity *is* the join (related docs/chunks); rides the host embedder |
 | `generative` | **GENERATES** the edge (resumably) rather than reading it — an LLM's world knowledge (`SIMILAR_TO`, `IN_INDUSTRY`) or a code function | pluggable generator (`llm` \| `function`); keeps generating; resolves each answer onto the type spine; provenance-stamped |
@@ -771,7 +790,7 @@ pushdown:
     valuePattern: '…([\w.-]+/[\w.-]+?)(?:/|$)'   # optional regex; group 1 replaces {value}
 ```
 
-So `WHERE i.html_url CONTAINS 'embabel/me'` turns `is:issue author:X {filters}` into `is:issue author:X repo:embabel/me` — one scoped search instead of fetching the author's thousands and intersecting in the graph. The mapping is declarative and source-specific; the engine knows nothing of `repo:`.
+So `WHERE i.html_url CONTAINS 'acme-corp/widgets'` turns `is:issue author:X {filters}` into `is:issue author:X repo:acme-corp/widgets` — one scoped search instead of fetching the author's thousands and intersecting in the graph. The mapping is declarative and source-specific; the engine knows nothing of `repo:`.
 
 > **Verify that a pushdown actually narrows — some sources ignore unknown filters SILENTLY.** The engine cannot tell a filter the source honoured from one it discarded: both return 200 with records. A source that responds to an unrecognised filter key by returning the *entire unfiltered collection* turns a typo, a renamed upstream field, or an optimistic guess into a full-collection scan that looks like a success — the query still returns correct rows (the graph filters what pushdown didn't), so nothing fails; you just quietly fetch everything, every time. This is real: the NSW planning feed used by `realm-nsw-property` returns all 426,096 records for a misspelled filter and never errors.
 >
@@ -951,9 +970,67 @@ for (const p of busy) {
 }
 ```
 
-`cypher` is your own query and `params` is a JSON **string** (bind values as `$name`; never string-concatenate). Reads and `gateway.ai.*` are always safe; guard every write with `if (!dryRun)` in a handler. The same model underlies **lenses**: stored, named CypherScript or typed programs that open focused views. A realm can ship reusable lenses in `lenses/`; a world can override them by id.
+`params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below. Virtual Cypher calls are available to a captured handler once the owner separately approves `cypher_query`, following [the captured graph-query profile](HOSTED_EXECUTION.md#me-captured-graph-query-profile).
 
 ## `lenses/`
+
+### Captured handler binding
+
+A captured host uses versioned metadata to bind a lens to an approved handler in the
+same installation. The declaration supplies no execution capability by itself.
+
+```yaml
+# lenses/movie-details.yml
+version: 1
+id: movie-details
+name: Movie details
+handler: movie.movieDetail
+```
+
+Required fields are `version`, `id`, `name` and `handler`; `description` and `result` are optional.
+The ID is a lowercase letter followed by lowercase letters, digits or hyphens, at
+most 64 characters. The name is at most 128 characters; description at most 512.
+Fields are strict. Aliases, tags, malformed UTF-8, nested paths, duplicate IDs and
+undeclared handlers are refused. Hosts accept at most 32 flat `.yml`/`.yaml` files,
+8 KiB each and 64 KiB aggregate. IDs conflicting across installations are unavailable.
+Owner World definitions and owner saves take precedence.
+
+An opening passes JSON object arguments through the retained handler.
+The handler returns a JSON object within 1 MiB, 32 nesting levels and 65,536
+characters per string. `result: json` is the default and returns data only.
+
+With `result: content`, the handler returns optional `focus` (up to 256 unique
+entity ID strings, each at most 1,024 UTF-8 bytes), `data` (any JSON value),
+`presentation` (`items`, `table` or `json`) and `complete` (boolean, default true).
+Unknown fields are refused. Content lenses require the retained `cypher_query`
+grant alongside handler approval. The host reads owned focus on access; missing,
+ambiguous or inaccessible IDs are excluded and mark the result incomplete.
+`complete: false` also marks it incomplete. A presentation preference selects an
+existing compatible host view; guest HTML and executable references are refused.
+Background envelopes are snapshots. Losing ownership of any already projected
+focus entity invalidates the stored envelope at its next admission check.
+The host retains the same target and serialized arguments through refresh, rechecks
+owner World and approval on reads, and disables cache reuse. API calls inside the
+handler require their own operation and credential approvals.
+
+This is independent of the selected sandbox backend. The Me implementation exposes
+it through `/api/v1/lenses/{id}/invoke` and the JSON view endpoint. Add
+`background=true` or `waitSeconds` for deferred execution. Preparation retains the
+selected target and serialized arguments; queued work cannot select a new revision.
+Completion and every result response recheck admission. Revocation clears stored
+data; new approval cannot revive an old run. Results and handles are in memory.
+
+The reference host limits active work to 64 runs globally and eight per owner,
+returning HTTP 429 at capacity. Cancelled workers consume capacity until they exit.
+It retains up to 200 settled runs and cancels overdue work using the configured
+background timeout. Cancellation cannot undo completed effects.
+See [hosted execution](HOSTED_EXECUTION.md) for supported routes and limits.
+
+### Host-specific legacy definitions
+
+The definitions below describe the compatibility runtime. Captured Worlds do not
+execute Realm-provided legacy module, CypherScript, fixed-query or anchor lenses.
+
 
 Named focused experiences a realm installs alongside its types, producers and apps. Each `.yml`
 file serializes one Lens. The host discovers world-authored lenses first and then installed-realm
@@ -1151,6 +1228,22 @@ Two hard rules:
   revision or the deployment must migrate that dataset atomically. World-local version skew must not
   mutate a single unversioned public identity.
 
+### Me source authority profile
+
+Realm loading does not grant public visibility or shared mirror access. The host
+refuses those declarations and protects host-configured sources against replacement
+by Realm names or labels. Public source and anchor scopes require trusted host
+configuration; static private and organization scopes cannot be widened.
+
+The legacy source catalog described in this section is process-wide. Loading a captured
+World removes prior Realm metadata and disables subsequent live Realm contributions for
+that process. Host configuration remains available. This process-wide catalog itself has
+no World-scoped metadata and no retained mirror/coverage receiver of its own. Captured
+Worlds instead use the separate [captured collection snapshot
+profile](HOSTED_EXECUTION.md#captured-collection-snapshots), which already implements
+per-World source read/storage approval and a retained, authority-partitioned mirror and
+coverage receiver. A producer or handler grant does not authorize public graph access.
+
 ## `reference/`
 
 Reference (catalog / config) data a realm **brings into the KG** — the set of entities a realm's types describe that should exist regardless of what the user has done. Where `producers/` fetch data on demand and `populate` mirrors an external system, `reference/` seeds a fixed, realm-authored dataset: a controlled vocabulary, a lookup catalog, a set of well-known entities. Each `.yml` file in `reference/` is a list of records seeded (idempotently) into the KG on world load.
@@ -1192,6 +1285,10 @@ documented below are compatibility features for local or explicitly first-party/
 installations. Their trust tier is adoption-visible and they never become marketplace-safe merely
 because they run in Docker.
 
+The typed credential slot is a [key entry](#keysyml--the-keys-a-realm-needs) in a conventional
+realm and a declared credential the owner binds in a captured realm. See
+[keys and declared credentials](#keys-and-declared-credentials) for which applies where.
+
 ```yaml
 # apis/petstore.yml
 - url: https://petstore3.swagger.io/api/v3/openapi.json
@@ -1209,7 +1306,7 @@ because they run in Docker.
 | `name` | recommended | Gateway namespace — `gateway.<name>.*`. Falls back to a slugified spec title if omitted. **Always set this** in published realms so the prompt examples work regardless of the spec's `info.title`. |
 | `type` | no | `openapi` (default) or `graphql`. |
 | `auth` | no | `none` (default), `bearer`, `api-key`, `oauth2`. See **Auth** below. |
-| `token-env` | with bearer / api-key | Env-var or credential-store key holding the token. |
+| `token-env` | with bearer / api-key | Env-var or credential-store key holding the token. Deprecated in favour of a [key entry](#keysyml--the-keys-a-realm-needs) for the same variable, or of a declared credential in a captured realm. |
 | `headers` | no | Custom HTTP headers; values support `${VAR}` interpolation from credential store / env. |
 | `oauth2` | with `auth: oauth2` | OAuth2 config — see **OAuth2** below. |
 | `tags` | no | Allowlist of OpenAPI tag names. Filters huge specs to a coarse subset. |
@@ -1305,6 +1402,8 @@ tier, `token-env` and `${VAR}` may then resolve from that world's credential sto
 `set NAME = ...` in chat or via the admin UI), followed by the process environment. Process fallback
 is unavailable in shared multi-world or untrusted marketplace deployments. Missing credentials mean
 the entry is skipped at world load with a logged warning; the API never appears in the gateway.
+A captured realm's API operations read only the owner's wallet, through the credential the owner
+bound, and never fall back to the process environment.
 
 ### OAuth2
 
@@ -1411,6 +1510,10 @@ gets one, the value(s) it takes, and how the host can tell whether a value works
 declaration to ask for the key by name, show it on the realm's settings, check a value before
 storing it, and re-check a stored value while it is in use.
 
+Key entries belong to conventional realms. A captured realm declares credentials the owner binds
+instead, which is the recommended path for a new realm.
+[Keys and declared credentials](#keys-and-declared-credentials) compares the two.
+
 ```yaml
 # keys.yml
 - name: brave
@@ -1450,7 +1553,7 @@ storing it, and re-check a stored value while it is in use.
 | `description` | no | One line on what the key unlocks. |
 | `getKeyUrl` | no | Where somebody obtains a key. |
 | `fields` | no | The values the key takes. Defaults to one field whose `variable` is `name` upper-snake-cased (`brave-search` → `BRAVE_SEARCH`). |
-| `fields[].variable` | yes | The credential name the value is stored and resolved under — the same name `token-env` and `${VAR}` in `apis/` refer to. |
+| `fields[].variable` | yes | The credential name the value is stored and resolved under — the same name `token-env` and `${VAR}` in `apis/` refer to. A captured realm names no variable; see [keys and declared credentials](#keys-and-declared-credentials). |
 | `fields[].displayName` | no | Defaults to the entry's `displayName`. |
 | `fields[].secret` | no | Default `true`. `false` marks a value safe to show back, like a project id. |
 | `validate` | no | How to check the values. Without it a key can be set but never checked. |
@@ -1511,6 +1614,8 @@ anything from the response that could identify the key.
   names a read.
 - **Declared keys are the typed credential slot** the [trust tiers](#apis) require: a marketplace realm
   declares its keys here rather than relying on `token-env` resolving from the environment.
+  This applies to a conventional realm. A captured realm's typed slot is a declared credential
+  the owner binds, and a captured realm never resolves a secret from the environment.
 
 ### Realms that declare nothing
 
@@ -1527,9 +1632,42 @@ credential variable the realm's APIs refer to (`token-env`, `${VAR}` in `headers
 A declared entry takes precedence over a derived one for the same variable, so a realm can adopt
 `keys.yml` one key at a time.
 
+A derived entry resolves the way `token-env` does, so the process environment fallback applies
+only in the local or first-party tier described under [Auth](#auth).
+
 **Load problems.** A `validate.api` the realm does not declare, a `validate.operation` that API does
 not have, an `interpret` naming no Realm Function, or two entries claiming one `variable`, is a
 recorded problem. The entry still loads, without `validate`.
+
+### Keys and declared credentials
+
+A realm asks for a secret in one of two ways, and both keep working. A key entry in `keys.yml`
+names the variable a value is stored under. A declared credential in `credentials.yml` names a
+purpose, and the owner binds a wallet item to it. Declared credentials are the recommended path
+for new realms.
+
+| | Key entry (`keys.yml`) | Declared credential (`credentials.yml`) |
+| --- | --- | --- |
+| Applies to | Conventional realms: one installed from a directory, a first-party or org-reviewed realm, or a local one. | Captured realms, which run from a copy the owner admitted. See [hosted execution](HOSTED_EXECUTION.md#credentials). |
+| The realm names | The variable, which `token-env` and `${VAR}` in `apis/` also name. | A purpose: kind, provider, description, docs link. Never a variable or where the secret lives. |
+| The value comes from | A person sets the key, and the host stores it under the variable. | The owner binds a pasted secret or an existing wallet item when approving the realm. |
+| The host reads it from | The world's credential store, then the process environment in the local or first-party tier ([Auth](#auth)). | The owner's wallet only. |
+| Checking a value | `validate`, with an optional `interpret`. | No check. Binding an existing item checks only that its stored type fits the credential's kind. |
+| Changing the value | Replace it, and the host re-checks it. | An approved API operation is pinned to the value it was approved with; a different value needs approval again. |
+| Values | One or more fields, each secret or not. | One secret per credential. |
+
+`token-env` is deprecated in favour of either declaration: a key entry for the variable in a
+conventional realm, or a declared credential referenced with `credential:` in a captured realm.
+Hosts still read it. A captured API entry that still uses `token-env` gets an implicit credential
+whose id is the variable, the same name a derived key entry for that variable takes.
+
+**When both name one secret.** A key entry and a captured realm reach the same wallet item when a
+captured API entry still reads it through `token-env`, or when the owner binds a declared
+credential to an existing item a key entry stored. Both then use one value. Replacing or deleting
+that key through the key entry stops every captured API operation approved with the old value,
+until the owner approves the new one or the approved value is restored. Hosts do not yet warn
+before such a replacement, so expect to re-approve a captured realm's operations after changing a
+key it shares.
 
 ## `src/` and `tests/` — hand-authored TypeScript handlers
 
@@ -1716,8 +1854,9 @@ So a virtual type's class gives its on-demand instances behaviour:
   `issue.needsTriage()`, `pr.isReadyForReview()`);
 - **effectful** methods write back to the source through `this.gateway.<ns>.*`
   (`issue.close()`, `issue.addLabels('stale')`, `pr.requestReviewers('alice')`),
-  and may reuse the host `gateway.sql` / `gateway.cypher` ops the generated
-  `GatewayContext` exposes.
+  and may use bound `gateway.cypher.query({cypher, params})` when the host has an
+  admitted receiver. External SQL uses approved producers or typed operations; raw SQL
+  gateway access is not a portable guest capability.
 
 A read materialises transient nodes and rolls them back; an effectful method commits
 to the real source (the rollback never touches that side-effect). A program reads,
@@ -1938,9 +2077,10 @@ Two consequences are normative:
 - **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world, context, principal, or execution. Realms deliberately share declared types inside a world; graph data is readable only through the current context/access policy or an explicit policy-authorized bridge. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world-, context-, and where principal-dependent, principal-scoped.
 - **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
 
-The host is placement, not the Realm Function contract. Types, producers, lenses, APIs, events, and prompts load
-the same way everywhere. Artifacts do not: each host runs a different artifact, and a function must fit
-that host's capability set. A handler that needs npm does not become a wasm function by relabeling it.
+The Realm Function contract is independent of placement. Each host declares which executable
+and declarative surfaces it supports, and admits them against the captured Realm and resource
+grants. Parsing a producer, lens, API or event declaration does not authorize its execution.
+A handler that needs npm does not become a Wasm function by relabeling it.
 Two hosts exist:
 
 | Host | What runs | Choose it when |
@@ -1984,7 +2124,10 @@ Three consequences of the table worth stating:
 
 ### Authoring a wasm realm
 
-The minimum is three files — the realm, the handlers, and the manifest that registers them:
+A realm written with `defineRealm` gets `realm.yml` and `dist/manifest.json` generated from one
+`realm.ts`, and synth copies the handler entry it names (`wasm/handlers.ts` by default) beside
+them; see [TypeScript realms](TYPESCRIPT_REALMS.md). By hand, a realm needs at least the three
+files below: the realm, the handlers and the manifest that registers them.
 
 ```yaml
 # realm.yml
@@ -2239,15 +2382,144 @@ description: "Translates document batches on demand."
 
 `isolate` is not part of this spec. It is here to state the test every proposed host must pass: if supporting it forces a realm author to change anything beyond `host:`, the design is wrong.
 
+
+### Me captured handler schema profile
+
+The host checks manifest schemas before binding an approved handler, validates input
+before entering its backend, and validates the unwrapped result before returning it.
+This applies to direct calls, schedules, channels, lenses and producers. A method's
+schema describes `args`; its transport envelope independently requires object-valued
+`self` and accepts no fields beyond `self` and `args`, but `args` itself is typed by
+whatever schema the method declares — a method with no schema of its own admits any
+JSON value there, not only an object. Validation does not coerce values or add defaults.
+
+The current profile supports these JSON Schema keywords:
+
+| Contract | Supported fields |
+| --- | --- |
+| Types | `type`, including nullable type arrays |
+| Objects | `properties`, `required`, `additionalProperties`, `minProperties`, `maxProperties` |
+| Arrays | One `items` schema, `minItems`, `maxItems` |
+| Strings | `minLength`, `maxLength`, measured in Unicode code points |
+| Numbers | `minimum`, `maximum`, numeric `exclusiveMinimum`/`exclusiveMaximum`, positive `multipleOf` |
+| Values and alternatives | Scalar `enum`/`const`, `allOf`, `anyOf`, `oneOf`, `not`, nested boolean schemas |
+
+`title`, `description`, `default`, `examples`, `readOnly`, `writeOnly` and `deprecated`
+are annotations. `$schema` may identify draft 2020-12 or draft-07. Unsupported
+keywords, including references, definitions, patterns, formats, tuples and
+`uniqueItems`, refuse the binding. The host performs no schema network or file access.
+This is a bounded subset of [JSON Schema validation](https://json-schema.org/draft/2020-12/json-schema-validation), not a claim of full dialect support.
+
+Each schema is limited to 64 KiB, 2,048 schema nodes and 16 nested schema levels.
+Objects declare at most 256 properties or required names; enums contain at most
+256 scalar values; each combination contains at most 16 alternatives. Input and
+output are each limited to 1 MiB, 32 JSON nesting levels, 65,536 characters per
+string and 100,000 JSON nodes. Numeric precision and absolute decimal scale are
+limited to 1,000. Validation allows 100,000 steps; exceeding a limit refuses the call.
+An empty schema still permits any value within these limits, while function input
+must remain an object. Backend and surface limits can be stricter.
+
+Malformed schemas, invalid values and exhausted limits produce a fixed refusal
+without returning schema or payload contents. Final Realm admission is checked again
+after output validation. Validation cannot reverse effects the handler already made.
+
 ### What placement never changes
 
 - Function names, namespaces, schemas, and the manifest format.
 - The `{ result }` / `{ error }` envelope, at the function boundary and on every gateway call.
 - Signal identity: a signal dispatched by a wasm-hosted function is indistinguishable downstream from the same signal dispatched by a docker-hosted one.
 - The identity model: execution is bound independently to a world and acting principal by the host; no host puts a credential or scope key inside the unit.
-- Declarative content: types, producers, lenses, APIs, events, and prompts load whether or not the executable surface can.
+- Declarative schemas remain independent of placement. Activating a declaration requires host support and the applicable Realm and resource approvals.
+
+### Captured handler producers
+
+The current Me captured-execution profile excludes producers and virtual joins loaded from live
+Realm files. Owner-authored definitions remain available. Producer execution and cache reuse
+retain World and declaration checks; shared cache partitions include both. The legacy Wasm
+producer example demonstrates the compatibility route, not captured resource admission.
+Me also accepts the following captured handler producer profile. Each flat
+`producers/*.yml` or `.yaml` file contains one version-1 object:
+
+```yaml
+# producers/movie-records.yml
+version: 1
+name: movie-records
+handler: movie.records
+keyArgument: keys
+joins:
+  - targetLabel: MovieRecord
+    anchorLabel: Person
+    relationship: HAS_RECORD
+    keyField: id
+    recordKeyField: personId
+```
+
+The binding retains an approved handler from the same installation. The handler
+receives a JSON object whose `keyArgument` contains an array of string keys and
+returns an array of record objects. Declare the target type and identity separately;
+`recordKeyField` links records to their matching anchor keys. The host owns graph
+scope and overlay metadata; records cannot supply `userId`, `worldId`, `workspaceId`,
+`visibleTo` or `__vc*` properties. Sharing uses an explicit host operation.
+Owner producer names take precedence and suppress conflicting captured joins.
+
+This profile has no caching. A producer may declare [filter pushdown](HOSTED_EXECUTION.md#me-captured-producer-pushdown-profile)
+so its handler filters at the source, and the separate
+[paging profile](HOSTED_EXECUTION.md#me-captured-producer-paging-profile) to walk a
+handler's own cursor across multiple calls within one fetch.
+
+```yaml
+# producers/incidents-by-service.yml
+version: 1
+name: incidents-by-service
+handler: status.incidents
+keyArgument: serviceIds
+joins:
+  - {targetLabel: Incident, anchorLabel: Service, relationship: HAS_INCIDENT,
+     keyField: serviceId, recordKeyField: serviceId}
+page: {argument: cursor, maxPages: 4}
+pushdown:
+  - {property: impact, argument: impact}
+  - {property: status, argument: status}
+```
+
+```typescript
+// wasm/handlers.ts
+export async function incidents(input, ctx) {
+  // input.serviceIds: string[]; input.cursor: absent on the first page
+  // input.impact / input.status: string[], present only when the query pinned them
+  const page = await ctx.gateway.statuspage.listIncidents({
+    services: input.serviceIds.join(","),
+    impact: input.impact?.join(","),
+    status: input.status?.join(","),
+    after: input.cursor,
+  });
+  return { rows: page.items, next: page.nextCursor ?? null };
+}
+```
+
+A query reaches the producer only by traversing one of its joins from a bound anchor, as in
+[Virtual Cypher §2](VIRTUAL_CYPHER.md#two-concepts-the-rest-of-the-spec-leans-on). A producer's
+target may anchor another producer's join, so producers chain. Declare a pushdown rule for
+every property the handler can filter on, since a filter left undeclared makes the handler
+fetch everything the key allows. [TypeScript realms](TYPESCRIPT_REALMS.md#producers) shows the
+same producer written with `defineRealm`. Me limits each fetch to
+256 keys, 2,048 characters per key, 64 KiB of encoded arguments, 1 MiB of output and
+1,024 rows. It accepts 32 flat declaration files, 8 KiB per file, 64 KiB total and
+eight joins per binding. `page` and `pushdown` are optional; every other field shown is
+required. Unknown fields, duplicate names or joins, aliases, tags and undeclared handlers are refused. These are host
+profile limits, independent of backend placement.
+
+A handler grant does not grant API or datasource access. Each host call still needs
+its resource approval. Me supports an explicitly approved owned-data query profile:
+`gateway.cypher.query({cypher, params})` returns `{rows, warnings, coverage}` and invokes only
+same-installation captured producers. Statements require named owned nodes and a
+final literal LIMIT from 1 to 512. See [hosted execution](HOSTED_EXECUTION.md#me-captured-graph-query-profile)
+for limits, owner approval and excluded host operations.
 
 ## `mcp/`
+
+Me keeps this legacy host configuration outside Realm execution. Use the
+[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for Me Realms.
 
 MCP server configurations — each file lists Model Context Protocol servers to connect.
 
@@ -2280,13 +2552,49 @@ shared-tenancy boundary.
 
 ## `commands/`
 
-Slash command mappings — map `/command` names to actions.
+Captured commands map a slash name to an approved handler in the same Realm installation.
+They do not grant handler access or select a host action.
 
 ```yaml
-# commands/fix-issue.yml
+# commands/read-notes.yml
+version: 1
+command: read-notes
+handler: notes.read
+description: Read notes
+```
+
+Each flat `.yml` or `.yaml` file contains one object. Required fields are `version: 1`,
+`command` and `handler`; `description` is optional. Command names match
+`[a-z][a-z0-9-]{0,63}`. Handler names identify a captured `namespace.function` entry.
+Description text is limited to 512 characters. A capture contains at most 32 command files,
+8 KiB per file and 64 KiB combined. File basenames contain 1–128 ASCII letters, digits, dots,
+underscores or hyphens and start with a letter or digit. Nested YAML paths, duplicate fields or command names,
+unknown fields, YAML aliases/tags, invalid UTF-8 and version coercion are refused. Invalid
+command declarations do not disable independently approved handlers.
+
+The host binds each alias to the captured digest, installation and approval revision. It
+checks the current owner World and handler approval during discovery, before execution,
+at host callbacks and before returning results. Changing live Realm files cannot redirect
+an alias. Revocation or a changed approval revision refuses retained aliases. Aliases with
+the same name in multiple installations are unavailable; built-ins, owner action commands
+and skills reserve their names.
+
+`/read-notes {"skus":["SKU-A","SKU-B"],"limit":2}` passes that JSON object to the handler.
+A bare command passes `{}`. Matching is case-insensitive and requires whitespace before
+arguments. The host preserves JSON value types and rejects duplicate keys, trailing documents,
+non-object input and arguments over 1 MiB. The handler result returns directly to chat.
+Command input and results remain conversation content; credentials belong in the owner
+wallet and must use an approved host credential binding.
+
+Owner discovery exposes the command, Realm, handler, description, installation ID and
+revision. These descriptors confer no authority. Hosts using captured execution do not
+load legacy Realm `actionName` mappings. A host may retain owner-managed action commands
+as a separate configuration surface:
+
+```yaml
 command: fix-issue
 actionName: fix-issue
-description: "Fix a GitHub issue"
+description: Fix an issue
 ```
 
 ## `webhooks/`
@@ -2374,7 +2682,7 @@ into the consequence engine. The payload cannot select or override that route.
 |---|---|---|
 | `type` | yes | Name of a type declared in this realm (or another loaded realm) whose `parents` includes `Signal`. |
 | `webhook.signature` | yes | Signature scheme the host's built-in verifiers handle. |
-| `webhook.signature-secret` | conditional | Env-var name holding the shared secret. Required for any non-`none` scheme. |
+| `webhook.signature-secret` | conditional | Env-var name holding the shared secret. Required for any non-`none` scheme. Conventional realms only: a captured realm's webhook channel names a declared credential in `signature.credential` (see [TypeScript realms](TYPESCRIPT_REALMS.md#channels)). |
 | `webhook.tenancy` | yes | Strategy for routing the inbound webhook to a world. |
 | `webhook.mapping` | yes | Map of type-property → JSONPath. Every required property of the `Signal` parent (`id`, `occurredAt`, `sourceKind`, `sourceId`) must be covered. |
 | `webhook.tier-when` | no | Tier-override map. Each entry's value is a Jinja boolean expression evaluated against the parsed payload. First true wins; default tier is `AMBIENT`. |
@@ -2431,7 +2739,16 @@ No JVM bytecode is shipped — realms that need behaviour beyond mapping should 
 
 ## `channels/` — realm-shipped channel connectors
 
-Where `events/` is stateless ingestion — call an API, map results to signals, done — a **channel** is a live conversational surface with a lifecycle: a persistent connection the host holds open, an inbound half that ingests messages as signals, and an outbound half the assistant replies through. Use `events/` when data only flows in; use `channels/` when the assistant also talks back on the same surface.
+A channel is a general data pipe, including provider messages, webhooks, database changes
+and Realm-produced events. It may carry data in either direction. `channels/` declares
+provider connector drafts; `data-pipes.yml` declares captured sources and consumers. See the
+[hosted data-pipe contract](HOSTED_EXECUTION.md#data-pipes) for source identity, grants,
+publication, atomic polling positions, receipts and checkpoints.
+
+The governed host requires owner approval and owner-scoped credential references before
+starting a provider connector. A Realm declaration, `auto-start` value or process environment
+variable grants no runtime authority. The following legacy connector format applies only
+where the host explicitly supports it; it does not replace the owner lifecycle API.
 
 A realm configures a connector the host implements — host-extension via FQN, the same dispatch pattern as `PolicyActionSpec`:
 
@@ -2447,8 +2764,8 @@ auto-start: true
 |---|---|---|
 | `type` | yes | FQN of a host-provided channel connector configuration. The host documents which connectors it ships; a realm cannot ship connector code. |
 | `name` | yes | The channel's name on this world. |
-| `token-env` | connector-specific | Environment variable holding the connector's credential, resolved host-side. The credential itself never appears in the realm. |
-| `auto-start` | no | Start the connection on world load. Default `true`. |
+| `token-env` | connector-specific | Legacy credential name resolved by a trusted host. Governed hosts require owner-scoped credential approval. Values never belong in the Realm. |
+| `auto-start` | no | Legacy startup preference. Governed startup also requires current owner approval and a supported provider lifecycle. |
 
 `auto-start` controls the connector lifecycle only; it does not adopt or activate any handler or
 manifest schedule. A credential-backed live connector registration is owned by exactly one world in
@@ -2461,9 +2778,15 @@ Within that world, every inbound and reply route is bound to one explicit contex
 revision, and run-as principal. A connector session may multiplex such routes only when it keeps those
 bindings separate; it never broadcasts an event or reply route into every context by default.
 
-The inbound half emits ordinary `Signal`s of a type the realm declares in `types/` — a channel message is downstream-indistinguishable from any other signal, so triage rules, attention, persistence, and handler reactions all apply unchanged. The realm typically ships the message type, its identity projections, and any functions over the stream (a digest, a search) alongside the connector config.
+Provider adapters map incoming data to host events. The governed host appends the event to a
+durable journal before acknowledgment, then projects signals or invokes approved consumers
+with independent checkpoints. A provider message, a journal receipt and a completed consumer
+effect have different completion semantics.
 
-What this spec pins down is the envelope, not the connector. The file format, the common fields above, and the signals-in / replies-out shape are portable. Everything connector-specific — how platform messages map onto the declared signal type, conversation and thread identity, how an outbound reply is addressed — is defined by the connector `type` and documented by the host that ships it. Additional keys in the file pass through to the connector, which validates them. A channel realm is therefore host-extension territory, like an FQN `stepType`: it runs where the named connector exists.
+Provider-specific addressing, conversation identity and reply rules belong to the connector
+implementation. `channels/` references only host-provided connector types; a Realm cannot
+install JVM connector code. General Realm-produced sources use captured declarations and
+sandbox callbacks instead.
 
 An unknown `type` is reported against the file and that channel is skipped; the realm's other content loads.
 
@@ -2779,6 +3102,14 @@ serves it from the same `/apps/{name}` resolution as the app itself and draws
 it wherever the app is listed. An app that declares none is listed as before.
 This is per-app and separate from the realm's own [`icon`](#icons): a realm
 shipping three apps can give each its own.
+
+**A captured realm's apps work differently.** Each page ships with an `apps/<name>.html.app.json`
+declaration naming the handlers it may call, and the owner approves every app on its own. The
+page runs in a sandboxed frame with no network: it reaches the realm only through
+`realm.call(handler, arguments)`, one call at a time, and everything it needs is inlined into
+the page. The rest of this section describes the conventional app runtime, which a captured
+page does not get. See [captured browser apps](HOSTED_EXECUTION.md#captured-browser-apps) for
+the declaration, the operator's size limits (10 MiB by default) and the bridge.
 
 Realm apps must use the same architecture as vibe-coded apps: tool-gateway calls via `fetch('/api/v1/tools/{name}')`, no direct external fetches. They have access to all the user's tools (MCP, learned APIs, etc.) because they run in the user's authenticated session.
 
@@ -3247,3 +3578,14 @@ compatibility or conformance claims using the "Embabel" or "Virtual Cypher" mark
 written permission.
 
 See [NOTICE.md](NOTICE.md) for the full statement of rights.
+
+The Me host also accepts [authenticated external source events](HOSTED_EXECUTION.md#authenticated-source-ingress)
+under the same captured source approval and durable receipt contract.
+
+The Me captured host excludes legacy Realm StepSpecs and MCP subprocess registrations.
+Use captured handlers and their versioned surface bindings; see
+[the migration contract](HOSTED_EXECUTION.md#legacy-executable-migration).
+
+Me host SQL readers and learning use [approved owner targets](HOSTED_EXECUTION.md#approved-sql-callers).
+Legacy datasource YAML does not authorize a connection. The current profile is read-only;
+SQL remains behind Virtual Cypher and typed host operations, outside the guest protocol.
