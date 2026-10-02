@@ -3300,17 +3300,36 @@ Derivation spends **graph work**: rounds of your rule bodies, and a fact written
 body binds. That is a different currency from the model calls a producer spends, and it is priced
 separately.
 
-Before any rule evaluates, the engine counts what each body binds — one `count(*)` over the body
-itself, so nothing is materialized and nothing is written. Past the deployment's budget the query is
-**refused** with the count, the budget, and which rule accounts for it:
+Before any rule evaluates, the engine counts each body on its first round — counting and
+discarding, so nothing is materialized and nothing is written. Two budgets are checked:
+
+| Budget | Default | What is counted |
+| --- | --- | --- |
+| facts | 50,000 | the rows the whole body binds — the facts it would conclude |
+| work | 1,000,000 | the rows the body examines before its first aggregation (`count`, `sum`, `collect`, `DISTINCT`, `ORDER BY` in a `WITH`) |
+
+Each count **stops one row past its budget**, so pricing a body never costs more than the budget it
+is priced against — a cartesian of a billion rows is priced in the time it takes to stream a million.
+The work count exists because an aggregating body can conclude a handful of facts from ruinous work:
+pair every verse of a corpus with every other, count the people each pair shares, keep the pairs
+that share six. Its facts are few; the rows it must examine to find them are the square of the
+corpus.
+
+Past either budget the query is **refused** with the count, the budget, and which rule accounts for
+it:
 
 ```
-TOO_EXPENSIVE: deriving :CO_LOCATED would bind at least 249500 row(s) on the first
-round alone (gate: 50000). Rule 1 of 'probe/cartesian' accounts for 249500 of them —
+TOO_EXPENSIVE: deriving :CO_LOCATED would bind at least 50001 row(s) on the first
+round alone (gate: 50000). Rule 1 of 'probe/cartesian' accounts for 50001 of them —
 an under-constrained body is quadratic in the nodes it binds, so narrow it (anchor one
 side, add a filter) or raise the rule set's own limits deliberately if the estate is
 genuinely that dense.
 ```
+
+A count that is **stopped** before it finishes — terminated, timed out, or out of the engine's own
+work budget — is treated as evidence of cost, and the query is refused the same way. It is never
+read as "no quote" and run unpriced. A body the engine cannot count at all (a dialect that rejects
+the appended clauses) is not quoted, and the ceilings below remain underneath it.
 
 Almost always this means a relationship body that forgot to constrain one side. `MATCH (a:Peer),
 (b:Peer)` binds every peer against every other; anchoring one side to the other through a real
@@ -3324,9 +3343,9 @@ answering "background" is the normal answer to it. What the engine will not do i
 without asking.
 
 The count is a **lower bound**, and deliberately so. A recursive rule reads a label that has no
-members on the first round, so a transitive closure is under-counted while an unanchored quadratic
-body is counted exactly — the engine can let expensive work through, but it can never refuse cheap
-work on a guess.
+members on the first round, so a transitive closure is under-counted; and every count stops past its
+budget, so "at least N" is the most a refusal ever claims. The engine can let expensive work
+through, but it can never refuse cheap work on a guess.
 
 Two ceilings sit underneath as backstops, and you should never meet them:
 
