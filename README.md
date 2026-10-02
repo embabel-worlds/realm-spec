@@ -555,11 +555,26 @@ A virtual type declares one or more `virtualJoins:`. Each says how the type is r
           id: id
 ```
 
-`virtualJoins` fields: `anchorLabel`, `relationship`, `keyField`, `recordKeyField` (defaults to `keyField` — a same-property id-match), `producer`, optional `brings` (declared sub-graph), `maxAnchors`/`maxFanoutTotal` (caps). For a join to an **external-identity node** (a bridge like `GitHubIdentity` / `HubSpotOwner`), declare a `resolve:` rule chain + `writeThrough`/`refreshAfter` instead — see **Identity bridges** below (`persist: true` is the older eager-only form). A list with more than one entry, or any join that can fan in, requires an `identity` property so convergent paths dedupe to one node.
+`virtualJoins` fields: `anchorLabel`, `relationship`, `keyField`, `recordKeyField` (defaults to `keyField` — a same-property id-match), `producer`, optional `materializedKeyField` (the property on every fetched TARGET record that holds this join's key — see *Finding a virtual node by its key* below), optional `brings` (declared sub-graph), `maxAnchors`/`maxFanoutTotal` (caps). For a join to an **external-identity node** (a bridge like `GitHubIdentity` / `HubSpotOwner`), declare a `resolve:` rule chain + `writeThrough`/`refreshAfter` instead — see **Identity bridges** below (`persist: true` is the older eager-only form). A list with more than one entry, or any join that can fan in, requires an `identity` property so convergent paths dedupe to one node.
 
 The query may only reach a virtual label by **traversing a declared join from a bound anchor** — a naked `MATCH (hc:HubSpotContact)` is rejected. Every materialized node carries the extra `:Virtual` label, a `dateRetrieved` ISO-8601 timestamp, and the host-bound `worldId`, `contextId`, and access-policy revision (so the normal scope rewriter matches it); the user's query runs through the rewriter unchanged, and the whole materialization is rolled back when the query completes.
 
 A query may also reach a virtual node by **pinning the anchor with a literal** — `MATCH (g:GitHubIdentity {login:'octocat'})-[:RAISED]->(i:GitHubIssue)` — even when no `GitHubIdentity{login:'octocat'}` exists in the graph. The literal (inline `{...}` **or** a `WHERE alias.login = '…'`) seeds a transient anchor, so a producer can be keyed on a *named* identity (any GitHub login, not just the connecting user's), fetched with the connecting user's credentials. Multiple joins onto the same virtual node compose: `(me)-[:RAISED]->(i)<-[:ASSIGNED]-(:GitHubIdentity {login:'octocat'})` materializes both sides and intersects them.
+
+**Finding a virtual node by its key.** A join may declare `materializedKeyField` — the property on every fetched record of the TARGET that holds the join's key:
+
+```yaml
+- name: BiblePerson
+  virtualJoins:
+    - anchorLabel: BibleNameQuery     # a lookup anchor: identity `name`
+      relationship: NAMED
+      keyField: name
+      recordKeyField: nameQueried
+      materializedKeyField: name      # every BiblePerson record carries the looked-up name in `name`
+      producer: biblePeopleByName
+```
+
+Then the target can be matched by that property directly, with no door written: `MATCH (p:BiblePerson {name:'Moses'})` — or `WHERE p.name = 'Moses'`, `WHERE p.name IN [...]`, or a value bound upstream — is answered as if `(:BibleNameQuery {name:'Moses'})-[:NAMED]->(p)` had been written, and `p` anchors any join that leaves it (`(p)-[:FATHER*]->(a:BiblePerson)`). The query's own predicate still applies to the fetched rows with Cypher's semantics, so a producer that matches keys case-insensitively may fetch rows an exact `=` then filters out. The declaration is required: a target property that merely shares the key's name is never treated as the key, because fetching by a coincidence of spelling answers a different question with full confidence. Without it the bare match is still rejected as a naked scan, and the rejection names the keyed form when one is declared. When several joins declare a `materializedKeyField` the query pins, the first in declaration order is taken.
 
 ### `producers/`
 
