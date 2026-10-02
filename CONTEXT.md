@@ -57,10 +57,16 @@ reserved for the host's own places, whose names each host defines.
 _Avoid_: URL scheme, deep link when meaning this contract
 
 **Key Entry**:
-A credential a Realm declares it needs: a name, one or more fields each stored under a credential
-variable, and optionally how the host checks a value. The realm names the check; the host makes it,
-and realm code never sees a value.
+A key a Realm declares it needs in `keys.yml`: a name, one or more fields each stored under a credential
+variable, and optionally how the host checks a value. It is set once for the host and found by variable
+name. The realm names the check; the host makes it, and realm code never sees a value.
 _Avoid_: secret, config entry, API key when meaning the declaration rather than the value
+
+**Credential**:
+A secret a Realm declares it needs in `credentials.yml`: an id, a kind, and what it is for. An API entry
+or channel names it by id. The owner connects it to a key in their wallet for one installation of the
+Realm, and nothing is connected at install. The realm never names a wallet item or carries a value.
+_Avoid_: Key Entry when meaning a host-wide key found by variable name, secret
 
 **Knowledge Context**:
 A named confidentiality boundary for knowledge or memory within one world. Its identity and access

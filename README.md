@@ -52,6 +52,7 @@ realm-name/
 ├── apis/                 # API entries (YAML)
 │   └── my-api.yml
 ├── keys.yml              # The API keys the realm needs, and how to check them (optional)
+├── credentials.yml       # The credentials the realm declares, connected by each owner (optional)
 ├── src/                  # Hand-authored TypeScript handlers (optional)
 │   └── api/
 │       └── my-handlers.ts
@@ -1530,6 +1531,107 @@ A declared entry takes precedence over a derived one for the same variable, so a
 **Load problems.** A `validate.api` the realm does not declare, a `validate.operation` that API does
 not have, an `interpret` naming no Realm Function, or two entries claiming one `variable`, is a
 recorded problem. The entry still loads, without `validate`.
+
+## `credentials.yml`: the credentials a realm declares
+
+A realm built with `connecting()` says what it needs to authenticate and never what the secret is.
+It lists each credential here by id, with a kind, a plain description of what it is for, and where
+somebody gets one. An `apis/` entry or a channel then names a credential by that id. The owner
+connects each declared credential to a key in their wallet, for one installation of the realm. Hosts
+show the list to the owner in the realm's own words before anything is connected.
+
+```yaml
+# credentials.yml
+- description: A bot token for the server you want the assistant in.
+  docs: https://discord.com/developers/applications
+  id: bot
+  kind: bearer
+  provider: discord
+  scheme: Bot
+- description: The application's public key, used to verify interaction webhooks.
+  docs: https://discord.com/developers/applications
+  id: signing
+  kind: public-key
+  provider: discord
+```
+
+```yaml
+# apis/apis.yml
+- auth: bearer
+  credential: bot
+  name: discord
+  operation-ids:
+    - getGatewayBot
+  type: openapi
+  url: discord.json
+  write-operation-ids:
+    - createMessage
+```
+
+The file is a list with one entry per credential. It is optional, and a realm that declares nothing
+here behaves as described under `keys.yml`.
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | yes | What an `apis/` entry or a channel names. Unique within the file. Either a lowercase letter followed by lowercase letters, digits and dashes (up to 64 characters), or an environment-variable style name: a letter or underscore followed by letters, digits and underscores (up to 128). The second form is what a credential migrated from `token-env` keeps. |
+| `kind` | yes | One of `api-key`, `basic`, `bearer`, `oauth2`, `public-key`. |
+| `description` | yes | What the credential is for, written for the person who is asked to connect it. Up to 512 characters. |
+| `provider` | no | The service that issues it, when several credentials share one. Letters, digits, `_`, `.` and `-`, starting with a letter or digit, up to 64 characters. |
+| `docs` | no | Where to get one. Must start with `https://`, contain no whitespace, and be at most 512 characters. |
+| `scheme` | `bearer` only | The word in front of the token in the `Authorization` header, when it is not `Bearer` (Discord sends `Bot <token>`). Printable ASCII without whitespace, at most 32 characters. Refused on any other kind. |
+| `scopes` | `oauth2` only | The scopes the grant asks for. At least one, no repeats, at most 32 entries of at most 128 characters each. Refused on any other kind. |
+
+The file holds at most 32 entries. A host reads it whole and refuses the whole file, loading no
+credential from it, when:
+
+- it is not a non-empty list, or an id repeats;
+- an entry has a field not in the table, a missing `id`, `kind` or `description`, or a `kind` outside
+  the five above;
+- an `id`, `provider`, `docs`, `scheme` or `scopes` breaks its rule in the table;
+- an entry is not named by any `apis/` entry or channel in the realm, because asking for a secret
+  nothing uses is a reason to doubt the rest of the list.
+
+### Referencing a credential
+
+An `apis/` entry names a credential with `credential: <id>`, and a channel names one with
+`credential: <id>`, the same way; a channel's webhook signature names one in its own `credential`
+field. A reference to an id the file does not declare refuses the entry. One credential can back
+several entries and channels.
+
+An `apis/` entry carries `credential` or the older `token-env`. Carrying both is accepted only when
+they name the same thing, which is how a realm migrates one key at a time; two different names, or
+neither, refuse the entry. `token-env` names a wallet item outright and answers to no declaration.
+
+A realm cannot name a wallet item, carry a secret, or read one. The host holds the secret and attaches
+it to the call or the connection. The realm's code never sees it.
+
+### What the owner does
+
+Nothing is connected at install. For each declared credential the owner either picks a key already in
+their wallet or pastes a new one, which the host files in the wallet for them, and can disconnect it
+again. A connection belongs to one installation of the realm: two installations of the same realm
+hold their own, and can use different keys. Every change names the installation revision the owner
+last read, and a stale one is refused.
+
+A credential with no connection has its calls refused, and a channel that needs it is blocked until
+the owner connects it. A host never shows a connected secret back, logs it, or records it in the
+grant.
+
+### Credentials and keys
+
+| | `keys.yml` | `credentials.yml` |
+|---|---|---|
+| What it declares | A Key Entry: a name, its fields, and optionally how to check a value | A Credential: an id, its kind, and what it is for |
+| Found by | The variable name in `token-env` or `${VAR}` | The id in `credential:` |
+| Set | Once for the host | Per installation of the realm, by its owner |
+| Written by | The author | The author, or `connecting()` |
+
+Use `credentials.yml` for a realm built with `connecting()`, and for any `apis/` entry or channel that
+should be granted to one installation. Use `keys.yml` for a key a host holds once for every realm that
+names its variable, and when a person should be able to check a value before storing it.
+
+A channel in a captured realm references a credential exactly as an `apis/` entry does. The channel
+files themselves are described under `channels/`, which does not yet cover the captured form.
 
 ## `src/` and `tests/` — hand-authored TypeScript handlers
 
