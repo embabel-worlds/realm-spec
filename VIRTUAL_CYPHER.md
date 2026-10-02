@@ -3312,7 +3312,8 @@ discarding, so nothing is materialized and nothing is written. Two budgets are c
 | Budget | Default | What is counted |
 | --- | --- | --- |
 | facts | 50,000 | the rows the whole body binds — the facts it would conclude |
-| work | 1,000,000 | the rows the body examines before its first aggregation (`count`, `sum`, `collect`, `DISTINCT`, `ORDER BY` in a `WITH`) |
+| work | 1,000,000 | the rows the body examines before its first `WITH` that aggregates (`count`, `sum`, `collect`, `DISTINCT`, `ORDER BY`) or filters (`WITH … WHERE`) |
+| deadline | 5 seconds | how long any one counting statement may run before the database stops it |
 
 Each count **stops one row past its budget**, so pricing a body never costs more than the budget it
 is priced against — a cartesian of a billion rows is priced in the time it takes to stream a million.
@@ -3331,6 +3332,12 @@ an under-constrained body is quadratic in the nodes it binds, so narrow it (anch
 side, add a filter) or raise the rule set's own limits deliberately if the estate is
 genuinely that dense.
 ```
+
+Why the cut falls before a filter as well as an aggregation: a count stops at rows that *reach* it,
+so behind a selective `WITH … WHERE` it measures output, not work — finding a million rows that pass
+can mean examining most of a cartesian. A filter in a `MATCH`'s own `WHERE` cannot be cut away
+without pricing a different query (an anchoring equality there is what makes a body cheap), and that
+is what the deadline is for.
 
 A count that is **stopped** before it finishes — terminated, timed out, or out of the engine's own
 work budget — is treated as evidence of cost, and the query is refused the same way. It is never
