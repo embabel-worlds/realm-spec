@@ -2935,7 +2935,9 @@ agent does or what is shown. Nothing a caller sends adds a realm, a tool, a verb
 
 A host may expose every agent through the OpenAI chat API, so tools that speak it (Open WebUI,
 LibreChat, an OpenAI SDK) talk to an agent unchanged. The caller authenticates as themselves, with
-an API key sent as `Authorization: Bearer`, and is the speaker.
+an API key sent as `Authorization: Bearer`, and is the speaker. A host should offer **agent keys**:
+a key minted for named agents (or any) that talks only to them, reaches nothing else of its owner's,
+and lists only them as models — the key to paste into a chat client.
 
 | Path | Meaning |
 |---|---|
@@ -2966,7 +2968,9 @@ an API key sent as `Authorization: Bearer`, and is the speaker.
 | `embabel_evidence` | `true`: the response carries an `embabel` object with the conversation id, the run and the requests the turn raised. |
 
 **What the flat shape hides.** One answer per turn, with no progress or tool activity. A request the
-agent raises for a person's approval arrives in the answer as text with a link to it.
+agent raises for a person's approval is named after the answer, with where to approve or reject it:
+a link to the host's approvals when the host knows where they are. Nothing is approved from the
+client.
 
 ### What an inline routine sees
 
