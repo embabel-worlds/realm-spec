@@ -1158,7 +1158,7 @@ sources:
 
     sync:
       strategy: mirror                     # mirror | lazy | live
-      trigger: on-first-use                # on-first-use | scheduled | manual
+      trigger: on-first-use                # on-first-use | on-install | scheduled | manual
       refresh: full-rewalk                 # incremental | full-rewalk
       watermark: DateLastUpdated           # the field that dates a record
       watermarkFilterable: false           # can the SOURCE filter on it? here: no
@@ -1261,6 +1261,82 @@ Worlds instead use the separate [captured collection snapshot
 profile](HOSTED_EXECUTION.md#captured-collection-snapshots), which already implements
 per-World source read/storage approval and a retained, authority-partitioned mirror and
 coverage receiver. A producer or handler grant does not authorize public graph access.
+### `lane: documents` — a collection that lands as searchable DOCUMENTS
+
+Everything above mirrors records into the graph. A collection of long-form, reasonably stable
+*content* — a published text, a documentation site, a regulator's guidance, a policy library —
+belongs in the document store instead: chunked, embedded, and reachable by document search and
+relevance joins (`RELEVANT_TO`). `lane: documents` declares that, with no handler code: the host
+reads the records, renders each into a document, and keeps them current.
+
+```yaml
+# sources.yml
+sources:
+  - name: bible-kjv
+    lane: documents                      # graph (default) | documents
+    from:                                # exactly one of:
+      cypher: |                          #   a read over data the world holds (typically this realm's reference/)
+        MATCH (b:Book)<-[:IN]-(p:Passage)<-[:IN]-(v:Verse)
+        WITH b, p, v ORDER BY v.verse
+        RETURN p.osis AS osis, p.name AS title, collect({n: v.verse, text: v.text}) AS verses
+      # urls: [https://…, https://…]     #   pages the host fetches
+    document:                            # Jinja; each record's columns are the model
+      uri: "bible://kjv/{{ osis }}"      # the replace key — a stable `<scheme>://<id>`
+      title: "{{ title }} (KJV)"
+      content: |                         # markdown preferred: headings drive chunking
+        # {{ title }}
+        {% for v in verses %}{{ v.n }} {{ v.text }}
+        {% endfor %}
+      # url: "{{ link }}"                #   OR: a page to fetch per row, instead of uri + content
+      # sourceModifiedAt: "{{ edition }}"#   the version token; see below for the default
+      sourceKind: bible                  # the store, generically; defaults to the realm name
+      tags: [bible, kjv]                 # stamped on every document and chunk
+    sync:
+      trigger: on-install                # on-install | scheduled | manual
+      schedule: "0 0 3 * * SUN"          # six-field cron, host zone, for `scheduled`
+      prune: true                        # remove documents no record produces any more
+```
+
+**Records.** `from.cypher` is read on behalf of the installing user, through the same scoping as that
+user's own queries; a read the host cannot scope is a failed sync, never an unscoped one.
+`from.urls` gives one record per URL, exposed to the templates as `url`.
+
+**Two kinds of document.** A record renders either **text** (`document.uri` + `document.content`: the
+realm renders the content itself, under a locator in its own scheme — the same `uri` contract as
+[`EXTERNAL_DOCUMENTS.md`](EXTERNAL_DOCUMENTS.md) §3, so `http(s)://`, `file://` and `upload://` are
+refused) or a **page** (`from.urls`, or `document.url` per row: the host fetches and converts it, and
+the URL is its identity). Never both.
+
+**Versions decide what is re-ingested.** Each document carries a version token, compared with the one
+held before anything is fetched or embedded:
+
+| | Token |
+|---|---|
+| `document.sourceModifiedAt` declared | the rendered value |
+| rendered text, none declared | a hash of the rendered content — an unchanged record is never re-embedded |
+| a page, none declared | the `Last-Modified` it is served with; a page that states none is re-read on every run |
+
+**Triggers.** `on-install` runs a source when the world has never completed it, when its declaration
+has changed since, or when its last run did not complete — after the realm's `reference/` data is
+seeded, so a `cypher:` source reading it never sees an empty graph. `scheduled` runs it on its cron,
+registered and removed with the realm. `manual` runs it only when asked. A run is always in the
+background; a second trigger while one is running is reported, not queued.
+
+**Pruning** removes documents this source holds that no record produced, and only after a COMPLETE
+run: an empty read or a failed record deletes nothing, because "the source returned nothing" and "the
+source is gone" are indistinguishable from the host's side.
+
+**Status.** Each run's outcome — `COMPLETE`, `PARTIAL` (some records failed; retried next trigger),
+`EMPTY` (no records; nothing pruned), `FAILED` (with the reason) — is recorded per world and reported
+with the realm's status, alongside every declared source that has never run.
+
+**Visibility.** Documents are held per user and context, like every other ingested document: each
+world that installs the realm ingests its own copy. `visibility: public` is refused for a `documents`
+source until a shared document corpus exists.
+
+**When to write a handler instead.** Declarative sources cover content the host can read or fetch
+unaided. A source behind OAuth, with a change feed, or needing a multi-step export (a Drive folder, a
+Notion workspace) still uses a handler and `ctx.ingest.*` ([`EXTERNAL_DOCUMENTS.md`](EXTERNAL_DOCUMENTS.md) §6).
 
 ## `reference/`
 
