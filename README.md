@@ -93,7 +93,7 @@ realm-name/
 ├── skills/               # Skills (Agent Skills spec)
 │   └── my-skill/
 │       └── SKILL.md
-├── metrics/              # Reusable metric sets a persona keeps across a conversation
+├── notebook/             # Reusable sets of slots a persona keeps across a conversation
 │   └── my-set.yml
 ├── personalities/        # Voice / behaviour bundles (Jinja templates)
 │   └── my-persona/
@@ -2878,7 +2878,6 @@ does not yet read one ignores it.
 | `colleagues` | Which kinds of colleague it expects to message | Which it may actually reach |
 | `roles` | Which [LLM roles](#llm-roles) its work leans on | Which model plays each |
 | `battery` | Cases that must fire and must not fire, run before adoption | Whether the results are good enough to adopt |
-| `metrics` | Which [metric sets](#metrics) its conversations keep, and the role that extracts them | Which sets are granted, and which model extracts — some may be granted and others refused |
 
 ### Stage: off duty, observing, on duty
 
@@ -3484,103 +3483,126 @@ Exemplar: `realm-movie`'s `skills/movie/SKILL.md` — rating a film when no scor
 (options `"1"`–`"10"`, `context.imdbId`), and disambiguating a title with several OMDb matches
 (one option per candidate, candidates in `context`).
 
-## `metrics/`
+## `notebook/`
 
-Named sets of **metrics an agent keeps across a conversation** — what it believes about the person
-it is talking to, about itself, and about the conversation. Each file under `metrics/` is one
-reusable set; a persona includes sets by name.
+What a persona keeps about one conversation, across its turns. Each file under `notebook/` is one
+reusable **set** of typed **slots**; a persona includes sets by name.
 
-This is the generalisation of a pattern that otherwise gets rebuilt per realm. A conversational
-agent already forms judgements every turn — how engaged the person is, whether an objection still
-stands, how far along a decision has got. Declaring them makes them state the agent can *read* and
-behave on, rather than an impression that dies with the context window.
+A pastor writes an index card after a visit — their name, who they are worried about, what you left
+them with, which chapter you read. That card is not one kind of fact. Some of it is a reading, some
+is a note, some is a list of things to come back to, and some of it points at particular people and
+passages. Declaring only the readings would have been a metrics facility, and a persona would then
+keep its numbers in the host and its notes nowhere.
 
 ```yaml
-# metrics/theory-of-mind.yml
-name: theory-of-mind
-description: What the agent believes about the person it is talking to, and about itself.
-metrics:
-  - name: mood
-    scope: subject
-    description: "How the person seems to be feeling."
+# notebook/pastoral.yml
+name: pastoral
+description: What a pastor reads in a conversation, and how he is bearing it himself.
+slots:
+  - name: rapport
+    scope: conversation
+    description: "How much trust there is. 1 wary, 10 they tell you what they tell nobody."
     type: ordinal
     range: [1, 10]
-    default: 5
-  - { name: rapport,    scope: conversation, type: ordinal, range: [1, 10], default: 5 }
-  - { name: confidence, scope: agent,        type: ordinal, range: [1, 10], default: 5 }
-```
-
-```yaml
-# metrics/conversion.yml — the same facility, a different domain
-name: conversion
-description: How far a decision has got, and what is still in the way.
-metrics:
+    default: 4
   - name: stage
     scope: subject
+    description: "What has actually been SAID about faith, not what he hopes."
     type: stage
-    stages: [unaware, aware, interested, evaluating, committed, declined]
-    default: unaware
-  - { name: objectionsOpen,   scope: conversation, type: count,   default: 0 }
-  - { name: commitmentStated, scope: subject,      type: boolean, default: false }
+    stages: [unspoken, curious, asking, wrestling, seeking, declined]
+    default: unspoken
+  - { name: contentment, scope: agent, type: ordinal, range: [1, 10], default: 6 }
+  - { name: questionsOpen, scope: conversation, type: count, default: 0 }
+  - { name: askedToStop, scope: subject, type: boolean, default: false }
+  - { name: card, scope: subject, type: text, limit: 400, default: "" }
+  - { name: toRead, scope: conversation, type: list, limit: 5, default: [] }
+  - { name: about, scope: conversation, type: entities, limit: 8, default: [] }
 ```
 
 | Field | Required | Meaning |
 |---|---|---|
 | `name` | yes | The set's id, referenced from a persona. Unique across the world. |
 | `description` | no | One line on what the set is for. |
-| `metrics[].name` | yes | The metric's id, unique within the set. |
-| `metrics[].description` | no | What it measures, in the words the extraction step will read. |
-| `metrics[].scope` | yes | `subject` (the person being spoken to), `agent` (itself), or `conversation` (the exchange). |
-| `metrics[].type` | yes | `ordinal`, `stage`, `count`, `ratio` or `boolean`. |
-| `metrics[].range` | for `ordinal`/`ratio` | `[min, max]` inclusive. A host clamps to it rather than rejecting the turn. |
-| `metrics[].stages` | for `stage` | The ordered states. Movement is not required to be forward. |
-| `metrics[].default` | yes | The value before anything has been observed. |
+| `slots[].name` | yes | The slot's id, unique within the set. |
+| `slots[].scope` | yes | `subject` (the person spoken to), `agent` (itself), `conversation` (the exchange). |
+| `slots[].type` | yes | One of the types below. |
+| `slots[].description` | no | What it holds, in the words the extraction step reads. |
+| `slots[].default` | yes | The value before anything has been observed. |
+| `slots[].range` | for `ordinal`/`ratio` | `[min, max]` inclusive. A host clamps to it rather than failing a turn. |
+| `slots[].stages` | for `stage` | The ordered states. Movement need not be forward. |
+| `slots[].limit` | no | Longest `text`; most items in a `list` or `entities`. A host caps whether or not one is given. |
 
-**`type` is load-bearing.** A funnel is not a 1-to-10 score and an objection count is neither:
-a set that had to express every metric as one scale would misreport two of the three above. A host
-validates a value against its metric's own declaration.
+### The slot types
+
+| Type | Holds | For |
+|---|---|---|
+| `ordinal` | a whole number on a declared scale | a reading: rapport, mood, confidence |
+| `stage` | one of a declared, ordered set of states | where a decision has got to |
+| `count` | a non-negative whole number | questions still owed |
+| `ratio` | a real number on a declared scale | a proportion |
+| `boolean` | true or false | a fact that has or has not happened |
+| `text` | a short note in prose | what they said, what you left them with |
+| `list` | bounded short strings | links, references, things to come back to |
+| `entities` | `{label, id, name?}` references | WHICH people, passages or accounts this was about |
+
+**`type` is load-bearing.** A funnel is not a one-to-ten score, an objection count is neither, and a
+note is none of them: a facility that expressed everything as one scale would misreport most of the
+card. A host validates a value against its slot's own declaration.
+
+**`entities` is not a list of strings.** An entity reference points back into the graph, so an id
+with its label can be resolved again and a conversation can carry what it was *about* rather than a
+prose approximation. A reference missing either half is dropped rather than repaired: an id with no
+label cannot be looked up, a label with no id names a type rather than a thing, and inventing the
+missing half puts a reference in the notebook that resolves to nothing — or to something else.
+
+**Two slot names are reserved behaviour.** `askedToStop` and `inDistress` are brakes: once `true`
+they stay true for the conversation, and while either is set a host withholds the persona's
+`objective`. An advocate asked to stop is not told to stop advocating — it is simply no longer told
+what it was trying to achieve, because stating an objective and a prohibition together is
+contradictory input, and a model resolves that by acknowledging the request and then proceeding
+anyway.
 
 ### Who updates them
 
-The host, once per turn, after the reply: a second model call reads the exchange and returns the new
-values, which are validated against the declarations above. That call is named by
-[LLM role](#llm-roles), never by model — and the role is one of the ids in that table, not a word of
-the realm's choosing. `routing` is the one meant for it: "a small fast model for classification,
-routing and extraction". An unknown role resolves to the host's default rather than refusing, so an
-invented id does not fail — it silently runs the generation-grade model, or the cheapest one, and the
-realm author never learns which.
+The host, once per turn, **before** the reply is written: a second model call reads what the person
+has just said and returns the new contents, validated against the declarations above. That call is
+named by [LLM role](#llm-roles), and the role must be one of the ids in that table — `routing` is the
+one meant for it. An unknown role resolves to the host's default rather than refusing, so an invented
+id does not fail; it silently runs whatever the default is and the author never learns which.
 
 ```yaml
 # in a persona's brief.yml
-metrics:
-  sets: [theory-of-mind, conversion]
+notebook:
+  sets: [pastoral]
   extraction:
-    role: routing      # an LLM role id from the table above; `routing` is the one for extraction
+    role: routing
     every: turn        # `turn`, or `close` to extract once when the conversation ends
 ```
 
-Either a **persona** or an [**agent**](#agents--agents-and-their-routines) may declare sets — a
-persona when the metrics belong to a voice wherever it speaks, an agent when they belong to that
-colleague's own conversations. An agent declares them under `metrics`, alongside `authority` and
-`roles`, and the same request-and-grant applies.
+Extraction runs before generation and not after, which is not an ordering preference. Extracting
+afterwards leaves every slot one turn stale, and for a brake that is a defect rather than a lag: a
+persona asked to stop said "no pressure" and volunteered a reading in the same breath, because the
+prompt that wrote it still believed nobody had objected.
 
-A realm **declares** metric sets; the world **grants** them, and may grant some and refuse others.
-A persona whose sets are all refused still runs — it simply keeps no metrics.
+A realm **declares** notebook sets; the world **grants** them, and may grant some and refuse others.
+A persona whose sets are all refused still runs — it simply keeps no notebook. The persona is the
+only place sets are declared: a notebook belongs to the voice that keeps it, and an agent already
+names its persona.
 
 ### What they are, and what they are not
 
-Metric values are **data about a person**, so they live under the world's normal handling for that:
-its scope, its retention, its export. They are not session scratch that escapes those rules because
-it happens to be an integer.
+A notebook holds **data about a person**, so it lives under the world's normal handling for that: its
+scope, its retention, its export. It is not session scratch that escapes those rules because some of
+it happens to be integers.
 
-The **declaration** is inspectable by the operator. Whoever runs an agent should be able to read what
-it is scoring, because they answer for it — and because a set is reusable, the answer should not
+The **declaration** is inspectable by the operator. Whoever runs a persona should be able to read
+what it is keeping, because they answer for it — and because a set is reusable, that should not
 require reading a realm's source.
 
-What the spec does not do is enumerate acceptable metrics. A coaching agent tracking `adherence`, a
-support agent tracking `frustration` and a sales agent tracking `stage` are one mechanism, and
-whether a particular metric is appropriate in a particular deployment is the operator's judgement at
-grant time, not a list in this document.
+What this spec does not do is enumerate acceptable slots. A coach keeping `adherence`, a support
+agent keeping `frustration`, a pastor keeping how open somebody is: one mechanism, and whether a
+particular slot suits a particular deployment is the operator's judgement at grant time rather than
+a list in this document.
 
 ## `personalities/`
 
@@ -3598,11 +3620,12 @@ personalities/
     └── verbosity.jinja
 ```
 
-- **`identity.yml`** — `name:` is the assistant's display name under this persona (shown on chat bubbles, used by the LLM when introducing itself). `source:` is optional and is set automatically to `realm` for realm-shipped personalities; only set it explicitly when overriding the default.
+- **`identity.yml`** — the persona's display metadata. `name:` is the display name under this persona (shown on chat bubbles, used by the LLM when introducing itself). `description:` is an optional one-liner for a picker, a column heading or a listing — a realm offering several personas as choices needs a label per persona, and this is where a label belongs. `source:` is optional and is set automatically to `realm` for realm-shipped personalities; only set it explicitly when overriding the default.
 
 ```yaml
 # personalities/roger/identity.yml
 name: Roger
+description: "One line for a picker, where a realm offers several personas"  # optional
 source: realm
 ```
 
@@ -3615,22 +3638,33 @@ source: realm
 
 ```yaml
 # personalities/roger/brief.yml
-tagline: "One line, for a picker or a column heading."
-brief: |
-  You are Roger. <the stance, the method, and what this persona refuses, in the few
-  hundred words one prompt can afford>
+objective: |
+  What Roger is trying to achieve in a conversation. A persona with one advocates.
+sampling:
+  temperature: 0.4        # what this persona RUNS at
+notebook:
+  sets: [pastoral]
+  extraction:
+    role: routing
 ```
 
 | Field | Required | Meaning |
 |---|---|---|
-| `tagline` | yes | One line naming how this persona works, for a picker, a column heading or a listing. |
-| `brief` | yes | The persona's stance and method, compact enough to carry inside a single prompt. |
 | `objective` | no | What this persona is **trying to achieve** in a conversation. A persona with an objective advocates; one without it answers. |
 | `openingMove` | no | How it opens when it speaks first. |
-| `avoids` | no | Subjects it will not be drawn onto, as a list. |
-| `unversed` | no | Subjects it does not claim competence in, as a list — so it says so instead of improvising. |
-| `metrics` | no | The [metric sets](#metrics) it keeps, and how they are extracted. |
+| `notebook` | no | The [notebook sets](#notebook) it keeps, and how they are extracted. |
 | `sampling` | no | What this persona RUNS at — `temperature`, `topP`, `maxTokens`. Distinct from an agent's `conversation.sampling`, which bounds what a *caller* may ask for. |
+| `brief` | no | The persona's voice compacted into a few hundred words, for a realm that calls a model **directly** rather than through chat. Omit it on the chat path: `personality.jinja` is already carrying the voice there, and a second copy of it is a second thing to keep true. |
+
+An agent's `job` and a persona's `objective` are not the same sentence. `job` is what the agent is
+**for**, in the words of whoever answers for it; `objective` is what it is **trying to achieve** in a
+conversation. A brake suppresses the objective and never the job — an agent asked to stop advocating
+still does its job.
+
+What is NOT here, deliberately: subjects the persona avoids, and subjects it does not claim
+competence in. `guardrails.jinja` says both already, in prose, more precisely than a list can — "name
+the kind of professional they need and go back to what you can offer" is not expressible as
+`unversed: [medicine]`. Two statements of one rule is one too many.
 
 An `objective` is the field that turns a voice into an agent with an interest of its own, and it is
 declared rather than implied for exactly that reason: a persona that is advocating should say so in a
