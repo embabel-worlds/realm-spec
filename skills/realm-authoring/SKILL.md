@@ -206,12 +206,60 @@ read-only, virtual joins materialize) with plain JS, `gateway.<ns>.*` integratio
 `gateway.ai.*` inline LLM, in one program. Full detail in "CypherScript — Cypher woven into
 TypeScript/JavaScript".
 
-## Verbs (behaviour on a type)
+## Methods on a type (behaviour on what a query finds)
 
-Export `class X extends Entity` in `src/api/x.ts`; its async methods are callable on an
-in-scope instance — including ones materialized by a virtual join. **Pure** verbs compute
-over fields; **effectful** verbs write back through `this.gateway.<ns>.*`. See "Type methods"
-and "Verbs on virtual types".
+A type method lets code query its way to a customer, an issue or a ticket and then work on it
+there: `acme.addNote(...)`, `issue.close()`. Write one in TypeScript whenever a type has
+something to DO, including YAML-declared types and ones a virtual join materializes. The class
+name must equal the type's name.
+
+```ts
+// src/api/customer.ts — the file name is the namespace; the class name is the type
+import { Entity } from "@embabel/runtime-types";
+
+/** The verbs this type calls (from apis/): Entity's type argument, so this.gateway is typed. */
+interface CrmGateway {
+  odoo: { partnerMessagePost(a: { ids: number[]; body: string; message_type: "comment"; subtype_xmlid: "mail.mt_note" }): Promise<number[]> };
+}
+
+/** The graph carries ids as strings; Odoo's are integers. One checked conversion. */
+function odooId(id: string): number {
+  const n = Number(id);
+  if (!Number.isInteger(n) || n <= 0) throw new Error(`not an Odoo record id: '${id}'`);
+  return n;
+}
+
+/** A customer in Odoo. */
+export class OdooCustomer extends Entity<CrmGateway> {
+  name?: string;
+
+  /** Add an internal note to the customer's history. Nobody is emailed. */
+  async addNote(text: string): Promise<number> {
+    const [id] = await this.gateway.odoo.partnerMessagePost({
+      ids: [odooId(this.id)], body: text, message_type: "comment", subtype_xmlid: "mail.mt_note",
+    });
+    return id;
+  }
+}
+```
+
+- **Name the gateway once** as `Entity<...>`'s type argument; never a getter that casts it.
+- **One parameter**: a bare value when one is enough, else one options object. Its type and the
+  return type become the schema; the first JSDoc paragraph is what a model reads.
+- **Writes**: name the action in the business's words and reuse that name across realms
+  (`addNote`, `scheduleFollowUp`, `bookCall`, `assign`, `reply`); make the safe outcome the
+  default (internal, no invitation, no customer-facing message unless asked); validate before
+  calling; call exactly one declared verb. `this.id` is the graph's string; convert it in one
+  checked helper. See "Designing write methods".
+- **Test** with `entityForTest(OdooCustomer, { id: "12114" }, mockGateway<CrmGateway>({ odoo: { ... } }))`
+  and assert the exact verb arguments.
+- **Ship**: `npm run build` writes `dist/` and the `onType` entries in `dist/manifest.json`.
+  Commit `dist/`, including `dist/node_modules/@embabel/runtime-types` (force-add it past a
+  `node_modules/` ignore rule): the compiled class requires it in the sandbox.
+- **Call it** from a script: read with `gateway.cypher.query` or `gateway.kg.query` (one
+  path under two names; its rows carry `__type` and `__labels`), `state.set("acme", row)`, then
+  `state.get("acme").addNote(...)`. Methods compose through labels, parents included. See
+  "Acting on what a query finds".
 
 ## Build, test, ship
 
