@@ -93,6 +93,8 @@ realm-name/
 ├── skills/               # Skills (Agent Skills spec)
 │   └── my-skill/
 │       └── SKILL.md
+├── metrics/              # Reusable metric sets a persona keeps across a conversation
+│   └── my-set.yml
 ├── personalities/        # Voice / behaviour bundles (Jinja templates)
 │   └── my-persona/
 │       ├── identity.yml
@@ -3284,6 +3286,96 @@ Exemplar: `realm-movie`'s `skills/movie/SKILL.md` — rating a film when no scor
 (options `"1"`–`"10"`, `context.imdbId`), and disambiguating a title with several OMDb matches
 (one option per candidate, candidates in `context`).
 
+## `metrics/`
+
+Named sets of **metrics an agent keeps across a conversation** — what it believes about the person
+it is talking to, about itself, and about the conversation. Each file under `metrics/` is one
+reusable set; a persona includes sets by name.
+
+This is the generalisation of a pattern that otherwise gets rebuilt per realm. A conversational
+agent already forms judgements every turn — how engaged the person is, whether an objection still
+stands, how far along a decision has got. Declaring them makes them state the agent can *read* and
+behave on, rather than an impression that dies with the context window.
+
+```yaml
+# metrics/theory-of-mind.yml
+name: theory-of-mind
+description: What the agent believes about the person it is talking to, and about itself.
+metrics:
+  - name: mood
+    scope: subject
+    description: "How the person seems to be feeling."
+    type: ordinal
+    range: [1, 10]
+    default: 5
+  - { name: rapport,    scope: conversation, type: ordinal, range: [1, 10], default: 5 }
+  - { name: confidence, scope: agent,        type: ordinal, range: [1, 10], default: 5 }
+```
+
+```yaml
+# metrics/conversion.yml — the same facility, a different domain
+name: conversion
+description: How far a decision has got, and what is still in the way.
+metrics:
+  - name: stage
+    scope: subject
+    type: stage
+    stages: [unaware, aware, interested, evaluating, committed, declined]
+    default: unaware
+  - { name: objectionsOpen,   scope: conversation, type: count,   default: 0 }
+  - { name: commitmentStated, scope: subject,      type: boolean, default: false }
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | yes | The set's id, referenced from a persona. Unique across the world. |
+| `description` | no | One line on what the set is for. |
+| `metrics[].name` | yes | The metric's id, unique within the set. |
+| `metrics[].description` | no | What it measures, in the words the extraction step will read. |
+| `metrics[].scope` | yes | `subject` (the person being spoken to), `agent` (itself), or `conversation` (the exchange). |
+| `metrics[].type` | yes | `ordinal`, `stage`, `count`, `ratio` or `boolean`. |
+| `metrics[].range` | for `ordinal`/`ratio` | `[min, max]` inclusive. A host clamps to it rather than rejecting the turn. |
+| `metrics[].stages` | for `stage` | The ordered states. Movement is not required to be forward. |
+| `metrics[].default` | yes | The value before anything has been observed. |
+
+**`type` is load-bearing.** A funnel is not a 1-to-10 score and an objection count is neither:
+a set that had to express every metric as one scale would misreport two of the three above. A host
+validates a value against its metric's own declaration.
+
+### Who updates them
+
+The host, once per turn, after the reply: a second model call reads the exchange and returns the new
+values, which are validated against the declarations above. That call is named by
+[LLM role](#llm-roles), never by model — it is a cheap extraction, not the generation role, and which
+model plays it is the world's decision.
+
+```yaml
+# in a persona's brief.yml
+metrics:
+  sets: [theory-of-mind, conversion]
+  extraction:
+    role: cheap
+    every: turn        # `turn`, or `close` to extract once when the conversation ends
+```
+
+A realm **declares** metric sets; the world **grants** them, and may grant some and refuse others.
+A persona whose sets are all refused still runs — it simply keeps no metrics.
+
+### What they are, and what they are not
+
+Metric values are **data about a person**, so they live under the world's normal handling for that:
+its scope, its retention, its export. They are not session scratch that escapes those rules because
+it happens to be an integer.
+
+The **declaration** is inspectable by the operator. Whoever runs an agent should be able to read what
+it is scoring, because they answer for it — and because a set is reusable, the answer should not
+require reading a realm's source.
+
+What the spec does not do is enumerate acceptable metrics. A coaching agent tracking `adherence`, a
+support agent tracking `frustration` and a sales agent tracking `stage` are one mechanism, and
+whether a particular metric is appropriate in a particular deployment is the operator's judgement at
+grant time, not a list in this document.
+
 ## `personalities/`
 
 Each subdirectory under `personalities/` is one persona the host can run the assistant as — its voice, behaviours, guardrails, and display name. The host renders the chat system prompt by including Jinja templates from the active persona's directory; switching personality is a directory swap, not a prompt rewrite.
@@ -3327,6 +3419,15 @@ brief: |
 |---|---|---|
 | `tagline` | yes | One line naming how this persona works, for a picker, a column heading or a listing. |
 | `brief` | yes | The persona's stance and method, compact enough to carry inside a single prompt. |
+| `objective` | no | What this persona is **trying to achieve** in a conversation. A persona with an objective advocates; one without it answers. |
+| `openingMove` | no | How it opens when it speaks first. |
+| `avoids` | no | Subjects it will not be drawn onto, as a list. |
+| `unversed` | no | Subjects it does not claim competence in, as a list — so it says so instead of improvising. |
+| `metrics` | no | The [metric sets](#metrics) it keeps, and how they are extracted. |
+
+An `objective` is the field that turns a voice into an agent with an interest of its own, and it is
+declared rather than implied for exactly that reason: a persona that is advocating should say so in a
+file an operator can read, not only in the way it happens to argue.
 
 A brief **resolves by the same rules as the rest of the bundle**: the slug is unique across the
 world and a world-authored persona of that name shadows the realm's. So a brief is not a private
