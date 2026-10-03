@@ -2314,7 +2314,7 @@ Adding a host that consumes an existing artifact class changes nothing for a Rea
 | `wasm` | bundle present | wasm |
 | `wasm` | no bundle, `wasm/handlers.js` present | wasm — bundle built on load |
 | `wasm` | no bundle, `wasm/handlers.ts` present | wasm — TypeScript compiled and bundled on load |
-| absent | `wasm/handlers.ts` present, nothing else | **docker — the TypeScript is ignored.** Inference looks for `handlers.js` or a bundle; a `.ts`-only realm loads with no functions and `realm_status` shows `verbs: []`. Declare `host: wasm`. (Verified 2026-09-23.) |
+| absent | `wasm/handlers.ts` present, nothing else | wasm — handler source under `wasm/` **is** the declaration. It placed such a realm on docker until me#1565, which loaded no functions and showed `verbs: []`; if a host still does that, declare `host: wasm`. |
 | `wasm` | neither | **conflict** |
 
 A conflict surfaces as a world-loading problem with a one-sentence reason and a suggested `host:` fix; the realm's declarative content still loads. `docker` with a bundle present is a conflict deliberately: a stale bundle must never sit silently beside a host that isn't running it.
@@ -3432,6 +3432,17 @@ HTML apps the realm ships. A realm-bundled app is served at **`/apps/{realm-name
 2. `<world>/config/apps/{name}` — world-template apps shipped with default-world
 3. `<world>/config/realms/<realm>/apps/{name}` — realm-bundled apps (this directory)
 
+A realm app's manifest entry takes a `title` — the name shown for the app. Without one a host
+may derive it from the file stem (`ci-health` → "Ci Health"), so an acronym needs it spelled:
+`"title": "CI Health"`.
+
+**Ship the Embabel badge.** An app is expected to carry the attribution block before `</body>`:
+a fixed-position `<div id="embabel-badge">` linking to worlds.embabel.com. The host's check is
+deliberately fuzzy — it looks for the well-known `embabel-badge` id, not for exact markup — and
+the vibe-coding path *injects* the block when it is missing. Nothing injects it into a
+realm-shipped app, so a realm ships its own, and the app harness
+(`vibe-apps/browser-harness.md`) asserts it is visible in the viewport rather than merely present.
+
 A user can shadow a realm-bundled app by vibe-coding one with the same filename. Realm apps are read-only from the user's perspective; they're refreshed whenever the realm is updated.
 
 ```
@@ -3928,9 +3939,6 @@ builtins: true
 | `name` | Yes | Stable slug — used by the `/focus <name>` slash command, the picker, and persistence. |
 | `displayName` | No | Human label for the picker. Falls back to `name`. |
 | `description` | No | One-line summary for the picker tooltip / chat badge. |
-| `title` | No | The name shown for the app. Without it a host may derive one from the file stem (`ci-health` → "Ci Health"); an acronym needs `"title": "CI Health"`. |
-
-**The Embabel badge is mandatory.** A realm-shipped app is refused by validation unless it carries, verbatim before `</body>`, the attribution block the validator names in its message: a fixed-position `<div id="embabel-badge">` reading "Created with Embabel Worlds" linking to worlds.embabel.com. Nothing injects it into a realm app, and the app harness (`vibe-apps/browser-harness.md`) asserts it is visible in the viewport, not merely present.
 | `icon` | No | Emoji or single character for the picker. |
 | `defaultPersona` | No | Persona slug to activate when a session enters this focus. Resolved against the same registry that `personalities/` populates — world-authored or realm-shipped. Null = keep the world's current persona. |
 | `realms` | No | Realm names whose skills stay visible in this focus. Empty = no realm skills, only built-ins. |
