@@ -3630,10 +3630,44 @@ brief: |
 | `avoids` | no | Subjects it will not be drawn onto, as a list. |
 | `unversed` | no | Subjects it does not claim competence in, as a list — so it says so instead of improvising. |
 | `metrics` | no | The [metric sets](#metrics) it keeps, and how they are extracted. |
+| `sampling` | no | What this persona RUNS at — `temperature`, `topP`, `maxTokens`. Distinct from an agent's `conversation.sampling`, which bounds what a *caller* may ask for. |
 
 An `objective` is the field that turns a voice into an agent with an interest of its own, and it is
 declared rather than implied for exactly that reason: a persona that is advocating should say so in a
 file an operator can read, not only in the way it happens to argue.
+
+#### `sampling` — what the persona runs at
+
+Temperature is part of a character, not a deployment knob. A persona meant to surprise people needs
+a high one; a persona whose job is to be exact needs a low one, and the same number cannot serve
+both. The prior art is explicit about it: the 2024 chatbot this field generalises declared
+`defaultTemperature: 1.38` with a floor of 1.3 and a ceiling of 1.4, because being a little
+unpredictable was the point of her.
+
+```yaml
+# personalities/astrid/brief.yml
+sampling:
+  temperature: 1.38      # what she runs at
+  maxTokens: 400
+```
+
+This is **not** an agent's `conversation.sampling`, and the two do different jobs:
+
+| | Declares | Governs |
+|---|---|---|
+| `brief.yml` → `sampling` | what the persona runs at | the call the host makes when nobody asked for anything |
+| `agents/<name>.yml` → `conversation.sampling` | a range | what a **caller** may ask for, clamped |
+
+Precedence, highest first: a caller's request, clamped to the agent's range; then the persona's
+declared value, clamped to the same range; then the role's own settings. A persona therefore cannot
+escape an operator's bounds by declaring a number — it states a preference inside them, which is the
+same request-and-grant that governs everything else a realm asks for.
+
+A host that does not read `sampling` ignores it and runs the role's settings, so declaring one never
+breaks a realm; it simply does not take effect. Worth knowing before relying on a temperature to
+carry a character: a surface whose model call takes no sampling arguments at all — as a host's
+general-purpose completion tool may not — cannot honour it, and the persona will run at whatever the
+role gives.
 
 A brief **resolves by the same rules as the rest of the bundle**: the slug is unique across the
 world and a world-authored persona of that name shadows the realm's. So a brief is not a private
