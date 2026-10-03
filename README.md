@@ -2827,7 +2827,8 @@ duties:                               # forward-looking: declared and shown, not
 | `name` | yes | Stable id. A world agent of the same name shadows the realm's. |
 | `job` | yes | One sentence, in the words of the person who will answer for it. |
 | `routing` | no | What to ask this agent about, for a host that routes questions to colleagues. |
-| `persona` | no | A personality the host already has. The persona is presentation; it confers no authority. |
+| `persona` | no | A personality the host already has, or one this realm ships under `personalities/`, named `<realm>/<slug>` to say which realm's (`realm-bible/jonathon`). A persona confers no authority, but it is part of what the sponsor signs: for an agent people talk to it is the behaviour, guardrails included (see [Signed versions](#signed-versions)). |
+| `conversation` | no | How the agent is talked to: the realms it reaches, the host tools it keeps, its model role and the sampling a caller may ask for. See [Talking to an agent](#talking-to-an-agent). |
 | `routines[]` | no | The work it does without being asked. Fields below. |
 | `duties[]` | no | Conditions it keeps true, each naming the view, lens or DERIVE label that should hold. _Forward-looking._ |
 | `state` | no | Only `retired`, to withdraw an agent the realm used to ship. Any other value is ignored. |
@@ -2880,9 +2881,92 @@ The world may set a stage per routine as well as per agent. This replaces the Tr
 ### Signed versions
 
 A world runs the version of an agent its sponsor last **signed**: the definition, each routine's
-body and trigger as they were, and a digest of every view a duty names. A realm update, an edit, or
+body and trigger as they were, a digest of every view a duty names, and the files of its persona as
+they render. A realm update, an edit, or
 a changed view appears on the agent as an unsigned change and reaches nothing until the sponsor
 signs again. An agent that has never been signed runs nothing.
+
+### Talking to an agent
+
+An agent with a persona and no routines or duties is one people **talk to**, and any agent may be
+talked to. A conversation with an agent speaks in its persona and reaches only what its
+`conversation` block allows:
+
+```yaml
+# agents/jonathon.yml
+name: jonathon
+job: Help people read scripture, and be known while they do.
+routing: Ask me about the Bible, a passage, a person in the text, faith or doubt.
+persona: realm-bible/jonathon
+conversation:
+  realms: [realm-bible]                  # default: the realm that ships the agent
+  builtins: [memory, views, graph, code] # host tools kept; default: all
+  llm: chat_best                         # an LLM role, never a model; default: the host's chat role
+  sampling:                              # what a caller may ask for; omitted = the role's own settings
+    temperature: [0, 0.7]
+    maxTokens: 2000
+authority:
+  default: never
+```
+
+| `conversation` field | Meaning |
+|---|---|
+| `realms` | The realms the conversation reaches. The host binds the conversation to them and enforces the binding where every call is dispatched, not only in what the model is shown. |
+| `builtins` | Which of the host's own tools the conversation keeps, by category: `code`, `graph`, `views`, `data`, `memory`, `documents`, `attachments`, `images`, `artifacts`, `apps`, `host`. `true` keeps all, `false` none. A host tool in no listed category is dropped. A realm's own tools are governed by `realms`, not this. |
+| `llm` | The [LLM role](#llm-roles) the conversation runs on. A realm never names a model, and a caller cannot choose one. |
+| `sampling.temperature` | The range a caller's `temperature` is clamped to. |
+| `sampling.maxTokens` | The most a caller's `max_tokens` may ask for. |
+
+**Who can be talked to.** Only an agent that may work: signed, with a sponsor, active, not off duty,
+and in a world that is not halted. A host refuses a conversation with any other agent and says
+which of these is missing, and it checks again on every turn, so standing an agent down ends its
+conversations at the next message.
+
+**What a stage means here.** Observing, an agent talks and reads, and every effect it attempts is
+refused and reported. On duty, what it may change is its signed `authority`, exactly as for its
+routines; a conversation borrows no authority from the person talking. Talking never shows the
+person more than they could see themselves: the agent sees the intersection of its own scope and
+the speaker's access.
+
+**A caller can narrow, never widen.** Everything a caller may ask for (below) tightens what the
+agent does or what is shown. Nothing a caller sends adds a realm, a tool, a verb or a model.
+
+### From an OpenAI client — _host surface_
+
+A host may expose every agent through the OpenAI chat API, so tools that speak it (Open WebUI,
+LibreChat, an OpenAI SDK) talk to an agent unchanged. The caller authenticates as themselves, with
+an API key sent as `Authorization: Bearer`, and is the speaker.
+
+| Path | Meaning |
+|---|---|
+| `GET <base>/openai/v1/models` | The agents the caller can talk to now, each an OpenAI model whose `id` is the agent's name. |
+| `POST <base>/openai/v1/chat/completions` | Talk to the agent named in `model`. |
+| `GET`/`POST <base>/agents/<name>/v1/…` | The same for one agent, for a client that cannot choose a model. `model` is ignored. |
+
+**Standard parameters.**
+
+| Parameter | What the host does |
+|---|---|
+| `model` | Names the agent. Never chooses a model: the model is the agent's `conversation.llm` role. |
+| `messages` | The client's whole history. Only the newest user message is a new turn; the conversation is recognised as described below. |
+| `stream` | Answered as server-sent `chat.completion.chunk` events ending in `[DONE]`. An agent produces messages rather than tokens, so each message arrives as one chunk. |
+| `temperature`, `max_tokens` (`max_completion_tokens`) | Honoured within the agent's `sampling` bounds and clamped to them. With no bounds declared, the role's own settings stand and the value is ignored, since common clients send one on every request. |
+| `top_p`, `stop`, `seed` | Passed to the model when the role's provider supports them; otherwise ignored. |
+| `user` | The client's end-user id, kept apart in recognising conversations. |
+| `tools`, `tool_choice`, `response_format` | Ignored. The agent's tools are its own, and a caller cannot hand it others. |
+
+**Embabel parameters**, sent as extra fields in the request body. Each narrows; none widens.
+
+| Field | Meaning |
+|---|---|
+| `embabel_conversation` | A conversation id the caller chooses. The same id from two clients is the same conversation. Without it, a conversation is recognised by the caller, the agent, `user` and the first user message. |
+| `embabel_observing` | `true`: every effect the agent attempts in this turn is refused and reported, even if it is on duty. |
+| `embabel_realms` | Narrow the conversation to some of the agent's `conversation.realms`. A realm outside them is ignored. |
+| `embabel_verbosity` | `terse`, `normal` or `full`: how long an answer the agent gives. It shapes the reply and never changes the agent's rules. |
+| `embabel_evidence` | `true`: the response carries an `embabel` object with the conversation id, the run and the requests the turn raised. |
+
+**What the flat shape hides.** One answer per turn, with no progress or tool activity. A request the
+agent raises for a person's approval arrives in the answer as text with a link to it.
 
 ### What an inline routine sees
 
