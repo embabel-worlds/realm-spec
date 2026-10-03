@@ -96,6 +96,7 @@ realm-name/
 ├── personalities/        # Voice / behaviour bundles (Jinja templates)
 │   └── my-persona/
 │       ├── identity.yml
+│       ├── brief.yml     # optional; the persona for a single non-chat call
 │       └── personality.jinja
 └── focuses/              # Named scopings of the chat surface
     └── my-focus.yml
@@ -3291,6 +3292,7 @@ Each subdirectory under `personalities/` is one persona the host can run the ass
 personalities/
 └── roger/
     ├── identity.yml
+    ├── brief.yml
     ├── personality.jinja
     ├── behaviours.jinja
     ├── guardrails.jinja
@@ -3298,7 +3300,7 @@ personalities/
     └── verbosity.jinja
 ```
 
-- **`identity.yml`** — the only YAML in the bundle. `name:` is the assistant's display name under this persona (shown on chat bubbles, used by the LLM when introducing itself). `source:` is optional and is set automatically to `realm` for realm-shipped personalities; only set it explicitly when overriding the default.
+- **`identity.yml`** — `name:` is the assistant's display name under this persona (shown on chat bubbles, used by the LLM when introducing itself). `source:` is optional and is set automatically to `realm` for realm-shipped personalities; only set it explicitly when overriding the default.
 
 ```yaml
 # personalities/roger/identity.yml
@@ -3307,6 +3309,39 @@ source: realm
 ```
 
 - **`*.jinja`** files — included into the chat system prompt at the matching slots. `personality.jinja` carries the voice / character, `behaviours.jinja` carries do/don't rules, `guardrails.jinja` carries safety constraints, `response_format.jinja` carries output-shape rules, `verbosity.jinja` carries length / pacing rules. All five are optional — omit any file you don't need and the host skips its include line.
+
+- **`brief.yml`** — optional. The persona in the form a **single non-chat call** needs. The `.jinja`
+  files are slots a host assembles into a chat system prompt at session scope; a brief is the same
+  persona compacted into one request, for a realm verb that calls a model directly rather than
+  through chat. A persona with no `brief.yml` is chat-only and is simply not offered to a verb.
+
+```yaml
+# personalities/roger/brief.yml
+tagline: "One line, for a picker or a column heading."
+brief: |
+  You are Roger. <the stance, the method, and what this persona refuses, in the few
+  hundred words one prompt can afford>
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `tagline` | yes | One line naming how this persona works, for a picker, a column heading or a listing. |
+| `brief` | yes | The persona's stance and method, compact enough to carry inside a single prompt. |
+
+A brief **resolves by the same rules as the rest of the bundle**: the slug is unique across the
+world and a world-authored persona of that name shadows the realm's. So a brief is not a private
+copy a realm owns — it is one more field of a persona the host resolves, and a realm must not
+assume the persona a reader sees is the one in its own directory.
+
+Resolution is therefore the HOST's. A realm that reads its own `personalities/` directory to find
+a brief — which is all a realm can do until a host exposes personas to a verb — bypasses
+shadowing, and should say so rather than present the result as the resolved persona.
+
+**The two forms describe one person and must agree on substance**, differing only in form. Nothing
+in the format enforces that, so a realm whose build can check it should: a persona whose voice and
+whose brief disagree is a defect no reader can see. The least a build can do is fail when a brief
+ships without an `identity.yml` beside it, or when a `focuses/` file names a `defaultPersona` that
+ships no brief.
 
 A realm's personality is referenced by slug (its directory name) from a `focuses/` file (`defaultPersona: roger`) or directly via the host's persona picker. Slug must be unique across the world; on collision with a world-authored personality, the world wins.
 
