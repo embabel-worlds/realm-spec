@@ -1256,6 +1256,39 @@ installation, revision, digest, app names, declared handlers and approval state.
 `installationId` and `expectedRevision`. A stale revision returns 409. Open an approved app
 at `/apps/{realm}/{name}`. Existing flat links retain name-resolution precedence.
 
+### Page hash and preferences
+
+Besides `realm.call`, the bridge offers two more members. Both are mediated by the host
+over the same document-bound message channel.
+
+`realm.hash` holds the owner page's URL fragment without the leading `#`. The host delivers
+it when the app connects and again on every change. Only printable ASCII up to 2,048
+characters crosses the bridge; any other fragment arrives as `""`. The frame's own document
+moves to that hash, so `location.hash` and the `hashchange` event work inside the app, and
+the move adds no history entry. The first value can arrive just after load, so an app should
+listen for `hashchange`. An app must not use relative `#` navigations with `location.replace`;
+set `location.hash` instead.
+
+`realm.prefs.get(key)` returns a promise for the stored string, or `null` when the key is
+unset. `realm.prefs.set(key, value)` returns a promise that settles once the host has stored
+the value. The value is a string, or `null` to remove the key. The host persists preferences
+per app and per user. It removes them when the app's approval goes away or the realm is
+revoked. The reference limits are:
+
+- 64 keys per app and user.
+- Keys of 1 to 128 characters drawn from `[A-Za-z0-9_.:-]`.
+- Values up to 4 KiB each and 32 KiB in total.
+- 1,024 preference requests per session.
+
+A refused request rejects with one of these codes: `preference_key_invalid`,
+`preference_value_invalid`, `preference_value_too_large`, `preference_too_many_keys`,
+`preference_total_too_large` or `preference_busy`. Preference requests are serialized with
+`realm.call`, one at a time and in order, and at most 32 can wait. A request beyond that
+limit is refused with `preference_busy`.
+
+The host renders the frame document with the page's own doctype first, or with
+`<!doctype html>` when the page has none, so apps render in standards mode.
+
 ### Declared resources
 
 A captured browser app may also declare stylesheet and script resources drawn from its own
