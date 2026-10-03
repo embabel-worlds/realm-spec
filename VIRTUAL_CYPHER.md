@@ -315,6 +315,20 @@ the final page. A short page ends the walk normally under either convention; rea
 on a full page produces the same truncation diagnostic. Omitting `startPage` fetches pages 1, 2,
 and so on. A negative value is rejected. Cursor paging does not send or interpret `startPage`.
 
+**`total`** names where a page says how many records the source holds in all (a JSONPath, e.g.
+`data.meta.all_count`). With it, a page-number or offset walk reads page one, learns how many
+pages remain, and fetches them **concurrently** rather than one after another — a 29-page sweep
+costs about one page's latency instead of 29. Everything a serial walk promises still holds:
+records come back in page order, a pushed-down `LIMIT` stops at the same page, a page that fails
+ends the walk there with the pages before it and a warning, `maxPages` still caps and still warns
+when it cuts, and the declared `cost.rate` still paces every call. Without `total` (or when the
+page does not carry it) the walk is serial, because it cannot know how many pages there are until
+a short one arrives. Cursor paging is always serial.
+
+```yaml
+paging: { style: page, param: page, size: 25, maxPages: 200, total: data.meta.all_count }
+```
+
 The **LLM-backed** kinds (`generative`'s `generator:`, `aggregate`'s `reduce:`, `extract`'s `extract:`) take optional
 per-edge tuning — `role:` (a portable, world-defined model role id such as `chat_cheap`; **never a
 concrete model name**, which stays an ops concern) and `temperature:`. A query can override both for one
@@ -484,6 +498,32 @@ Let the record's own field be the key; the customer whose url IS that account is
 stray is not. A value the spine refuses (a freemail address, a bare word) matches nothing.
 `resolve:` chains (§5.2) treat a realm spine as they treat Person: `canonicalDomain` /
 `canonicalEmail` normalize through it.
+
+**A spine-anchored join can ride a book sweep — `ridesHub: true`.** An edge anchored on the spine
+is answered by asking the source about each account, so it is refused above `maxAnchors` (200)
+— and that caps every rule set absolutely, because a rule body cannot fetch and a `requires:`
+demand written as `(a:CustomerAccount)-[:HAS_CASE]->(…)` is itself account-anchored. Declaring
+`ridesHub: true` on the join says: in a query that has already swept this record type's BOOK —
+`MATCH (d:ChatwootDesk {status:'all'})-[:HAS_CASE]->(c:SupportCase) MATCH (a:CustomerAccount)-[:HAS_CASE]->(c)`
+— link each account to the swept records by the spine's own key (the record's `hub:` property,
+normalized as the spine defines: a URL becomes the account's domain), with no fetch at all. The
+cap does not apply to a ridden edge, so the book's size no longer matters.
+
+```yaml
+- { anchorLabel: CustomerAccount, relationship: HAS_CASE, keyField: accountKey,
+    recordKeyField: accountKeyAsked, producer: chatwootConversationsByAccount, ridesHub: true }
+```
+
+What the author asserts by declaring it: that the sweep is COMPLETE for the edge. `{status:'open'}`
+sweeps only open cases; an edge that means "this account's cases" ridden on it would silently
+under-report, which is exactly the fault the opt-in exists to forbid. Sweep `all`, or do not opt in.
+Three rules for the demand that rides: sweep first and name the account edge to the SAME alias;
+PROJECT what is swept (`RETURN c.id` — a demand that only asks whether something exists is fetched
+as one page, and one that counts is answered by a count and no records); and bind a per-customer
+hop through its own sweep (`MATCH (b)-[:HAS_CUSTOMER]->(lc) MATCH (b)-[:HAS_INVOICE]->(i) MATCH (lc)-[:HAS_INVOICE]->(i)`,
+the hop declaring `materializedKeyField: customerExternalId`) so it links rather than mints.
+Measured on realm-account-health at 2,030 accounts: the three rule-backed views went from "none"
+to answering in a few seconds, six book sweeps and no per-account call.
 
 **An account exists once something has keyed it.** A spine node is created when a query
 materializes records of a type that opts in — canonicalization is on demand, and only the spine
@@ -1202,6 +1242,10 @@ A producer's `cache:` declares how CURRENT its answers are:
   every query re-reads the source, so the answer is the current state as of the query — re-running
   the same query re-observes the source. This is the declaration behind "what is the current X,
   joined to my graph", and a scheduled re-run of such a query is a fresh observation each time.
+  Within ONE query the same read is made once: a fresh source asked for the same keys by two joins,
+  or by the engine's own pre-pass and its fetch, is read once and the records reused, and the
+  envelope bills one call. Independent fresh sources in the same query are read concurrently (their
+  cost is the slowest, not the sum), exactly as cached ones are.
 - `cache: {kind: ttl, seconds: N}` declares that an answer up to `N` seconds old is acceptable:
   within the window the same lookup is served without re-reading the source; past it, the next
   query re-reads. A query may force one live re-read of a TTL source with `{ai: {fresh: true}}` on
@@ -2098,7 +2142,7 @@ So a gate has to be written in a shape the engine can attach:
 |---|---|
 | `r.amount >= 20000000` | yes |
 | `toFloat(r.amount) >= 20000000` | yes — wrapping is fine |
-| `size(trim(coalesce(r.description,''))) <= 60` | **no** — see below: a length is not the property's value |
+| `size(trim(coalesce(r.description,''))) <= 60` | yes — see below: a length is screened by the engine, not by the source |
 | `r.description CONTAINS 'lease'` | yes |
 | `r.description IS NOT NULL` | **no** |
 | `toLower(r.description) = toLower(r.title)` | **no** — compares two properties, not a value |
@@ -2106,11 +2150,15 @@ So a gate has to be written in a shape the engine can attach:
 | `r.amount >= $threshold` **in a view** | yes — a view's declared params become literals before the query is read |
 | `r.amount >= $threshold` **with caller-bound params** | **no** — the value is not known when the query is read |
 
-**A wrapper that CHANGES the compared quantity cannot gate.** `toFloat(r.amount) >= 5` still compares
-the amount, so it gates. `size(r.description) <= 60` compares a LENGTH, and the engine has only the
-property to offer a source — so the condition is honoured in full, but after the judgment rather than
-before it. The rows are right; the bill is the same as if the gate were absent. `length`, `count` and
-`toString` behave the same way.
+**A wrapper that CHANGES the compared quantity gates too — but locally.** `toFloat(r.amount) >= 5`
+still compares the amount, so it can be handed to the source. `size(r.description) <= 60` compares a
+LENGTH the source has never heard of, so it is never handed to one; the engine evaluates it itself on
+every fetched record before the judge is asked, and the judge sees only the rows it keeps. This holds
+for a chain of `size` / `length` / `char_length` / `toString` over `coalesce` / `trim` / `toLower` /
+`toUpper` / `toFloat` / `toInteger`. A record the engine cannot decide — a missing value whose
+`coalesce` default it does not evaluate — is kept for the judge and settled by the query afterwards,
+so the screen only ever admits rows, never drops one the query would keep. A wrapper outside that
+set (`substring`, `reverse`, …) is not screened: the condition is honoured in full, after judging.
 
 That last pair is the one that surprises people. The same text bounds the cost inside a view and does
 not bound it when the parameter is bound by the caller at execution time. If a screen carries an
@@ -2281,10 +2329,37 @@ cell, and a cell can be filtered on.
 
 What this costs, and the one rule it imposes:
 
-- The value is computed BEFORE the query runs, so a query that filters on an aggregation pays for it
-  whether or not the filter keeps anything. Narrow the rows FIRST — a `WHERE` before the aggregating
-  `WITH` — and only groups that survive are computed. A query whose filter would need more than a few
-  hundred model calls is REFUSED with the count, rather than sampled quietly. The refusal names the
+- The value is computed BEFORE the query runs, and only for the groups whose value can still reach
+  the answer. Every part of the query that does not read the aggregation narrows that set first —
+  a `WHERE` before the aggregating `WITH`, and equally a `WHERE` after it on any other column, a later
+  `MATCH` that drops rows, a later `WITH … WHERE`. In
+
+  ```cypher
+  MATCH (l:Lead)
+  WITH l, classify(l.notes, 'strategic,standard,at_risk') AS triage
+  WHERE triage = 'at_risk' AND l.probability < 50
+  MATCH (l)-[:OWNED_BY]->(u:User {active: true})
+  RETURN l.name
+  ```
+
+  only the leads under 50% with an active owner are judged; the others are excluded whatever the
+  judgement would have been, and are never sent to the model. The guarantee is one-directional: the
+  set judged is never SMALLER than the set that can reach the answer, so the answer is exactly what
+  judging every group would give. Where the aggregation flows into something other than a filter or a
+  bare pass-through — an expression (`toUpper(triage)`), a pattern, an `UNWIND`, a `CALL`, a `UNION` —
+  the query cannot be narrowed by it and every group is judged, as before.
+- **A `LIMIT` stops the judging when the answer is full.** Under `ORDER BY … LIMIT n`, the groups
+  are judged toward the top of the answer a few at a time, best rows first, and judging stops the
+  moment the first `n` rows (or `SKIP s LIMIT n`: the first `s + n`) are all judged — every group
+  below them is never sent to the model. "The ten biggest at-risk deals" costs judging the biggest
+  deals until ten of them are at risk, not judging every deal. The answer is exactly what judging
+  every group would give. This holds when the judgement only FILTERS rows; where its value shapes
+  them — an `ORDER BY` on the judgement, a `RETURN` that is `DISTINCT` or aggregates, a later clause
+  grouped by it, a `LIMIT` before the final `RETURN` — every candidate is judged as before. One
+  residue is the store's own: rows that tie exactly at the boundary of the window are seated
+  arbitrarily, as they are under any `LIMIT`; such a row can carry no label, never a wrong one.
+  A query whose filter would still need more than a few hundred model calls is
+  REFUSED with the count, rather than sampled quietly. The refusal names the
   cap it hit, and a query that MEANS to spend that much says so: `{ai: {maxGroups: 600}}` raises it
   (up to 2000 — past that, compute the value once and persist it), and a smaller number LOWERS it,
   which is how a shipped view holds its own spending line. This is a cost guard, so it is the
@@ -2374,6 +2449,52 @@ model call — unlike `summarize`, `themes`, `relevant` or `extract`, which fold
 batches. They therefore read a bounded sample of the group, and **say what they left out**: a group
 larger than the sample returns a `PARTIAL_RESULT` note naming the counts and the strategy, so a
 number over 40 of 500 items never renders as a number over all 500.
+
+**Settle what you already know before the model is asked.** Wrap any reduction in a two-argument
+`coalesce` whose first argument is a plain expression over the row: where that expression is not
+null it IS the group's value and no model call is made; where it is null the reduction runs as
+usual.
+
+```cypher
+MATCH (a:CustomerAccount)
+WITH a, a.caseSubjects AS problems, coalesce(a.crmNotes, '') AS written
+RETURN a.name,
+       coalesce(CASE WHEN written = '' THEN 'unaware'
+                     WHEN any(p IN problems WHERE toLower(written) CONTAINS toLower(p)) THEN 'aware' END,
+                classify('OPEN: ' + problems + ' || CRM: ' + written, 'aware,unaware',
+                         'aware: a note touches the same topic as a support item …')) AS crmAwareness
+```
+
+An account sales never wrote about is `unaware` by definition, and one whose case subject appears
+verbatim in a note is `aware` by the same word test an app would apply — neither needs a model, and
+neither is sent one. The guard settles a GROUP only when every row of it carries the same non-null
+guard value; a group with one guarded row and one unguarded, or with guards that disagree, is judged
+whole by the model over its values (the guards are never part of the evidence). The guard must be a
+plain expression — one that aggregates is refused — and a reduction that collects two expressions
+(`argmax`, `correlate`, `regress`) cannot be guarded. The guarded form can be filtered, ordered and
+grouped by like any other reduction (§6.4), and there too the settled groups cost nothing.
+
+**Many groups share a call.** A query that classifies per row is a query of many small groups, and
+`classify` judges up to twenty of them in one model call — `RETURN c.id, classify(c.body, 'blocked,degraded,asking')`
+over 150 cases costs about eight calls, not 150. Nothing about the answer changes: every group is
+still judged on its own evidence, its label still comes from the closed set, and a group the model's
+reply does not settle unambiguously (a number missing, given twice, or given a label off the set) is
+judged again on its own rather than guessed. `llmCalls` in the result counts the calls actually made.
+`score` shares a call the same way — `ORDER BY score(…)` over many rows is batched, not one call
+per row — and keeps its contract: a batched score is the same 0–1 number, clamped, and a group
+whose evidence is too long for one call is scored on its own. `holds` is **not** batched: a
+verdict read from a numbered list was measured to differ from the verdict the same evidence
+gets on its own (a small judge answered FALSE in a batch where it answers TRUE alone), and a
+confidently wrong negative is a row silently missing from `WHERE holds(…) = true` — a
+`holds` over many rows still costs one call per group.
+The calls a reduction makes for independent groups (or batches of them) overlap, a few at a time,
+so a query that judges many groups waits for the slowest few round trips rather than the sum of
+all of them; the order of the rows and the count of the calls are unchanged by this.
+
+**A `classify` judgement is repeatable.** It runs at temperature 0 unless the call says otherwise
+(`{ai: {temperature: …}}`, or a role that carries its own), so the same evidence under the same
+rubric yields the same label run after run — a materialised view refreshed on its `ttl` keeps its
+labels where the words have not changed.
 
 ```cypher
 MATCH (t:ResearchTopic)-[:HAS_NEWS]->(n:NewsItem)
@@ -2846,6 +2967,14 @@ detail view says to ask it about named accounts rather than the whole book.
 **Cost (per producer):** a `cost:` block declares the source's shared **rate bucket** and limit.
 The planner budgets producer calls against it and, when a query can't fit, emits `EXPLAIN`-style
 **advice** (push a predicate, add a `LIMIT`, narrow the anchor) rather than silently over-calling.
+
+**Query-shape advice:** `EXPLAIN` also names a shape the store runs correctly but quadratically —
+an equality join between two matched sets with a function wrapping one side, `WHERE k.id =
+toString(n.res_id)`, which a planner cannot hash-join and so filters every pair (measured: 13.6 s
+against 2.5 s on 6,000 × 4,010 rows). The advice line quotes the clause and the spelling that
+hashes: project the function first (`WITH n, toString(n.res_id) AS nResId`), then compare the two
+plain values (`WHERE k.id = nResId`). Advice never changes what the query runs or answers; the
+advised spelling answers the same rows and draws no advice of its own.
 
 **Diagnostics — what a 0-row or partial result *means*:** a fetch that returns nothing is
 indistinguishable from "genuinely no data" unless the engine says otherwise. Every producer failure
