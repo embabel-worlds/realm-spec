@@ -3544,15 +3544,18 @@ validates a value against its metric's own declaration.
 
 The host, once per turn, after the reply: a second model call reads the exchange and returns the new
 values, which are validated against the declarations above. That call is named by
-[LLM role](#llm-roles), never by model — it is a cheap extraction, not the generation role, and which
-model plays it is the world's decision.
+[LLM role](#llm-roles), never by model — and the role is one of the ids in that table, not a word of
+the realm's choosing. `routing` is the one meant for it: "a small fast model for classification,
+routing and extraction". An unknown role resolves to the host's default rather than refusing, so an
+invented id does not fail — it silently runs the generation-grade model, or the cheapest one, and the
+realm author never learns which.
 
 ```yaml
 # in a persona's brief.yml
 metrics:
   sets: [theory-of-mind, conversion]
   extraction:
-    role: cheap
+    role: routing      # an LLM role id from the table above; `routing` is the one for extraction
     every: turn        # `turn`, or `close` to extract once when the conversation ends
 ```
 
