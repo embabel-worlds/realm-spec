@@ -328,8 +328,9 @@ the graph still has filtering left to do, so **an undeclared filter costs far mo
 page**.
 
 **Declare EVERY filter the source accepts, not the obvious one.** That last sentence is not a
-figure of speech: the engine's test is `residual.isEmpty()`, so a *single* predicate your source
-could have applied and didn't forfeits the `LIMIT` push and the `count()` push **entirely**.
+figure of speech: the `LIMIT` and `count()` pushes happen only when the graph has *nothing* left to
+filter, so a *single* predicate your source could have applied and didn't forfeits both
+**entirely**.
 Declaring three filters of four buys you the small win and none of the large one — a query that
 should have been one counted call walks every page instead, and the answer is identical, so nothing
 tells you. Go and read the source's own parameter list, and cover it.
@@ -343,6 +344,9 @@ Three things help you do that and check it:
 - **`EXPLAIN` names what a real query paid for**, per join: `pushed to source: genre` /
   `applied by the graph after fetching: status`. A residual there is the predicate to go and
   declare next — it is costing you on a query someone actually runs.
+
+A captured realm's handler-backed producer follows the same rule through `pushdown` rules — see
+"Cover EVERY filter" under [Captured realms](#captured-realms-producers-graph-reads-apps-and-proposals).
 
 If your source's query is text, use `qualifier`. If it is JSON — an Odoo domain, an Elasticsearch
 `bool.filter`, a Chatwoot filter payload — use `argPath` + `clause`:
