@@ -2094,6 +2094,26 @@ Two consequences are normative:
 
 - **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world, context, principal, or execution. Realms deliberately share declared types inside a world; graph data is readable only through the current context/access policy or an explicit policy-authorized bridge. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world-, context-, and where principal-dependent, principal-scoped.
 - **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
+- **A binding the runner was not given is NOT DECLARED.** Referencing it throws a `ReferenceError`
+  rather than yielding `undefined`, so `if (violation)` does not guard it and neither does
+  `violation ?? null`. Only `typeof` does, and it holds whether the identifier was never declared or
+  declared without a value:
+
+  ```ts
+  const row = typeof violation === 'undefined' ? null : violation
+  if (!row) { console.log('run by the duty that binds a row; nothing to do alone'); return { done: null } }
+  ```
+
+  **Guard every binding a handler does not always get**, and especially one supplied by a single
+  caller — a duty's violating row, a signal's payload. `autonomous: false` and a comment saying "run
+  by the duty, never on its own" do not prevent the handler being invoked; only the guard does. A
+  host may surface a failed handler to the user, so an unguarded read is a stack trace in somebody's
+  chat: a realm shipped exactly this, was reached on a chat turn, and answered a user who had just
+  said their wife had died with a `ReferenceError` and ten frames of Node.
+
+  Prefer a fallback where one is obvious — the current time for `now`, doing the work for real for an
+  absent `dryRun` — and a no-op that says why where one is not. A handler should not depend on being
+  invoked the way its author expected.
 
 The Realm Function contract is independent of placement. Each host declares which executable
 and declarative surfaces it supports, and admits them against the captured Realm and resource
