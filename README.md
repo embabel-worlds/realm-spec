@@ -3236,8 +3236,20 @@ A user can shadow a realm-bundled app by vibe-coding one with the same filename.
 apps/
 ├── github-dashboard.html
 ├── github-dashboard.svg     # its icon (optional)
-└── pr-review-board.html
+├── pr-review-board.html
+└── shared/                  # assets several apps load (optional)
+    ├── board-core.js
+    └── board.css
 ```
+
+**Apps may share files.** Every file under `apps/` is served at its own path — `/apps/<scope>/shared/board-core.js` —
+with a content type from its extension (`.js`, `.mjs`, `.css`, `.json`, `.svg` and common images), so a realm
+that ships several apps (or editions of one) keeps their common script, styles and data in one place and each
+page loads them with an ordinary relative `<script src>` or `<link href>`. Subfolders are allowed. A host
+serves nothing outside the realm's `apps/` directory: no `..`, no absolute paths, no hidden (dot) files or
+folders, and no symlink that leads out. Only `.html` files directly in `apps/` are listed as apps; everything
+else is an asset. When a user copies a realm app to customise it, a host should keep the copy pointing at the
+realm's shared assets rather than copying them, so the fork still receives the realm's updates.
 
 **An app may declare its own icon**, by the means the web already has — a
 `<link rel="icon" href="…">` in its `<head>`. The `href` must be a plain
