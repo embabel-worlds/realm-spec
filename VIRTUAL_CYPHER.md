@@ -90,6 +90,20 @@ always rolls back**:
    revision. The engine links it to the anchor it was fetched for (`keyField == recordKeyField`). A
    record may also carry its own **sub-graph** (`brings:`), materialized in the same pass.
 
+   **A fetched `userId` is exposed as `_sourceUserId`.** On every fetched node and brought child,
+   `userId` is the world scope, never the record's own field. A record's own `userId` is readable
+   as `_sourceUserId`, and the schema the generator is shown names it that way. A mirrored
+   source's persisted nodes store it under the same name. A type keeps declaring the source's own
+   field name, `userId`. A filter written on `_sourceUserId` reaches the source as
+   its `userId` field: a `pushdown:` rule keeps naming the source field (`property: userId`), and
+   a record screened before materialization is judged by that field. A fetched type or brought
+   child that declares both `userId` and `_sourceUserId`, uses `_sourceUserId` as its identity
+   while declaring `userId`, or uses `userId` as its identity is a load problem against the
+   declaring realm. Queries over such a realm still run, and the record's own `userId` is what
+   `_sourceUserId` holds. A type keyed by `userId` is identified by `_sourceUserId`: records with
+   the same source `userId` are one node, however often they are fetched, and a pin on
+   `_sourceUserId` finds it.
+
 4. **Run.** Your full query now runs over the combined graph. `WHERE`, `ORDER BY`, `RETURN`,
    aggregates — all of Cypher — apply to virtual nodes exactly as to real ones.
 
