@@ -1687,6 +1687,80 @@ until the owner approves the new one or the approved value is restored. Hosts do
 before such a replacement, so expect to re-approve a captured realm's operations after changing a
 key it shares.
 
+### `credentials.yml`: declaring a credential
+
+The file is a list with one entry per credential, each naming a purpose: an id, a kind, a plain
+description written for the person who will be asked to bind it, and where somebody gets one. An
+`apis/` entry or a channel then names a credential by that id. `connecting()` in embabel-ts emits
+the file; it is equally hand-authored. A realm that declares nothing here behaves exactly as
+described under `keys.yml`.
+
+```yaml
+# credentials.yml
+- description: A bot token for the server you want the assistant in.
+  docs: https://discord.com/developers/applications
+  id: bot
+  kind: bearer
+  provider: discord
+  scheme: Bot
+- description: The application's public key, used to verify interaction webhooks.
+  docs: https://discord.com/developers/applications
+  id: signing
+  kind: public-key
+  provider: discord
+```
+
+```yaml
+# apis/apis.yml
+- auth: bearer
+  credential: bot
+  name: discord
+  operation-ids:
+    - getGatewayBot
+  type: openapi
+  url: discord.json
+  write-operation-ids:
+    - createMessage
+```
+
+| Field | Required | Description |
+|---|---|---|
+| `id` | yes | What an `apis/` entry or a channel names. Unique within the file. Either a lowercase letter followed by lowercase letters, digits and dashes (up to 64 characters), or an environment-variable style name: a letter or underscore followed by letters, digits and underscores (up to 128). The second form is what a credential migrated from `token-env` keeps. |
+| `kind` | yes | One of `api-key`, `basic`, `bearer`, `oauth2`, `public-key`. |
+| `description` | yes | What the credential is for, written for the person who is asked to bind it. Up to 512 characters. |
+| `provider` | no | The service that issues it, when several credentials share one. Letters, digits, `_`, `.` and `-`, starting with a letter or digit, up to 64 characters. |
+| `docs` | no | Where to get one. Must start with `https://`, contain no whitespace, and be at most 512 characters. |
+| `scheme` | `bearer` only | The word in front of the token in the `Authorization` header, when it is not `Bearer` (Discord sends `Bot <token>`). Printable ASCII without whitespace, at most 32 characters. Refused on any other kind. |
+| `scopes` | `oauth2` only | The scopes the grant asks for. At least one, no repeats, at most 32 entries of at most 128 characters each. Required on `oauth2`, because an unscoped grant cannot be judged; refused on any other kind. |
+
+The file holds at most 32 entries. A host reads it whole and refuses the whole file, loading no
+credential from it, when:
+
+- it is not a non-empty list, or an id repeats;
+- an entry has a field not in the table, a missing `id`, `kind` or `description`, or a `kind` outside
+  the five above;
+- an `id`, `provider`, `docs`, `scheme` or `scopes` breaks its rule in the table;
+- an entry is not named by any `apis/` entry or channel in the realm, because asking for a secret
+  nothing uses is a reason to doubt the rest of the list.
+
+**Referencing one.** An `apis/` entry names a credential with `credential: <id>`, a channel names one
+the same way, and a channel's webhook signature names one in its own `credential` field. A reference
+to an id the file does not declare refuses the entry. One credential can back several entries and
+channels. An entry carries `credential` or the older `token-env`: both together are accepted only
+when they name the same thing, which is how a realm migrates one key at a time, while two different
+names, or neither, refuse the entry.
+
+**What the owner does.** Nothing is bound at install. For each declared credential the owner either
+picks a key already in their wallet or pastes a new one, which the host files in the wallet for them,
+and can unbind it again. A binding belongs to one installation of the realm: two installations of the
+same realm hold their own, and can use different keys. Every change names the installation revision
+the owner last read, and a stale one is refused. A credential with no binding has its calls refused,
+and a channel that needs it is blocked until the owner binds it. A host never shows a bound secret
+back, logs it, or records it in the grant.
+
+A channel in a captured realm references a credential exactly as an `apis/` entry does. The channel
+files themselves are described under `channels/`, which does not yet cover the captured form.
+
 ## `src/` and `tests/` — hand-authored TypeScript handlers
 
 OpenAPI and MCP cover what an external system *already* exposes. Realms can also ship **hand-authored TypeScript** under `src/api/`, in two forms:
