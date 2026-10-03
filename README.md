@@ -2863,6 +2863,7 @@ does not yet read one ignores it.
 | `colleagues` | Which kinds of colleague it expects to message | Which it may actually reach |
 | `roles` | Which [LLM roles](#llm-roles) its work leans on | Which model plays each |
 | `battery` | Cases that must fire and must not fire, run before adoption | Whether the results are good enough to adopt |
+| `metrics` | Which [metric sets](#metrics) its conversations keep, and the role that extracts them | Which sets are granted, and which model extracts — some may be granted and others refused |
 
 ### Stage: off duty, observing, on duty
 
@@ -3527,6 +3528,11 @@ metrics:
     role: cheap
     every: turn        # `turn`, or `close` to extract once when the conversation ends
 ```
+
+Either a **persona** or an [**agent**](#agents--agents-and-their-routines) may declare sets — a
+persona when the metrics belong to a voice wherever it speaks, an agent when they belong to that
+colleague's own conversations. An agent declares them under `metrics`, alongside `authority` and
+`roles`, and the same request-and-grant applies.
 
 A realm **declares** metric sets; the world **grants** them, and may grant some and refuse others.
 A persona whose sets are all refused still runs — it simply keeps no metrics.
