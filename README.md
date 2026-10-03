@@ -2050,8 +2050,10 @@ await acme.addNote("Second failed payment this month; chasing.");
 await acme.scheduleFollowUp({ summary: "Call about the failed payments", due: "2026-10-15", kind: "call" });
 ```
 
-- **Read with `gateway.cypher.query`, not `gateway.kg.query`.** `kg.query` returns plain
-  rows for answering a question, with the type tags removed; a row from it knows no methods.
+- **Read through the Cypher gateway**, under either name: `gateway.cypher.query` is an
+  alias for the one hand-written-Cypher path `gateway.kg.query` runs, and both tag every
+  returned node, so either read gives rows that know what they are. The alias reads better
+  for the fixed, literal queries a program embeds.
 - **Methods compose through labels.** A node is the intersection of its labels, so a
   vendor node that declares `parents: [CrmAccount]` answers to its own type's methods
   and to any method declared for `CrmAccount`. `x.is(SomeType)` narrows a row whose type

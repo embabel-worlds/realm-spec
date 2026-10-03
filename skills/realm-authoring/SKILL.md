@@ -256,8 +256,8 @@ export class OdooCustomer extends Entity<CrmGateway> {
 - **Ship**: `npm run build` writes `dist/` and the `onType` entries in `dist/manifest.json`.
   Commit `dist/`, including `dist/node_modules/@embabel/runtime-types` (force-add it past a
   `node_modules/` ignore rule): the compiled class requires it in the sandbox.
-- **Call it** from a script: read with `gateway.cypher.query` (its rows keep `__type` and
-  `__labels`; `gateway.kg.query` drops them), `state.set("acme", row)`, then
+- **Call it** from a script: read with `gateway.cypher.query` or `gateway.kg.query` (one
+  path under two names; its rows carry `__type` and `__labels`), `state.set("acme", row)`, then
   `state.get("acme").addNote(...)`. Methods compose through labels, parents included. See
   "Acting on what a query finds".
 
