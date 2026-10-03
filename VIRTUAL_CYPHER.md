@@ -3358,6 +3358,21 @@ before reaching its own cleanup is still reversed rather than leaving stamped la
 author sees the same conclusions either way; an operator should know which model is in force,
 because only one of them has a crash window to reason about.
 
+**What the graph already holds is never taken away by a run.** A conclusion may land where stored
+data already is, and the run treats that data as data:
+
+- a node that already carries the derived label in storage is a member as it stands, and still
+  carries the label after the run — derived and stored membership are a union;
+- a stored relationship of the derived type between a concluded pair IS that conclusion, and is
+  left exactly as it was (no second edge, nothing stamped on it);
+- a head property whose value is already stored on the member — or head properties bound for a
+  stored relationship — **refuse the query**, naming the property and the node. A stored value
+  cannot be unioned with a computed one, and overwriting it to remove it afterwards would destroy
+  it. Rename the derived property (prefix it for the realm, §13.5) or stop storing it.
+
+A run that fails part-way — at its round cap or its pair budget — leaves nothing behind either:
+the graph after a failed run is the graph before it.
+
 Every
 membership records its **firing chain** — which rule concluded it, in which round, with which
 values, and how values grew as membership grew. That trace is the mechanical object an
