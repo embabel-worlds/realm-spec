@@ -3403,6 +3403,15 @@ explanation renders rather than reconstructs: "blocked because A (30%) and B (25
 55%" is read off the chain, not inferred after the fact. Rule bodies pass the same per-user
 scoping as every query, so a rule can never read what its author's own query could not.
 
+**A conclusion is visible exactly where the nodes it annotates are.** A derived label on nodes only
+its caller owns is the caller's; a derived label on shared nodes is visible to whoever can see those
+nodes, and is answered as such — `MATCH (t:HotTopic)` over shared topics returns them to the caller
+that derived them, never an empty answer. Because a conclusion inherits its nodes' audience, a rule
+set that would conclude from **private** facts onto nodes **other users can read** is refused before
+it runs: otherwise a shared node would carry a property computed from someone's private data (a
+`heat` counting their private mail) for every reader to see. Conclude onto private nodes, or derive
+only from facts the shared node's readers could see themselves.
+
 ### 13.4 Derived relationships — an edge whose existence is a conclusion
 
 A head may be a **relationship pattern**; the rule set then defines a derived relationship type,
