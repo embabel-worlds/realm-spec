@@ -781,15 +781,19 @@ application types (`application/*`). The reply must still be text: a binary
 **Binary is refused.** A declaration naming a binary type, `image/*` included, refuses the whole
 file, raw or not. The host does not hand a guest binary bodies in any encoding.
 
-The reply's `Content-Type` must agree with the declaration. A reply agrees when the decoder for
-the declared type also reads the reply's type, so `application/jsonl` satisfies
-`application/x-ndjson` and `application/problem+json` satisfies `application/json`. For `raw`,
-the reply's type must fall inside the declared range. A reply with no `Content-Type` is refused,
-except that an empty body, such as a 204, needs none. A host may let its operator relax this
-check, in which case a reply that disagrees is decoded as declared. The reference host checks
-strictly by default. Under the strict check a provider that labels JSON as another type, or sends
-no `Content-Type`, is refused even when the entry declares nothing; declaring the type that
-provider actually sends, or `raw`, lets the Realm read it.
+The host checks the reply's `Content-Type` only for an operation the Realm declares under
+`responses:`. For such an operation the reply's type must agree with the declaration. A reply
+agrees when the decoder for the declared type also reads the reply's type, so `application/jsonl`
+satisfies `application/x-ndjson` and `application/problem+json` satisfies `application/json`. For
+`raw`, the reply's type must fall inside the declared range. A reply with no `Content-Type` is
+refused, except that an empty body, such as a 204, needs none. A host may let its operator relax
+this check, in which case a reply that disagrees is decoded as declared. The reference host checks
+strictly by default.
+
+An operation with no `responses:` entry is not checked, and a reply to it with no `Content-Type`
+is accepted. The host decodes it with the type the operation takes from its document, or as JSON.
+An entry that declares nothing therefore reads its providers exactly as it would without this
+section.
 
 The body is decoded as UTF-8 unless its `charset` names US-ASCII or ISO-8859-1. Any other charset
 is refused. The credential echo check runs on the decoded text and again on every decoded string
@@ -817,7 +821,7 @@ uncoded refusal.
 | `api-provider-status` | The provider answered outside 2xx, a redirect included. |
 | `api-response-refused` | The reply was encoded, larger than the transport reads, or past a decoder's limits. |
 | `api-response-malformed` | The reply did not parse as the declared type. |
-| `api-content-type-mismatch` | The reply's `Content-Type` was binary, missing, or disagreed with the declaration. |
+| `api-content-type-mismatch` | For a declared operation, the reply's `Content-Type` was binary, missing, or disagreed with the declaration. |
 | `api-response-unsupported` | The document names only a type no decoder reads, and the Realm declared none. |
 | `api-transport-failure` | The call timed out or its connection failed. |
 | `api-credential-echo` | The reply held the credential the call was made with. |
