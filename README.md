@@ -3947,7 +3947,11 @@ notebook:
 | `openingMove` | no | How it opens when it speaks first. |
 | `notebook` | no | The [notebook sets](#notebook) it keeps, and how they are extracted. |
 | `sampling` | no | What this persona RUNS at — `temperature`, `topP`, `maxTokens`. Distinct from an agent's `conversation.sampling`, which bounds what a *caller* may ask for. |
-| `brief` | no | The persona's voice compacted into a few hundred words, for a realm that calls a model **directly** rather than through chat. Omit it on the chat path: `personality.jinja` is already carrying the voice there, and a second copy of it is a second thing to keep true. |
+| `brief` | no | The persona's voice compacted into a few hundred words, for a realm that calls a model **directly** rather than through chat. Omit it on the chat path: `personality.jinja` is already carrying the voice there, and a second copy of it is a second thing to keep true. It never renders in chat — a rule meant for conversations goes in `behaviours.jinja` or `guardrails.jinja`; written only here, it reaches no conversation. |
+
+`objective`, `openingMove` and `notebook` do reach chat: a host renders them as the persona's agenda
+on every turn. For an agent you talk to they are part of what its sponsor signs, like the `.jinja`
+sections — an edited objective waits for a signature before it reaches a conversation.
 
 An agent's `job` and a persona's `objective` are not the same sentence. `job` is what the agent is
 **for**, in the words of whoever answers for it; `objective` is what it is **trying to achieve** in a
