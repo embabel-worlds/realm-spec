@@ -1193,11 +1193,13 @@ and it fetches ONCE for the batch (the producer's batch contract), not once per 
 - **Alternatives on one key enumerate their union.** `k IN ['a'] OR k = 'b'` seeds `'a'` and `'b'` —
   the same set written two ways.
 
+**A parameter list seeds exactly as the literal list does.** `WHERE q.abn IN $abns` with `abns`
+supplied answers the same rows as the same values written inline — supplied parameters are
+substituted before the query is read. A parameter nobody supplied is refused, never read as an empty
+list.
+
 **What does NOT seed, and why**
 
-- **A parameter list** — `WHERE q.abn IN $abns`. There is nothing to enumerate when the query is
-  read, so nothing is minted and the traversal yields no rows. **Inline the literals** when the
-  anchors are virtual. (A `$param` list is fine for filtering nodes that already exist.)
 - **A filter that cannot list keys** — `STARTS WITH`, `CONTAINS`, a range, a regex on the key. Nothing
   can be fetched, and the answer SAYS so: a `NEEDS_FILTER` warning names the label and the key to pin,
   so an empty result is never read as "there are none". The same warning accompanies an anchor that
@@ -2689,6 +2691,18 @@ A view's query is checked when the realm is validated: a label that is a near mi
 realm or its world knows (`GitHubIsue` beside `GitHubIssue`) is an error at the view's file and line,
 naming the likely intended label — at query time the same name is refused (§9), so a view that
 carries one could never answer.
+
+**What a view may not be used as.** A view is refused, with what to do instead, rather than
+answered quietly wrong:
+
+- **A node view named like a label the world already holds.** Matching that label anywhere —
+  including inside other views — would silently mean "the nodes this view selects". Rename the view.
+- **A view that returns columns, matched as a label.** Its rows are not nodes, so `MATCH (x:that_view)`
+  could only answer nothing; run it by name instead.
+- **An argument the view never reads**, or **a fractional number for an `int` parameter** — the first
+  would be ignored and the second truncated, so the answer would not be the one asked for. A view
+  parameter holds one value: a view that needs a list should read it inside its own query, not as
+  `IN $p`.
 
 ### 8.2 Output typing — identity preservation is the rule
 
