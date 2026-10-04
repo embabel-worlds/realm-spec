@@ -3192,6 +3192,31 @@ is classified and surfaced as a warning on the result:
 A failed fetch is **never cached** as an empty result (so a later call with a refreshed token finds
 the data); only a genuine, successful "no records" is cacheable.
 
+**A short fetch never answers a ranking.** A short *list* is honest under its warning: every row
+is right, some are missing. A short *ranking* is not, because the records left out may be the ones
+that belong at the top. So a top-k — `ORDER BY … LIMIT k`, in a `RETURN` or a `WITH` — over a
+fetch that came back short answers only when its first k are **provably** the first k there are,
+and is otherwise refused as `INVALID_QUERY` (reason `INCOMPLETE_RANKING`), naming the cause, the k
+and the levers (raise the cap, narrow the query, or drop the ranking). Two cases are provable:
+
+- **A capped read of a source that declares its order.** When the fetch stopped at a cap (`maxItems`,
+  a page cap, the 25-key ceiling), the unfetched records' sort keys are unknown, so only the source
+  can vouch: the answer stands when the producer declares the order it returns records in
+  (`orderedBy:`) and the query's sort keys are a prefix of that order — same properties, same
+  directions, on the records that producer fetches. A capped prefix of an ordered source *is* its
+  top. A graph-side filter over a vouched read still answers, flagged partial: short, not wrong.
+  `ordering:` in `sources.yml` says whether a collection is newest-first, not on which field, so it
+  vouches for nothing; a feed declares no `orderedBy:`, so a capped feed's ranking always refuses.
+- **Records left out unread under `FOLLOW_CAPPED`.** Their sort keys *are* known — only the followed
+  field went unread — so the answer stands when none of them could rank at or above the k-th row.
+  A tie, a missing or incomparable key, or fewer than k rows leave room for them, and refuse; so
+  does a top-k in a `WITH`, with `SKIP`, or keyed on another variable, which cannot be compared.
+  When the answer stands, the `FOLLOW_CAPPED` note says the rows **are** the top k rather than
+  "short".
+
+A whole key that failed to fetch under a top-k still answers with its `PRODUCER_ERROR` warning; the
+ranking gate does not yet decide that case.
+
 **A name that exists nowhere is refused, not answered empty.** A query that reads a label or
 relationship type that no declared type, virtual join, rule set or stored node in the caller's
 graph knows is refused before it runs, with `INVALID_QUERY`. The refusal names the pattern where
