@@ -1203,8 +1203,13 @@ content — never as "the term does not occur". The same holds for an item past 
 was never read, so its `content` is UNKNOWN, not empty. The answer says so — it is marked partial,
 with a `FOLLOW_CAPPED` note naming the budget, how many items went unread, and the levers (raise
 `maxPages` up to its ceiling, or narrow the query) — so a `WHERE m.content CONTAINS …` over those
-items is never mistaken for a complete search. Every row is still present, so a `count()` of them
-stands. Speaker-attributed transcript prose survives inside
+items is never mistaken for a complete search. **A filter never answers for a page nobody opened.**
+A `WHERE` that reads a followed field (`m.content IS NULL`, `NOT m.content CONTAINS …`, as much as
+`CONTAINS`) leaves the unread items out rather than judging their missing text, and the note says
+how many were left out and that an aggregate over the filtered rows is a LOWER bound. A query that
+only projects the field keeps every item, with the field null where its page went unread, and the
+note says whose value is unknown — a `count()` of the rows stands, a `count`/`collect` over the
+field is a lower bound. Speaker-attributed transcript prose survives inside
 the windows, which is the point: `summarize(m.content, '…')` over followed Hansard fragments can
 honestly answer "what was discussed, and by whom". Follow knobs are ceiling-clamped (pages ≤ 5,
 excerpt ≤ 8000 chars) and page fetches ride the same pace gate as the feed itself.
