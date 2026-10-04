@@ -1234,6 +1234,18 @@ and it fetches ONCE for the batch (the producer's batch contract), not once per 
 - **Each value is probed for a REAL node first**, exactly as a pinned anchor is; only values with
   no real node are minted as virtual anchors. A mixed list works.
 - **Duplicates collapse**: one anchor per distinct value.
+- **An anchor the source answered for is there even when the answer is none.**
+  `MATCH (r:GitHubRepository {full_name:'acme/empty'}) OPTIONAL MATCH (r)-[:HAS_ISSUE]->(i) RETURN
+  r.full_name, count(i)` answers `acme/empty, 0`, and an `IN` list mixing an empty value with a full
+  one keeps the empty one's row. A value the source answered 404 for, or whose fetch failed, is not
+  minted; the answer carries that warning instead (§9).
+- **An anchor nothing fetched is explained, not answered empty.**
+  `MATCH (r:GitHubRepository {full_name:'acme/gears'}) RETURN r.full_name` traverses no join, so
+  nothing asked the source whether the repository exists, and a row built from the query's own
+  literal would assert it on no evidence. The empty answer is typed as a query defect,
+  `ANCHOR_UNFETCHED`, and its hint names the label's joins and the `OPTIONAL MATCH` that would
+  answer. A label with stored instances and no match for the pin is a true negative and gets no
+  hint.
 - **It composes with the rest of the WHERE.** An `IN` combined with other conditions by `AND` still
   seeds (this matters more than it looks: scope conditions are ANDed onto every query, so an
   enumerated anchor is essentially always inside a compound).
