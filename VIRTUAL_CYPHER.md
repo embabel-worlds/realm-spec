@@ -3042,6 +3042,15 @@ is classified and surfaced as a warning on the result:
 A failed fetch is **never cached** as an empty result (so a later call with a refreshed token finds
 the data); only a genuine, successful "no records" is cacheable.
 
+**A name that exists nowhere is refused, not answered empty.** A query that reads a label or
+relationship type that no declared type, virtual join, rule set or stored node in the caller's
+graph knows is refused before it runs, with `INVALID_QUERY`. The refusal names the pattern where
+the name was written and suggests the nearest names the caller can query — an empty answer to a
+misspelling would read as "you have none". A label that is merely empty is different: a declared
+type with no instances yet, or a derived label nothing satisfies, answers no rows as before. A
+name a statement creates (`CREATE`, `MERGE`) is never judged, and property names are not judged
+this way, because a type's declared properties are not a closed list.
+
 **When an answer takes longer than the asker will wait.** A cold traversal can legitimately run for
 minutes, which is longer than many callers will hold a connection open. A caller may therefore give
 a **patience budget** with its query. If the answer arrives inside that budget it is returned
