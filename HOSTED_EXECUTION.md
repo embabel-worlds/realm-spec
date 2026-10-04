@@ -726,17 +726,14 @@ Reads and writes both take an entry.
     feed: { raw: application/atom+xml }
 ```
 
-`responses:` is optional, and so is each key in it. An operation the map leaves out takes the one
-2xx content type its OpenAPI document names, following a `$ref` into `#/components/responses`.
-When the document names no type, several types or a range such as `text/*`, the operation takes
-`application/json`. An entry with no `responses:` map therefore reads JSON from every operation
-whose document names JSON or no single type.
+`responses:` is optional, and so is each key in it. An operation the map leaves out is read as
+one JSON document, and its request asks for `application/json`, whatever media type its OpenAPI
+document names. The host does not pick a decoder from the document. An operation whose document
+names a type the host does not decode, such as `application/octet-stream`, is still called and
+read as JSON. To have an operation read as any other type, the Realm declares that type here.
 
-An operation whose document names a single type the host does not decode, such as
-`application/octet-stream`, still loads with the rest of its entry. Every call to it is refused
-before it is sent, until the Realm declares a type for it.
-
-The host sends the declared type as `Accept` and decodes the reply with it. The guest receives:
+For a declared operation the host sends the declared type as `Accept` and decodes the reply with
+it. The guest receives:
 
 | Declared type | The guest receives |
 | --- | --- |
@@ -791,7 +788,7 @@ this check, in which case a reply that disagrees is decoded as declared. The ref
 strictly by default.
 
 An operation with no `responses:` entry is not checked, and a reply to it with no `Content-Type`
-is accepted. The host decodes it with the type the operation takes from its document, or as JSON.
+is accepted. The host decodes it as JSON.
 An entry that declares nothing therefore reads its providers exactly as it would without this
 section.
 
@@ -822,7 +819,6 @@ uncoded refusal.
 | `api-response-refused` | The reply was encoded, larger than the transport reads, or past a decoder's limits. |
 | `api-response-malformed` | The reply did not parse as the declared type. |
 | `api-content-type-mismatch` | For a declared operation, the reply's `Content-Type` was binary, missing, or disagreed with the declaration. |
-| `api-response-unsupported` | The document names only a type no decoder reads, and the Realm declared none. |
 | `api-transport-failure` | The call timed out or its connection failed. |
 | `api-credential-echo` | The reply held the credential the call was made with. |
 

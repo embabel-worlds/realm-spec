@@ -1429,7 +1429,7 @@ realm and a declared credential the owner binds in a captured realm. See
 | `oauth2` | with `auth: oauth2` | OAuth2 config — see **OAuth2** below. |
 | `tags` | no | Allowlist of OpenAPI tag names. Filters huge specs to a coarse subset. |
 | `operation-ids` | no | Exact `operationId` allowlist. Composes with `tags` (tags pre-filter, operation-ids picks exact ops). Match is case-insensitive and treats `-`/`/` as `_`, so `repos/get`, `repos-get`, `repos_get` all match. |
-| `responses` | no | Captured realms: the response type of each operation, keyed by operation id. Absent means the type the OpenAPI document names, or JSON. See [response types](HOSTED_EXECUTION.md#response-types). |
+| `responses` | no | Captured realms: the response type of each operation, keyed by operation id. Absent means JSON, whatever type the OpenAPI document names. See [response types](HOSTED_EXECUTION.md#response-types). |
 | `capability-tags` | no | Capability DECLARATION — what the API is FOR, in the host's vocabulary (`web-search`, `web-fetch`). Lets host code pick a tool by capability instead of by provider name. Unrelated to `tags`; see **Capability tags** below. |
 
 ### Capability tags
