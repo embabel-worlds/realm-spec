@@ -61,6 +61,14 @@ the fetch.
 
 ## 2. The execution model
 
+**A Virtual Cypher query never writes.** On every surface that takes a query — asks, views, rule
+bodies, code, captured-realm reads — a write clause anywhere in it (`CREATE`, `MERGE`, `SET`, `REMOVE`,
+`DELETE`, `FOREACH`, `CALL { } IN TRANSACTIONS`, including after a `WITH`) refuses the query before
+anything is fetched or run, naming the clause; a write clause that appears only inside a string,
+comment or map key is data and the query runs. A realm persists changes only through its write
+proposals, never by writing from a query — so nothing a query read from a live source is ever
+stored by that query.
+
 Every Virtual Cypher query runs the same five conceptual phases, inside a **write transaction that
 always rolls back**:
 
