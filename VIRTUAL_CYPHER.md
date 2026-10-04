@@ -847,8 +847,9 @@ What `one`/`optional` guarantee, beyond the count:
   that type, not as the wording the source used: `1,240` is a number you can compare with `>`, and
   `$120,000.50` does not become 120. This holds for the record as later read by ORDINARY Cypher, not only
   through the join — which is the point, since the record becomes plain graph after first materialization.
-  (This applies to every `kind: extract` producer, not only the single regime; it simply matters most here,
-  where a form's fields are dates, counts and amounts rather than prose.)
+  (This applies to every producer kind, not only `extract` and not only the single regime — any fetched
+  property its type declares is stored as that type, a declared list element by element; it simply matters
+  most here, where a form's fields are dates, counts and amounts rather than prose.)
 - **A "not stated" answer is silence, not a value.** A source that states nothing for a field leaves
   it absent; the record never carries `N/A`, `unknown` or a placeholder as though it were data, and a
   source that states nothing at all yields no record rather than an empty shell.
