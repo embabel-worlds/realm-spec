@@ -25,7 +25,7 @@
 
 ## 1. What Virtual Cypher is
 
-A normal knowledge-graph query reads nodes and edges that are **persisted** in Neo4j. Virtual
+A normal knowledge-graph query reads nodes and edges that are **persisted** in the graph. Virtual
 Cypher lets one Cypher query *also* traverse to data that is **not in the graph** — a HubSpot
 contact, a GitHub issue, a semantically-related email thread — by **fetching it on demand** the
 moment the query reaches for it, splicing it into the graph transiently for the life of that one
@@ -67,10 +67,12 @@ bodies, code, captured-realm reads — a write clause anywhere in it (`CREATE`, 
 anything is fetched or run, naming the clause; a write clause that appears only inside a string,
 comment or map key is data and the query runs. A realm persists changes only through its write
 proposals, never by writing from a query — so nothing a query read from a live source is ever
-stored by that query.
+stored by that query. The one surface that writes is the annotation surface (§12): a realm and a
+deployment must both opt into it, it takes its own fixed statement shape, and it writes only
+declared annotation properties of REAL nodes — never a fetched record.
 
-Every Virtual Cypher query runs the same five conceptual phases, inside a **write transaction that
-always rolls back**:
+Every Virtual Cypher query runs the same five conceptual phases, and **nothing it materializes
+outlives the run**:
 
 ```
    ┌─ parse + plan ──────────────────────────────────────────────────────────┐
@@ -98,6 +100,14 @@ always rolls back**:
    revision. The engine links it to the anchor it was fetched for (`keyField == recordKeyField`). A
    record may also carry its own **sub-graph** (`brings:`), materialized in the same pass.
 
+   **A fetched node shows a query only what the same record would show stored.** The `:Virtual`
+   label and the run's stamps are the engine's bookkeeping, and introspection leaves them out:
+   `labels(n)`, `keys(n)`, `properties(n)`, `n {.*}` and a returned node or relationship answer as
+   they would over the stored record, so `size(labels(n))`, `labels(n)[0]` and `'Virtual' IN
+   labels(n)` are right. A query that names the bookkeeping explicitly — `n:Virtual`, or a property
+   under the engine's reserved `__vc` prefix — still reads it. Both names are reserved to the
+   engine, so hiding them never hides the caller's data.
+
    **A fetched `userId` is exposed as `_sourceUserId`.** On every fetched node and brought child,
    `userId` is the world scope, never the record's own field. A record's own `userId` is readable
    as `_sourceUserId`, and the schema the generator is shown names it that way. A mirrored
@@ -115,8 +125,14 @@ always rolls back**:
 4. **Run.** Your full query now runs over the combined graph. `WHERE`, `ORDER BY`, `RETURN`,
    aggregates — all of Cypher — apply to virtual nodes exactly as to real ones.
 
-5. **Roll back.** The transaction is discarded. The virtual nodes vanish. A re-run re-fetches
-   (cheap, because of caching). Nothing is ever persisted by a read query.
+5. **Roll back.** The virtual nodes vanish. A re-run re-fetches (cheap, because of caching).
+   Nothing is ever persisted by a read query.
+
+   How they vanish is the deployment's execution model, and a query cannot tell which is in force.
+   Under the **transient** model the run's transaction is rolled back. Under the **committed** model
+   the materialized nodes are written, stamped with the run, and removed when it ends (§13.3).
+   Overlapping runs that fetched the same record each keep seeing it for as long as they run, and
+   each returns what it would return alone.
 
    *The one exception:* an identity **bridge** (`writeThrough`) is committed as a warm cache and
    re-resolved after `refreshAfter` (§5.2).
@@ -178,6 +194,20 @@ These are **rejected at plan time** (fail-closed), with a message:
 | `MATCH (i:Item)-[:MENTIONS]->(t:Tag)` where `Tag` is brought only via `TAGGED` | **Brought child off its declared edge** — a brought label is reachable only through the exact relationship its own `brings:` entry names, and only from the join whose target brought it. |
 | `UNION`, `CALL { }` subqueries in a scoped query | Not scoped clause-by-clause by the rewriter → rejected. The refusal shows how to keep one statement: collect, concatenate and `UNWIND` for rows from two label sets (the second set optional, so an empty set keeps the other's rows), or aggregate one set, carry it through `WITH` and aggregate the other behind `OPTIONAL MATCH` for two totals in one row, or, for one row per group, `UNWIND` the distinct union of both sets' group keys and aggregate each set per key, so a group only one set has is kept. The `CALL { }` refusal carries the same shapes, and each refusal names the other construct as refused too, so a retry does not trade one refused construct for the other. |
 | Anything the Cypher parser can't parse | **Fail closed** — an unparseable query is rejected, never run unscoped. |
+| `MATCH (n:!Topic)`, `n IS !Topic`, `WHERE n:!Person` | **Single-label negation** — refused before it runs, naming the spellings that work: `WHERE NOT n:Topic`, or a combined label expression such as `:Topic&!Person`. A `!` inside a string or comment is data. |
+| `RETURN apoc.text.capitalize(p.name)`, `CALL db.labels()` | **A procedure or function library this engine does not provide** — refused as an unknown function, naming it, not as a write. The refusal points at the built-in functions to use instead, and for schema questions at the schema the query guide shows. |
+| `MATCH (p)-[:AUTHORED]->(r) WHERE count(r) > 1 RETURN p.name` | **Aggregate in `WHERE`** — refused before anything is fetched: compute it in a `WITH` and filter on its alias, `WITH p, count(r) AS n WHERE n > 1`. An aggregate inside a subquery's own `WITH`/`RETURN`, and a `COUNT { }` subquery in `WHERE`, run. |
+| `RETURN p.name AS passage, count(v) AS n ORDER BY n DESC, b.bookOrder` | **A variable the projection dropped** — after a `WITH` or `RETURN` that aggregates or is `DISTINCT`, `ORDER BY` may use only a projected alias or repeat a projected expression. Refused before any fetch, naming every out-of-scope variable at once. A realm view with this shape fails `realm_validate`; one already installed is reported against its realm at load, stays listed, and is refused with the defect named when called. |
+| `x IS :: LIST<INTEGER>`, `x IS :: INTEGER \| STRING`, `x IS NOT :: INTEGER` | **A type predicate this surface cannot read faithfully** — refused for what it is, quoting the type as written, with the rewrite to use; never reported as a syntax error. A plain `x IS :: INTEGER` (or `IS :: INTEGER NOT NULL`) runs on every surface, and a missing value is of every nullable type. |
+| `… WITH x MATCH (t:Tag {k: 2}) …` where `t` was bound before the `WITH` dropped it | **A dropped name re-bound with its own labels or properties, on a surface that cannot keep the two apart** — refused with the rename to use (`(t2:Tag {…})`), rather than letting the second node match any node the caller can see. |
+
+**A name a `WITH` drops is gone.** A later `MATCH` that binds the same name binds a NEW variable,
+with its own pins, joins and filters — nothing carries over from the first. In
+`MATCH (r:Repo {name:'widgets'})-[:HAS_ISSUE]->(x) WITH x MATCH (r)-[:HAS_PR]->(p) RETURN count(p)`
+the second `r` is every repository, so it is an unbound anchor: the answer is flagged
+`NEEDS_FILTER` naming `r`, never widgets' pull requests counted as if they were all of them. A name
+the `WITH` carries — bare, `WITH g AS h`, or `WITH *` — stays the same variable, and `UNWIND list AS
+x` is not a re-binding.
 
 A `brings:` entry naming a `childType` the realm does not declare is refused earlier still, when the
 realm is validated — before any query reaches the planner. The remaining case is a **non-event**: a
@@ -249,6 +279,13 @@ per-(place, month) tally). Such rows materialize under an engine-minted determin
 identical rows still merge, distinct rows never collide, re-fetching is idempotent. A type that
 DOES declare an identity and ships a record without it keeps the old behaviour — the record is
 skipped, because that is a data error, not a modelling choice.
+
+**Identity is per owner for a user-owned type.** Source ids are global, so two users' records of the
+same source can share an identity by construction. A fetched record of a type whose instances belong
+to one user converges only with THAT user's node of the same identity — a user's own stored node is
+still preferred over a second copy — and never binds, reads or re-owns another user's. A shared,
+reference or public type converges on identity alone, so a fetched record still lands on the one
+stored node everyone shares.
 
 ### 5.2 Identity bridges — `resolve:` chains
 
@@ -986,7 +1023,14 @@ in the publisher's date format. Numbered parts are URL-encoded; malformed dates 
 - `url` accepts `{today}` / `{today-Nd}` for date-stamped filenames, and `{key}` or numbered
   composite parts `{key1}`..`{key9}` — any key token makes the producer **one download per
   anchor**, appropriate only for a genuine per-entity or per-window export.
-- Every value is a **string**. A leading-zero identifier survives; arithmetic is the query's job.
+- Every value is a **string** unless the target type declares the column otherwise. A leading-zero
+  identifier survives; arithmetic over an undeclared column is the query's job.
+- **An empty cell is absent**, not an empty string — as `LOAD CSV` reads it. `count(o.qty)` counts
+  the rows that state a quantity, and `o.qty IS NULL` finds the ones that do not.
+- **A column the target type declares numeric is read as the cell means it.** An exponent is part
+  of the number (`1.2E3` is 1200), a typographic minus (`−5`, U+2212) is a minus, and a cell that is
+  ONLY a parenthesised amount is negative (`(2.50)` is -2.5; `Box (15)` is still 15). A cell
+  stating no number (`n/a`) is left as written.
 - **A cell holding several values is one string until the realm says otherwise.** Published tables
   often store a one-to-many relation in one delimited cell — a person's children as
   `gershom_1302,eliezer_1114`. A producer's `compute:` turns it into a list, one Cypher expression
@@ -2174,8 +2218,17 @@ These call an LLM, so they are the **non-deterministic** members of the surface 
 query can score two runs slightly differently, and the model — not the graph — decides. Bound the cost —
 each criterion is **one batched call** over the fetched rows (chunked for large sets), so they scale with
 *rows fetched*, not rows × 1; keep the fetched set small (an anchor, a real `WHERE`, a `LIMIT` on the fetch)
-before judging. They **fail open**: a row the model did not judge is scored at the **keep threshold**
-(0.5), so a hiccup never silently *hides* results — it degrades to "no judgment applied". The threshold,
+before judging. Their calls are counted against the query's model-call limit before any is made
+(§9), so a judgment over more rows than the query may pay for is refused rather than spent.
+
+**A model that fails refuses the query.** When the call behind a judgment errors, the answer depended
+on that judgment, so none is returned: a retryable `SOURCE_UNAVAILABLE` names the primitive and the
+criterion. Never a `0` from `count(*)` over an `ai.relevant` filter, a column of `0.0` scores, or empty
+labels — each of those would read as a real judgment. A run that was cancelled, or stopped by a
+budget, keeps its own refusal.
+
+Within an answer the model did return, a row it left **unjudged** is scored at the **keep threshold**
+(0.5), so an omission never silently *hides* a result. The threshold,
 not 1.0: a perfect score would keep the row *and rank it above every row the model actually read*, which
 is how a grants query for "youth mental health" once came back topped by aged-care infection research, at
 fit 1.0, with its kept count swinging across identical runs. At the threshold an unjudged row is kept and
@@ -3049,6 +3102,33 @@ detail view says to ask it about named accounts rather than the whole book.
 The planner budgets producer calls against it and, when a query can't fit, emits `EXPLAIN`-style
 **advice** (push a predicate, add a `LIMIT`, narrow the anchor) rather than silently over-calling.
 
+**A rate limit is never an empty answer.** When a source's rate bucket cannot fit every lookup a
+query needs now, the lookups that fit are made and the rest are deferred. The answer is flagged
+partial and says how many were looked up and how many are pending; asking again fills in more.
+Zero rows with every lookup deferred mean "not looked up yet", never "none". When the deferred work
+is more than re-asking will ever complete, the flag says so and asks for a narrower query instead
+of promising that the rest fills in. A source that THROTTLES a call (an HTTP 429) is reported as
+`RATE_LIMITED`. With no rows the query is refused as `SOURCE_UNAVAILABLE` with that code; with some
+rows the answer is flagged partial. Either way the result is unanswered, not empty, and the
+integration is fine: nothing needs reconnecting. Ask again shortly, or pin a specific entity so the
+query needs fewer calls.
+
+**Model calls are priced before they are spent.** Fetches that call a model (extraction,
+generation, a model-backed producer), `ai.*` judgments (§7) and generative rounds all draw on one
+per-query limit on cold model calls. The quote prices what it can measure before the run. Work that
+only becomes known as the run goes — a later stage whose anchors are an earlier stage's results,
+per-row judgments over rows not yet fetched, a generative producer's further rounds — is charged
+against the same limit as it begins. A step that would exceed it refuses the whole query with
+`TOO_EXPENSIVE`, naming the count and the limit, before that step's call is made: work no quote
+showed can never be spent unasked. A warm anchor costs nothing. A query that means to pay says so
+(`{ai: {materialize: true}}`) or runs as a background job.
+
+**A bound that stops the run is `BUDGET_EXCEEDED`.** A statement that exceeds the graph engine's
+work or row budget, or a rule set that exceeds `maxRounds` or `maxPairs` (§13.7), is refused with
+`BUDGET_EXCEEDED`, naming the limit and its unit, and returns nothing: never a partial set presented
+as complete. A statement budget is fixed and cannot be raised from a query. The refusal names the
+levers: aggregate earlier, add a `LIMIT`, narrow the `MATCH`, filter before sorting.
+
 **Query-shape advice:** `EXPLAIN` also names a shape the store runs correctly but quadratically —
 an equality join between two matched sets with a function wrapping one side, `WHERE k.id =
 toString(n.res_id)`, which a planner cannot hash-join and so filters every pair (measured: 13.6 s
@@ -3064,6 +3144,7 @@ is classified and surfaced as a warning on the result:
 | diagnostic | when | meaning |
 |---|---|---|
 | `PRODUCER_ERROR` (`FETCH_FAILURE`) | a timeout, a missing gateway tool, a non-auth error | the source could **not** be reached — *not* "no data". Fix the integration. |
+| `PRODUCER_ERROR` (`RATE_LIMITED`) | the source throttled the call (an HTTP 429) | the source is up and the credentials are fine — the result is **unanswered, not empty**. Ask again shortly, or pin a specific entity so fewer calls are needed. Never "reconnect". |
 | `PRODUCER_ERROR` (`AUTH_EXPIRED`) | a 401 / "token expired" / `EXPIRED_AUTHENTICATION` | the OAuth token has **expired** — reconnect to refresh. The empty result is because the source rejected the call. |
 | `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page; a call budget ran out mid-fan-out; a declared floor or gate dropped records | the fetch **succeeded but is incomplete** — the source has more. *Not* a failure. The detail says which cause, because the fixes differ: raise the cap, or simply ask again (a budgeted run keeps its completed work and resumes rather than restarting). |
 | `PARTIAL_RESULT` (`NOT_FOUND`) | the source answered a definitive 404 for one key of a fan-out | that key **does not exist** — as opposed to "we could not find out", which is `FETCH_FAILURE`. The answer is short by exactly the named keys; the source is not down, and the other keys' rows are good. |
@@ -3202,8 +3283,8 @@ schema-level engineering could not touch.
 
 ## 11. Determinism and guarantees
 
-- **Read-only.** A user query never writes the graph. Materialization happens in a transaction that
-  is **rolled back**; the sole persisted side effect is a write-through identity **bridge** (a
+- **Read-only.** A user query never writes the graph. Nothing it materializes outlives the run
+  (§2); the sole persisted side effect is a write-through identity **bridge** (a
   cache of *who* an external identity is, not *what* data they hold). The single, explicitly
   opted-in exception is the dedicated annotation-write surface (§12) — ordinary queries remain
   read-only and continue to reject mutating clauses.
@@ -3215,6 +3296,11 @@ schema-level engineering could not touch.
   unparseable or unscopable query is rejected, not run.
 - **Bounded.** Every fetch is bounded by a bound anchor, `maxAnchors`/`maxFanoutTotal`, `paging`
   caps, `k`, and rate budgets. Truncation is reported.
+- **One answer whichever engine holds the graph.** A deployment may keep the graph in Neo4j or in
+  the appliance's own in-process engine, and a query answers the same on both: the same values,
+  nulls and conversions, the same column names, the same refusals by type. A statement that fails
+  changes nothing on either. A difference between the two is a defect in the engine that differs,
+  not a dialect for queries to allow for.
 - **Idempotent re-runs.** A re-run re-fetches; caching (`ttl`/`immutable`) and `temperature: 0` for
   any LLM-derived value make repeated runs of the same query agree — repeatability is a correctness
   property, not just a speed one.
@@ -3649,7 +3735,9 @@ Two ceilings sit underneath as backstops, and you should never meet them:
 | `maxPairs` | 250,000 | A relationship set derived more pairs than this. Bounds what reaches the graph; it is checked after a round has bound its rows, so treat it as a last resort rather than a budget. |
 | `maxRounds` | 1,000 | The fixpoint did not settle. The message names what was still moving: a derived property climbing (§13.2), or simply an estate deeper than the cap. |
 
-Both fail loudly. Neither truncates: you will never receive a derivation that quietly stopped early.
+Both fail loudly, as `BUDGET_EXCEEDED` naming the ceiling and its unit (pairs or rounds), and the
+run is discarded whole: nothing is concluded from it. Neither truncates: you will never receive a
+derivation that quietly stopped early.
 
 ---
 
