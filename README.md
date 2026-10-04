@@ -191,6 +191,7 @@ tags:
 | `url` | No | Source repository or documentation URL |
 | `icon` | No | An image the realm ships, as a path **relative to the realm root**. See [Icons](#icons). |
 | `tags` | No | Categorization tags |
+| `maturity` | No | The author's own readiness claim: `experimental`, `beta`, `stable` or `deprecated`. Absent means the realm makes no claim — which is **not** a claim of being finished. See [Maturity](#maturity). |
 | `host` | No | Execution host for the Realm's Functions: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
 
 ### Icons
@@ -231,6 +232,54 @@ about 40px: this is a tile, not an illustration.
 **Apps declare their own**, separately and by the web's usual means — a
 `<link rel="icon" href="…">` in the app's `<head>`, pointing at a file beside
 it in `apps/`. Same principle, existing convention, no new field.
+
+### Maturity
+
+```yaml
+maturity: experimental   # or: beta, stable, deprecated
+```
+
+The author is the only party who knows whether a realm is finished, so this is
+where that is said. It is a **claim, not a measurement** — nothing inspects a
+realm to verify it, and no host may imply otherwise.
+
+Four values, compared case-insensitively: `Experimental` in a manifest and
+`experimental` in a host's configuration are one claim. No other cleverness — no
+plural folding, no synonyms, and no implied ranking between the four.
+
+**Absence is not a claim of being finished.** Hosts are required to treat a
+missing `maturity` as *unstated*, never as `stable`. Most realms that exist say
+nothing, and a host that read stability out of silence would be marking every
+one of them as ready. Hosts are required to treat an **unrecognized** value the
+same way — unstated — rather than refusing the realm or guessing at what was
+meant: a realm is an arbitrary git repository, and one misspelled line in one
+repository must not break a directory everybody browses.
+
+**It is not a tag.** Tags are free text, for finding things (`crime`, `maps`,
+`open-data`). A readiness judgment read off free text fails silently in the one
+direction that matters: a realm tagged `experimantal` is offered to everybody as
+though finished, and nothing anywhere says so. So this is its own field, with a
+closed set of values.
+
+**What a host may do with it** *(informative — the behaviour of the reference
+host, not part of the contract)*:
+
+| Claim | Reference host behaviour |
+|---|---|
+| `experimental` | Installing requires the user's **explicit confirmation**: the host asks, carrying the realm's own warning, and only a yes proceeds. Surfaces that list realms leave it out by default, behind a visible opt-in that says how many were left out. An already-installed experimental realm is never hidden — it is part of that world whatever its author thinks of it. |
+| `beta`, `stable`, `deprecated` | Shown as a badge where realms are listed. No other behaviour today. |
+
+Two consequences worth stating, because they are easy to get backwards:
+
+- **Hiding is a display default, not a gate.** A realm left out of a list is
+  still installable by name, and the confirmation is what actually stands
+  between a user and an experimental realm. A host that filtered a list and
+  installed silently would have removed the gate rather than added one.
+- **A host can only act on a claim it can read.** A directory that lists realms
+  it has not installed has to carry `maturity` through from wherever it discovers
+  them; one that discovers realms without reading their manifests (a repository
+  scan working within an unauthenticated API budget, say) carries no claims, and
+  must then show everything rather than infer.
 
 ## `actions/`
 
