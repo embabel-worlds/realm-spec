@@ -352,6 +352,49 @@ Every question that ever disappointed a user becomes a permanent entry. When the
 fix the REALM first — a missing view, a description that does not carry the asking vocabulary, a
 `types/` `examples:` steer for a path the generator keeps missing — before blaming the model.
 
+### If your realm ships an `agents/` colleague, test it AS the agent
+
+Running the views and the queries YOURSELF proves the realm. It proves nothing about the agent,
+and the two are different tests. What you reach has every tool the host offers; what the agent
+reaches is narrowed twice before it gets there — by its focus, and by the categories its
+`conversation.builtins` names — and then by which realms its binding admits. A realm whose every
+view and query answers perfectly, fronted by an agent that cannot reach them, is not done. **A
+realm-level check never counts as an agent-level check**, however thorough it was.
+
+**The trigger is having one.** Ship `agents/*.yml` with a `conversation:` block and this is
+REQUIRED, not a judgment call. The whole point of a focused colleague is that it uses the tools
+and views of its realm; that is the behaviour under test, so it is the behaviour you have to see.
+
+1. **Ask the agent, as the agent.** `/talk <name>`, then the same two halves as
+   `tests/questions.yml` — what it can answer, and what it cannot. Asking the world instead, or
+   asking over a developer door, tests a different surface and will pass while the agent is
+   broken.
+2. **Require the TOOL CALL, not a plausible paragraph.** The answer has to be traceable to a view
+   it ran or a query it issued. An agent answering from the model's own recall reads exactly like
+   an agent answering from your realm, right up to the first figure that is wrong — so check what
+   it called, not how the prose sounds. Hosts report the tool surface a conversation was given and
+   the calls a turn made; read both.
+3. **Every category you name is a claim to check.** `builtins: [views, graph, code]` promises
+   running a view, querying the graph, and running code against that agent's own focus. Verify
+   each one survives, by asking something that can only be answered that way. A capability can be
+   present under one name and absent under another — the code runner a chat model calls is not
+   spelled the way a developer door spells it — so confirm the capability, never the name.
+4. **"The system had trouble finding…" is a FAILURE.** So is hedging, apologising, or offering to
+   look somewhere else, when a view in the agent's own realm answers the question outright. Treat
+   it as the realm's bug — a view it was never given, a description that does not carry the asking
+   vocabulary, a category it does not name — and fix it there.
+5. **Test the version that is in force.** A signed agent runs as SIGNED, persona included. Edit
+   its definition or its persona and the change waits for a signature, so the agent answering you
+   is the old one. Check for unsigned changes before you conclude anything, and sign first if you
+   meant the edit to be live.
+
+Something answerable only by the agent's own realm, asked in words a person would really use, is
+the shape that finds this: a question needing two of the realm's facts joined, where recall gives
+a confident near-miss. "Which verses mention both Jesus and Moses" over a scripture realm found
+exactly that — the realm answered it in under a second from a declared join, while the agent in
+front of it said the search had trouble and suggested they were in separate chapters. Nineteen
+verses say otherwise.
+
 ### Cost declarations: `maxAnchors` is about the SOURCE, not the number
 
 `maxAnchors` bounds how many nodes may drive one fetch. Its default assumes a **per-anchor**
