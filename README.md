@@ -3163,7 +3163,7 @@ routing: Ask me about the Bible, a passage, a person in the text, faith or doubt
 persona: realm-bible/jonathon
 conversation:
   realms: [realm-bible]                  # default: the realm that ships the agent
-  builtins: [memory, views, graph, code] # host tools kept; default: all
+  builtins: [memory, views]              # host tools kept; name the fewest the job needs
   llm: chat_best                         # an LLM role, never a model; default: the host's chat role
   sampling:                              # what a caller may ask for; omitted = the role's own settings
     temperature: [0, 0.7]
@@ -3175,10 +3175,37 @@ authority:
 | `conversation` field | Meaning |
 |---|---|
 | `realms` | The realms the conversation reaches. The host binds the conversation to them and enforces the binding where every call is dispatched, not only in what the model is shown. |
-| `builtins` | Which of the host's own tools the conversation keeps, by category: `code`, `graph`, `views`, `data`, `memory`, `documents`, `attachments`, `images`, `artifacts`, `apps`, `host`. `true` keeps all, `false` none. A host tool in no listed category is dropped. A realm's own tools are governed by `realms`, not this. |
+| `builtins` | Which of the host's own tools the conversation keeps, by category: `code`, `graph`, `views`, `data`, `memory`, `documents`, `attachments`, `images`, `artifacts`, `apps`, `host`. `true` keeps all, `false` none. A host tool in no listed category is dropped. A realm's own tools are governed by `realms`, not this. Omitted means all, which is almost never what an agent should have — see [Scope it to the job](#scope-it-to-the-job). |
 | `llm` | The [LLM role](#llm-roles) the conversation runs on. A realm never names a model, and a caller cannot choose one. |
 | `sampling.temperature` | The range a caller's `temperature` is clamped to. |
 | `sampling.maxTokens` | The most a caller's `max_tokens` may ask for. |
+
+#### Scope it to the job
+
+An agent's conversation SHOULD reach the fewest tools its job needs, and a realm SHOULD name its
+`builtins` rather than take the default. This is not tidiness. A model chooses among the tools it is
+shown, and every tool outside the job is one more wrong turn it can take: offered forty tools, a
+scripture agent reached for entity search, a vector search and a code runner instead of the view
+that answered, then filled the gap from its own recall — fluent, confident, and wrong. Offered the
+handful its job needs, the same model on the same question ran the view. A narrow scope is what
+lets a small, cheap model be a reliable colleague, and no model is reliable choosing among tools it
+should never have seen.
+
+So:
+
+- Start from `builtins: [memory, views]` for an agent that answers from a realm's views, and add a
+  category only when the agent cannot do its job without it — and can show it.
+- A view that retrieves inside itself (`RELEVANT_TO`, a producer) needs no `documents` or `graph`
+  category; the host runs the retrieval when the view runs.
+- Name realms the same way: `conversation.realms` lists the realms the job draws on, not every
+  realm the world happens to have.
+
+**What the conversation is offered.** Exactly three things: the tools of the realms `realms` names,
+the host tools of the categories `builtins` names, and the few a host keeps on every conversation
+(its notes and progress reporting). Nothing else — not another realm's tools, not the world's own
+APIs, not a host tool that belongs to no category. A host SHOULD report the tool surface each turn
+was offered, so an author can check it, and an author SHOULD check it before judging how the agent
+behaves: an agent that misbehaves with tools it should not have is a scoping defect first.
 
 **Who can be talked to.** Only an agent that may work: signed, with a sponsor, active, not off duty,
 and in a world that is not halted. A host refuses a conversation with any other agent and says
@@ -4003,7 +4030,7 @@ builtins: true
 | `defaultPersona` | No | Persona slug to activate when a session enters this focus. Resolved against the same registry that `personalities/` populates — world-authored or realm-shipped. Null = keep the world's current persona. |
 | `realms` | No | Realm names whose skills stay visible in this focus. Empty = no realm skills, only built-ins. |
 | `tools` | No | By-name allowlist of additional tools/skills to pull into this focus regardless of realm membership. Additive with `realms`. |
-| `builtins` | No (default `true`) | Whether to keep host-provided chat tools (memory, repository, reply, progress, the code runners). Set false only for narrowly-scoped focuses ("read-only public-info kiosk"). |
+| `builtins` | No (default `true`) | Which host-provided chat tools the focus keeps: `true` all, `false` none, or a list of categories as for an agent's [`conversation.builtins`](#talking-to-an-agent) (`[memory, views]`). Name the fewest the focus needs — the reason a focus exists is that fewer tools route better, and that holds for the host's tools as much as for realm skills. |
 
 ### `/focus` slash command
 
