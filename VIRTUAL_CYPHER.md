@@ -2424,9 +2424,13 @@ narrower match when the question targets one section. Cached document summaries 
 and cheaper, but can omit specific findings; content is the exhaustive surface.
 
 **A reduction with nothing to reduce says so.** When the accumulated expression is empty for a group
-— no rows matched, or the property carries no values — the cell is an `UNAVAILABLE:` sentinel, never
-a fabricated verdict or digest, and ask surfaces report the result as an honest miss rather than an
-answer. An empty LIST accumulates as empty: `collect()` of zero rows never manufactures evidence.
+— no rows matched, or the property carries no values — a PROSE reduction (`summarize`, `synthesize`,
+`render`) answers an `UNAVAILABLE:` sentence saying there was nothing to aggregate, and every TYPED
+reduction (a score, a verdict, a label, a list, a pick) answers `null`. A sentence in a score column
+would sort among real scores, and no comparison could tell it from an answer; `null` is what an
+empty group means. A typed reduction whose model fails is also `null`, flagged `REDUCTION_FAILED`
+(§9), so it is never bare. Neither is ever a fabricated verdict or digest, and ask surfaces report
+the result as an honest miss rather than an answer. An empty LIST accumulates as empty: `collect()` of zero rows never manufactures evidence.
 
 **A verdict about a NAMED thing requires the name in the corpus.** When a `holds` verdict is
 anchored through document relevance, the seed's words must appear together somewhere in the
