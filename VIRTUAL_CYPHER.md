@@ -2673,6 +2673,11 @@ The same body can be authored at runtime by the assistant on the acting principa
 "save this as my key accounts." `hostScope` contains the host-bound world, context, policy revision,
 and principal; it is never a guest-supplied tool argument.
 
+A view's query is checked when the realm is validated: a label that is a near miss for one the
+realm or its world knows (`GitHubIsue` beside `GitHubIssue`) is an error at the view's file and line,
+naming the likely intended label — at query time the same name is refused (§9), so a view that
+carries one could never answer.
+
 ### 8.2 Output typing — identity preservation is the rule
 
 A view you can **traverse from** always yields nodes of exactly ONE type. Whether it composes is governed by a
@@ -3357,6 +3362,10 @@ descending to a floor would converge and is refused; what bounds such a value is
 which lives in your data and not in the rule. **Conclude membership in the rule set and compute a
 distance in the projection view** (§13.5), where `min(length(p))` is finite because a path may not
 repeat a relationship.
+
+**A rule body's labels are checked when the realm is validated.** A body label that is a near miss
+for a known one (`Compnay` beside `Company`) is an error at the rule's `from`, naming the likely
+intended label: a misspelled body matches nothing, so the rule would derive nothing and say nothing.
 
 ### 13.3 Conclusions are computed, never stored — and they carry their why
 
