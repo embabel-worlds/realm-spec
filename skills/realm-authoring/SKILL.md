@@ -374,6 +374,10 @@ not fix a misbehaving agent by giving it a bigger model. Fix what it is given �
 that cannot return a plausible wrong answer, exact call shapes in its persona — and test again on
 the same model.
 
+If the agent needs one skill that its categories leave out, name that skill in
+`conversation.skills` instead of widening `builtins`: a category brings every tool in it, and a
+name brings one skill. A realm's skills still come only with the realm, through `realms`.
+
 What a view returns when a parameter is missing matters here too. A default that is a real value —
 a fixed date, an example verse — answers a careless call with something plausible and wrong (the
 Rosary for a Thursday, on a Sunday). For anything an agent reads, a missing parameter should return
