@@ -192,6 +192,7 @@ These are **rejected at plan time** (fail-closed), with a message:
 | `MATCH (hc:HubSpotContact) RETURN hc` | **Naked virtual scan** — no anchor to probe. Virtual labels are reached only by traversing a declared join from a bound anchor; otherwise the engine would try to fetch *every* contact. |
 | `MATCH (p:Person)-[:HAS_HUBSPOT_CONTACT]->(hc)` with no predicate on `p` | **Unbound anchor** — `p` matches every person; the fan-out is unbounded. Pin or filter the anchor. |
 | `MATCH (i:Item)-[:MENTIONS]->(t:Tag)` where `Tag` is brought only via `TAGGED` | **Brought child off its declared edge** — a brought label is reachable only through the exact relationship its own `brings:` entry names, and only from the join whose target brought it. |
+| ``MATCH (`a b`:Repo)``, ``MATCH (`distinct`:Repo)`` | **A variable that needs backticks** — variables are plain names. Refused by name with the rename to use, never as a syntax error the caller did not make. A word that reads back bare (`count`, `match`, `all`) is a legal name; column aliases and property keys may be quoted as usual. |
 | `UNION`, `CALL { }` subqueries in a scoped query | Not scoped clause-by-clause by the rewriter → rejected. The refusal shows how to keep one statement: collect, concatenate and `UNWIND` for rows from two label sets (the second set optional, so an empty set keeps the other's rows), or aggregate one set, carry it through `WITH` and aggregate the other behind `OPTIONAL MATCH` for two totals in one row, or, for one row per group, `UNWIND` the distinct union of both sets' group keys and aggregate each set per key, so a group only one set has is kept. The `CALL { }` refusal carries the same shapes, and each refusal names the other construct as refused too, so a retry does not trade one refused construct for the other. |
 | Anything the Cypher parser can't parse | **Fail closed** — an unparseable query is rejected, never run unscoped. |
 | `MATCH (n:!Topic)`, `n IS !Topic`, `WHERE n:!Person` | **Single-label negation** — refused before it runs, naming the spellings that work: `WHERE NOT n:Topic`, or a combined label expression such as `:Topic&!Person`. A `!` inside a string or comment is data. |
@@ -2774,6 +2775,13 @@ A view's query is checked when the realm is validated: a label that is a near mi
 realm or its world knows (`GitHubIsue` beside `GitHubIssue`) is an error at the view's file and line,
 naming the likely intended label — at query time the same name is refused (§9), so a view that
 carries one could never answer.
+
+**A view's own variables are private to it.** Only what the view returns becomes the caller's
+alias; every other variable its body declares is renamed for each use, so inlining never lets it
+meet the caller's. `MATCH (o:VaOwner {name:'oc'}) MATCH (x:owned_tier1) RETURN o.name, x.name`
+answers the same whether or not `owned_tier1`'s body also names an `o`, and two uses of one view
+in a query never share its internals. A body that returns an alias of a node (`RETURN k AS s`) is a
+node view like one that returns `s`.
 
 **What a view may not be used as.** A view is refused, with what to do instead, rather than
 answered quietly wrong:
