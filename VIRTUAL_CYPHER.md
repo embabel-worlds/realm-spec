@@ -1185,14 +1185,26 @@ and it fetches ONCE for the batch (the producer's batch contract), not once per 
 - **It composes with the rest of the WHERE.** An `IN` combined with other conditions by `AND` still
   seeds (this matters more than it looks: scope conditions are ANDed onto every query, so an
   enumerated anchor is essentially always inside a compound).
+- **A `null` in the list seeds nothing, and voids nothing.** `IN ['a', null]` seeds `'a'` — as
+  Cypher's `IN` is true only for `'a'`. A boolean member seeds as its token.
+- **A member that is computed is resolved.** An expression (`toLower('ACME/WIDGETS')`), a value bound
+  by an earlier `WITH` or `UNWIND`, or a list-valued variable (`WITH ['a','b'] AS ks … IN ks`) is
+  evaluated before the fetch, exactly as `{key: expression}` is, and seeds what it evaluates to.
+- **Alternatives on one key enumerate their union.** `k IN ['a'] OR k = 'b'` seeds `'a'` and `'b'` —
+  the same set written two ways.
 
 **What does NOT seed, and why**
 
 - **A parameter list** — `WHERE q.abn IN $abns`. There is nothing to enumerate when the query is
   read, so nothing is minted and the traversal yields no rows. **Inline the literals** when the
   anchors are virtual. (A `$param` list is fine for filtering nodes that already exist.)
-- **An `OR` alternative** — `WHERE q.abn IN [...] OR q.abn IN [...]`. One branch of a disjunction
-  must not enumerate the whole anchor set.
+- **A filter that cannot list keys** — `STARTS WITH`, `CONTAINS`, a range, a regex on the key. Nothing
+  can be fetched, and the answer SAYS so: a `NEEDS_FILTER` warning names the label and the key to pin,
+  so an empty result is never read as "there are none". The same warning accompanies an anchor that
+  is not pinned at all.
+- **An `OR` across different properties or nodes** — `WHERE q.abn IN [...] OR q.name = '…'`. One
+  branch of such a disjunction must not enumerate the anchor set. (Alternatives on the SAME key are
+  an enumeration, above.)
 - **The mirror form** — `WHERE 'X' IN n.someList` narrows a node by list membership; it is a
   filter, not an enumeration of identities.
 
