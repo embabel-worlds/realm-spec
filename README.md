@@ -3091,7 +3091,7 @@ duties:                               # forward-looking: declared and shown, not
 | `job` | yes | One sentence, in the words of the person who will answer for it. |
 | `routing` | no | What to ask this agent about, for a host that routes questions to colleagues. |
 | `persona` | no | A personality the host already has, or one this realm ships under `personalities/`, named `<realm>/<slug>` to say which realm's (`realm-bible/jonathon`). A persona confers no authority, but it is part of what the sponsor signs: for an agent people talk to it is the behaviour, guardrails included (see [Signed versions](#signed-versions)). |
-| `conversation` | no | How the agent is talked to: the realms it reaches, the host tools it keeps, its model role and the sampling a caller may ask for. See [Talking to an agent](#talking-to-an-agent). |
+| `conversation` | no | How the agent is talked to: the realms it reaches, the host tools it keeps, the skills it brings in by name, its model role and the sampling a caller may ask for. See [Talking to an agent](#talking-to-an-agent). |
 | `routines[]` | no | The work it does without being asked. Fields below. |
 | `duties[]` | no | Conditions it keeps true, each naming the view, lens or DERIVE label that should hold. _Forward-looking._ |
 | `state` | no | Only `retired`, to withdraw an agent the realm used to ship. Any other value is ignored. |
@@ -3164,6 +3164,7 @@ persona: realm-bible/jonathon
 conversation:
   realms: [realm-bible]                  # default: the realm that ships the agent
   builtins: [memory, views]              # host tools kept; name the fewest the job needs
+  skills: [diagrams]                     # skills by name, beside what realms and builtins bring
   llm: chat_best                         # an LLM role, never a model; default: the host's chat role
   sampling:                              # what a caller may ask for; omitted = the role's own settings
     temperature: [0, 0.7]
@@ -3176,6 +3177,7 @@ authority:
 |---|---|
 | `realms` | The realms the conversation reaches. The host binds the conversation to them and enforces the binding where every call is dispatched, not only in what the model is shown. |
 | `builtins` | Which of the host's own tools the conversation keeps, by category: `code`, `graph`, `views`, `data`, `memory`, `documents`, `attachments`, `images`, `artifacts`, `apps`, `host`. `true` keeps all, `false` none. A host tool in no listed category is dropped. A realm's own tools are governed by `realms`, not this. Omitted means all, which is almost never what an agent should have — see [Scope it to the job](#scope-it-to-the-job). |
+| `skills` | Skills brought in by name, in addition to what `realms` and `builtins` bring: a host-provided skill, or one the world installed or wrote, that the named `builtins` categories would otherwise leave out. Three limits. A realm's skills arrive only with the realm: naming a skill another realm ships, without that realm in `realms`, is refused, and the refusal says to add the realm. A name brings in a skill and never a tool — host tools stay by category. A name that matches no skill is a validation error for the agent, listing the skills that exist. See [Scope it to the job](#scope-it-to-the-job). |
 | `llm` | The [LLM role](#llm-roles) the conversation runs on. A realm never names a model, and a caller cannot choose one. |
 | `sampling.temperature` | The range a caller's `temperature` is clamped to. |
 | `sampling.maxTokens` | The most a caller's `max_tokens` may ask for. |
@@ -3199,11 +3201,16 @@ So:
   category; the host runs the retrieval when the view runs.
 - Name realms the same way: `conversation.realms` lists the realms the job draws on, not every
   realm the world happens to have.
+- Name `skills` with cause. Every skill added is one more choice the model makes on every turn —
+  its description is read, weighed against the question, and sometimes chosen instead of the view
+  that answers. Add a skill when a question the agent must answer needs it, and not because it might
+  come in useful.
 
-**What the conversation is offered.** Exactly three things: the tools of the realms `realms` names,
-the host tools of the categories `builtins` names, and the few a host keeps on every conversation
-(its notes and progress reporting). Nothing else — not another realm's tools, not the world's own
-APIs, not a host tool that belongs to no category. A host SHOULD report the tool surface each turn
+**What the conversation is offered.** Exactly four things: the tools and skills of the realms
+`realms` names; the host tools of the categories `builtins` names, with any host skill that documents
+one of those categories; the skills `skills` names; and the few a host keeps on every conversation
+(its notes and progress reporting). Nothing else — not another realm's tools or skills, not the
+world's own APIs, not a host tool or skill that belongs to no named category. A host SHOULD report the tool surface each turn
 was offered, so an author can check it, and an author SHOULD check it before judging how the agent
 behaves: an agent that misbehaves with tools it should not have is a scoping defect first.
 
@@ -4031,6 +4038,7 @@ builtins: true
 | `realms` | No | Realm names whose skills stay visible in this focus. Empty = no realm skills, only built-ins. |
 | `tools` | No | By-name allowlist of additional tools/skills to pull into this focus regardless of realm membership. Additive with `realms`. |
 | `builtins` | No (default `true`) | Which host-provided chat tools the focus keeps: `true` all, `false` none, or a list of categories as for an agent's [`conversation.builtins`](#talking-to-an-agent) (`[memory, views]`). Name the fewest the focus needs — the reason a focus exists is that fewer tools route better, and that holds for the host's tools as much as for realm skills. |
+| `skills` | No | Skills brought in by name, beside what `realms` and `builtins` bring — exactly as an agent's [`conversation.skills`](#talking-to-an-agent): never a realm's skill without its realm (refused), never a tool, and an unknown name is a validation error. Each one is another choice the model weighs on every turn, so add it with cause ([Scope it to the job](#scope-it-to-the-job)). |
 
 ### `/focus` slash command
 
