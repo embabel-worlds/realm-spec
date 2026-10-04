@@ -365,6 +365,20 @@ realm-level check never counts as an agent-level check**, however thorough it wa
 REQUIRED, not a judgment call. The whole point of a focused colleague is that it uses the tools
 and views of its realm; that is the behaviour under test, so it is the behaviour you have to see.
 
+**Scope it narrowly before you test anything.** An agent is only as reliable as the set of tools it
+chooses from. Give it `builtins: [memory, views]` and add a category only when a question it must
+answer cannot be answered without it. Then read the surface a turn was actually offered — the host
+reports it — and treat every tool outside the agent's job as a defect to remove before you judge
+its answers: an agent that reaches for the wrong tool is usually an agent that was handed it. Do
+not fix a misbehaving agent by giving it a bigger model. Fix what it is given — fewer tools, views
+that cannot return a plausible wrong answer, exact call shapes in its persona — and test again on
+the same model.
+
+What a view returns when a parameter is missing matters here too. A default that is a real value —
+a fixed date, an example verse — answers a careless call with something plausible and wrong (the
+Rosary for a Thursday, on a Sunday). For anything an agent reads, a missing parameter should return
+nothing, or mean "today", never a sample.
+
 1. **Ask the agent, as the agent.** `/talk <name>`, then the same two halves as
    `tests/questions.yml` — what it can answer, and what it cannot. Asking the world instead, or
    asking over a developer door, tests a different surface and will pass while the agent is
