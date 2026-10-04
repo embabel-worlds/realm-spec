@@ -1146,7 +1146,12 @@ A non-ISO date part fails that key loudly rather than searching for garbage.
 `match` term (a key template, so a composite key's phrase part anchors the excerpt, never its
 date parts) into a `content` property. The whole page is never stored; a followed page that never
 mentions the term contributes no content; a page that cannot be read is reported as UNKNOWN
-content — never as "the term does not occur". Speaker-attributed transcript prose survives inside
+content — never as "the term does not occur". The same holds for an item past `maxPages`: its page
+was never read, so its `content` is UNKNOWN, not empty. The answer says so — it is marked partial,
+with a `FOLLOW_CAPPED` note naming the budget, how many items went unread, and the levers (raise
+`maxPages` up to its ceiling, or narrow the query) — so a `WHERE m.content CONTAINS …` over those
+items is never mistaken for a complete search. Every row is still present, so a `count()` of them
+stands. Speaker-attributed transcript prose survives inside
 the windows, which is the point: `summarize(m.content, '…')` over followed Hansard fragments can
 honestly answer "what was discussed, and by whom". Follow knobs are ceiling-clamped (pages ≤ 5,
 excerpt ≤ 8000 chars) and page fetches ride the same pace gate as the feed itself.
