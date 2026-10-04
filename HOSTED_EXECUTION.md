@@ -281,6 +281,63 @@ an owner acting on an installation that has moved on is told so. Pairings surviv
 and the pairing endpoints are served under the versioned prefix, the declared path alone being
 no surface at all.
 
+## The model call
+
+A captured Realm asks for the owner's model by declaring it in `realm.yml`:
+
+```yaml
+capabilities: [model]
+```
+
+The admission preview then offers `model` as a grant the owner may select. Selecting `model` for
+a Realm that did not declare it refuses the admission request. A Realm that does not declare it
+is offered no model grant, and the rest of its admission proceeds as for any Realm.
+
+A handler asks for one completion with the host call `ai_complete`:
+
+| Argument | Rule |
+| --- | --- |
+| `prompt` | Required. A non-blank string. |
+| `role` | Optional. `cheap`, `workhorse` or `best`. |
+| `skills` | Optional. At most 8 skill names, each 1 to 64 characters. |
+| `maxOutputTokens` | Optional. A positive integer, 1,024 when absent. |
+
+Any other field, or a value outside these rules, refuses the call with no code. The reply is
+`{text, truncated}`. The text is cut at a character boundary once it passes the host's reply
+limit, 64 KiB in the reference host, and `truncated` says whether it was cut.
+
+A skill name resolves to the Realm's own captured skill, by its bare name or as
+`<realm>-<skill>`, and then to a skill of the owner's. Another Realm's captured skill, or a name
+nothing answers to, refuses the call before the model is asked.
+
+Two budgets apply, both counted by the host:
+
+- **Per dispatch.** A root dispatch and every dispatch nested under it share one budget. The
+  reference host allows 2 calls, 64 KiB of prompt and 4,096 output tokens in total, with one call
+  in flight at a time.
+- **Per day.** Each Realm in each World has a cap on calls and output tokens per UTC day. The
+  reference defaults are 50 calls and 100,000 output tokens. The owner may set a Realm's own caps,
+  and zero in either turns the call off for that Realm. A call's output tokens count as the bound
+  it was given.
+
+The output bound a call gets is the smallest of what it asked for, what is left of the dispatch's
+budget, what is left of the day's cap, and the output limit the operator or persona set for the
+model. A Realm's bound can lower the operator's limit and never raises it.
+
+A refusal reaches the guest as `{"error": "host call refused", "code": "<code>"}`. In a Wasm
+guest the call rejects with an error whose `code` is one of:
+
+| Code | Refused because |
+| --- | --- |
+| `MODEL_NOT_GRANTED` | The owner has not granted this Realm the model. The Realm's other host calls keep working. |
+| `MODEL_CALL_BUDGET` | The dispatch has spent its calls or output tokens, or a call is already in flight. |
+| `MODEL_PROMPT_TOO_LARGE` | One prompt is larger than a whole dispatch may send. |
+| `MODEL_SKILL_UNKNOWN` | A named skill is neither the Realm's own nor the owner's. |
+| `MODEL_DAILY_BUDGET` | The Realm has reached its daily cap. Calls are refused until the next UTC day. |
+
+The grant is checked again when the model answers. If the owner withdrew it meanwhile, the answer
+is dropped and the call is refused. Watches and consumers in observe mode cannot make the call.
+
 ## Polling positions
 
 A captured poller reads its source cursor with `gateway.channel.position({source})`, which
@@ -359,6 +416,37 @@ Generic captured polling and webhook event manifests remain unsupported. Explici
 webhook actions use a separate route. Declaration reads for authoring do not register a
 source or grant execution.
 
+## Scheduled handlers
+
+A handler entry in `dist/manifest.json` may carry a `schedule`, a six-field cron expression in the
+host's clock (see [the manifest, schedules, and type methods](README.md#the-manifest-schedules-and-type-methods)).
+In a captured Realm a schedule runs only after the owner grants it, separately from its handler.
+
+- The admission preview lists each scheduled handler with its cron expression, a plain
+  description of when it runs, and whether the host allows it.
+- The owner grants a schedule by selecting `schedule:<handler>`, where `<handler>` is the
+  handler's `namespace.name`, in the same selections as the handler itself. A schedule needs its
+  handler granted too.
+- A schedule fires at most once a minute. Its seconds field must be one fixed second from 0 to
+  59. The preview marks any other expression as not allowed, and the owner cannot grant it. The
+  rest of the Realm is admitted as usual.
+- A World holds at most 64 granted schedules.
+- An upgrade carries no schedule grant over. The owner selects each schedule again when
+  approving the new revision, and until then it does not fire.
+- Each firing checks the installation, revision, capture digest and World again, that both grants
+  are still held, and that the admitted capture still schedules the handler. Any difference
+  refuses that firing.
+- The handler receives `{}` as its input, so every field of its `inputSchema` must be optional.
+- One run of a handler goes at a time. A firing that arrives while the previous run is still
+  going is skipped. A refused or skipped firing is not made up later; the next one runs on
+  schedule.
+- A scheduled run is a [background dispatch](#background-dispatch). What it returns goes to no
+  chat.
+- Withdrawing the schedule grant, the handler grant or the Realm stops the schedule.
+
+Declaring `schedule` grants nothing by itself. An installation whose owner has granted no
+schedule runs its handlers on every other path and fires none on a schedule.
+
 ## Capacity
 
 Every Realm has finite host-enforced execution and storage limits. A dependency declaration
@@ -404,6 +492,43 @@ whose exact receipt is still within the retained window replays that receipt eve
 expected position no longer matches the source's current position; a positioned batch is
 refused for a stale expected position only once its identity falls outside that window.
 
+### Background dispatch
+
+The host runs some dispatches in the background class: scheduled firings, watches, polls, webhook
+deliveries, channel frames and consumer deliveries. Every dispatch made inside one of them, such
+as a call to a sibling handler or a producer, stays in the background class. A handler cannot
+move work into the foreground.
+
+What a Realm can observe:
+
+- **Priority.** Wherever background and interactive dispatches wait for the same capacity, the
+  interactive ones are served first. Background work together holds at most a share of each
+  host pool, half in the reference host, so an interactive call can always get in. A call nested
+  under a background dispatch is served ahead of other background work, so a dispatch waiting on
+  its nested call is not held up behind other background dispatches.
+- **Waiting.** A background dispatch that finds its share full waits, up to the host's admission
+  timeout, 5 seconds in the reference host.
+- **Refusal.** Past that wait the dispatch is refused. It is refused at once when its own chain
+  already holds all the capacity its class may have, since waiting could only end the same way.
+  A refusal for capacity ends the dispatch. A nested call refused this way ends the dispatch that
+  made it, and the guest is handed no reply it could catch. A refused scheduled firing is not
+  retried.
+- **Slower batches.** A background pure-compute batch is held to half the host's compute cores,
+  so it may run on fewer instances. Its answers are the same.
+
+The reference host names the limit in the operator's log with one of these codes. The guest is
+told none of them.
+
+| Code | The limit that refused |
+| --- | --- |
+| `chain-holds-background-limit` | The dispatch's own chain already holds all the capacity its class may have. |
+| `host-call-background-share-full` | Background work already holds its share of host calls. |
+| `host-call-pool-full` | Every host-call permit is held. |
+| `host-call-budget-spent` | The dispatch has made all the host calls it may. |
+| `abandoned-workers-full` | Too many stopped dispatches are still running on the host. |
+
+A Realm declares nothing for this, and nothing about it changes what a Realm declares.
+
 ## Credentials and databases
 
 Credentials remain in owner-scoped host storage. Guests refer to approved operations and
@@ -435,9 +560,9 @@ to an external datasource. The host channel journal is a separate delivery facil
 ## Captured API operations
 
 A captured Realm may declare approved API operations in `apis/apis.yml` using vendored
-OpenAPI documents. Each operation binds a fixed destination and a key from the owner's
-wallet. In the governed profile, `token-env` identifies a wallet entry; it does not authorize
-an environment-variable fallback. The fallback a conventional Realm may use in the local or
+OpenAPI documents. Each operation binds a fixed destination and, unless it is a
+[keyless read](#keyless-reads), a key from the owner's wallet. In the governed profile,
+`token-env` identifies a wallet entry; it does not authorize an environment-variable fallback. The fallback a conventional Realm may use in the local or
 first-party tier ([Auth](README.md#auth)) never applies to a captured Realm. The guest supplies
 operation arguments, never credentials, headers, server overrides or an alternative URL.
 
@@ -467,9 +592,9 @@ The reference profile supports:
 | Operations | Explicit GET operation IDs for reads, at most 128 per Realm; `post`/`put`/`patch`/`delete` operation IDs for writes under the [write-operation profile](#write-operations), each under its own grant. |
 | Arguments | At most 64 scalar path/query parameters and 64 KiB JSON; a read operation takes no request body and no caller headers beyond the fixed set below. Each string argument is checked for a path-safe alphabet or a nonempty, control-free string as its location requires, capped at 2,048 characters; `body` is a reserved argument name a read operation cannot use; an integer is bounded to a signed 64-bit value and a number must be finite. |
 | Validation | Types, required fields, enum and string-length limits; numeric ranges and regex annotations remain provider validation. |
-| Authentication | API key in a query parameter or header, or HTTP bearer token; optional fixed `X-` headers. |
+| Authentication | API key in a query parameter or header, HTTP bearer token, the credential in the URL path (`auth: path`), or no credential for a public read ([`auth: none`](#keyless-reads)); optional fixed `X-` headers and an optional [`User-Agent`](#the-user-agent-header). |
 | Transport | The assembled request URI is bounded; a non-2xx provider status, unsupported content encoding, or a response exceeding the transport's own deadline all refuse the call — a small valid JSON payload alone does not guarantee acceptance. |
-| Response | At most 1 MiB of strict UTF-8 JSON; common credential echoes and diagnostic exception text are refused. |
+| Response | At most 1 MiB, decoded by the operation's [response type](#response-types): JSON unless the Realm or its document says otherwise; binary is refused; common credential echoes and diagnostic exception text are refused. |
 
 The initial implementation rejects unsupported auth schemes, parameter references, alternative
 servers, a read operation carrying a mutation, and credential injection into HTTP
@@ -538,6 +663,165 @@ transitively by the 64 KiB argument cap above, since the body is a subset of tha
 Pagination and an MCP transport remain a separate contract; GraphQL operations have their own
 [captured GraphQL operation profile](#me-captured-graphql-operation-profile).
 
+### Keyless reads
+
+An entry for a public API declares `auth: none`:
+
+```yaml
+- name: wikibooks
+  type: openapi
+  url: wikibooks.json
+  auth: none
+  operation-ids: [getPage]
+```
+
+A keyless entry names no `credential:` and no `token-env:`, and lists no
+`write-operation-ids`. Its document declares no security requirement, though an empty
+`security: []` is accepted, and carries no `{credential}` placeholder. Any of these refuses the
+whole file. GraphQL operations do not take `auth: none`.
+
+The owner still approves each keyless operation on its own, and the host's destination policy
+applies to it as to every other operation. The approval names the operation and its URL. A
+capture that moves the operation to another URL, or switches it between keyless and
+credentialed, needs approving again. A keyless call carries the entry's fixed headers and no
+credential of any kind. Its transport limits and response handling are those of every other
+read.
+
+`none` is one more value of the `auth:` field. An entry that names a credential is unaffected
+by it, and its approvals hold.
+
+### The User-Agent header
+
+Every captured API call carries a `User-Agent` that describes the deployment: a product name,
+its version and a contact URL, in the form `product/version (+contact-url)`. Some public APIs
+refuse a request that carries a generic HTTP library's name.
+
+An entry may set its own:
+
+```yaml
+headers:
+  User-Agent: realm-chess/1.0 (+https://example.com/realm-chess)
+```
+
+`User-Agent` is the one standard header a Realm may set. Every other fixed header is an `X-`
+name. The value follows the same rules as the other fixed headers: printable ASCII and no `${`
+substitution. It is fixed in the captured `apis/apis.yml`, so a guest cannot change it at run
+time. An entry that sets no `User-Agent` sends the deployment's.
+
+### Response types
+
+An entry may say what each operation answers with, under `responses:`, keyed by operation id.
+Reads and writes both take an entry.
+
+```yaml
+- name: lichess
+  type: openapi
+  url: lichess.json
+  auth: bearer
+  credential: lichess
+  operation-ids: [mastersExplorer, playerExplorer, openings, feed]
+  responses:
+    playerExplorer: application/x-ndjson
+    openings: text/csv; header=present
+    feed: { raw: application/atom+xml }
+```
+
+`responses:` is optional, and so is each key in it. An operation the map leaves out takes the one
+2xx content type its OpenAPI document names, following a `$ref` into `#/components/responses`.
+When the document names no type, several types or a range such as `text/*`, the operation takes
+`application/json`. An entry with no `responses:` map therefore reads JSON from every operation
+whose document names JSON or no single type.
+
+An operation whose document names a single type the host does not decode, such as
+`application/octet-stream`, still loads with the rest of its entry. Every call to it is refused
+before it is sent, until the Realm declares a type for it.
+
+The host sends the declared type as `Accept` and decodes the reply with it. The guest receives:
+
+| Declared type | The guest receives |
+| --- | --- |
+| `application/json`, any `+json` type | The document. An empty body is `null`. |
+| `application/x-ndjson`, `application/jsonl`, `application/json-seq` | `{records, truncated}`. Each record is one JSON object. A last record cut off before its line ends is dropped, and `truncated` is then `true`. |
+| `application/xml`, `text/xml`, any `+xml` type | `{"<root>": element}`, described below. |
+| `text/csv` | `{header, rows}`. Each row is a list of strings, read as RFC 4180, and rows may differ in length. With `header=present`, `header` is the first row. With `header=absent` or no parameter, `header` is `null` and every row is data. |
+| `application/yaml`, `application/x-yaml`, any `+yaml` type | The document. Anchors, aliases, tags and a second document are refused. |
+| `application/x-www-form-urlencoded` | An object of strings. A key that repeats holds an array of its values. |
+| `text/plain`, any other `text/` type | One string. |
+
+An XML element becomes an object:
+
+- Each attribute is `"@name": "value"`. Namespace declarations appear the same way, as `@xmlns`
+  and `@xmlns:p`.
+- Each child element's name holds an array of those children in document order, also when there
+  is only one, so the shape does not depend on how many children arrive.
+- `#text` holds the element's text and CDATA joined together, and is left out when it is only
+  whitespace.
+- Names keep their prefix, as in `atom:link`. Comments and processing instructions are dropped.
+- A document that carries a document type declaration is refused, so no entity is expanded and no
+  external resource is read.
+
+For example, `<feed lang="en"><entry><title>A</title></entry><entry><title>B</title></entry></feed>`
+reaches the guest as:
+
+```json
+{"feed": {"@lang": "en", "entry": [
+  {"title": [{"#text": "A"}]},
+  {"title": [{"#text": "B"}]}
+]}}
+```
+
+**Raw mode is how a Realm reads a format the host does not decode.** A Realm can ship guest code
+but never host code. It declares `{ raw: <type> }` and the guest receives `{contentType, text}`:
+the reply's own `Content-Type` and its body as a string, which the Realm's own code then parses.
+The declared type may be any type the host does not count as binary, such as
+`application/atom+xml`, or a range covering all types (`*/*`), all text types (`text/*`) or all
+application types (`application/*`). The reply must still be text: a binary
+`Content-Type` is refused whatever was declared.
+
+**Binary is refused.** A declaration naming a binary type, `image/*` included, refuses the whole
+file, raw or not. The host does not hand a guest binary bodies in any encoding.
+
+The reply's `Content-Type` must agree with the declaration. A reply agrees when the decoder for
+the declared type also reads the reply's type, so `application/jsonl` satisfies
+`application/x-ndjson` and `application/problem+json` satisfies `application/json`. For `raw`,
+the reply's type must fall inside the declared range. A reply with no `Content-Type` is refused,
+except that an empty body, such as a 204, needs none. A host may let its operator relax this
+check, in which case a reply that disagrees is decoded as declared. The reference host checks
+strictly by default. Under the strict check a provider that labels JSON as another type, or sends
+no `Content-Type`, is refused even when the entry declares nothing; declaring the type that
+provider actually sends, or `raw`, lets the Realm read it.
+
+The body is decoded as UTF-8 unless its `charset` names US-ASCII or ISO-8859-1. Any other charset
+is refused. The credential echo check runs on the decoded text and again on every decoded string
+and key.
+
+Each response type has limits on body bytes, record count, the longest line or value, and nesting
+depth. The reference defaults are 1 MiB, 10,000 records, 64 KiB and 32 levels, and the
+transport's 1 MiB limit applies first. A reply past a limit is refused whole.
+
+The host refuses the whole `apis/apis.yml` when a `responses:` entry:
+
+- names an operation the entry does not list;
+- declares a type no decoder reads, a binary type, or a bare range outside `raw`;
+- declares a CSV `header` parameter other than `present` or `absent`;
+- declares a record stream for a write, whose outcome has to be one whole document;
+- is not a media type or a `{ raw: <type> }` object.
+
+When a refused API call makes a handler fail, the reference host names the check in the
+operator's log with one of these codes. The guest is told none of them and receives the
+uncoded refusal.
+
+| Code | The check that refused |
+| --- | --- |
+| `api-not-approved` | The owner has not approved the operation, or withdrew the approval. |
+| `api-provider-status` | The provider answered outside 2xx, a redirect included. |
+| `api-response-refused` | The reply was encoded, larger than the transport reads, or past a decoder's limits. |
+| `api-response-malformed` | The reply did not parse as the declared type. |
+| `api-content-type-mismatch` | The reply's `Content-Type` was binary, missing, or disagreed with the declaration. |
+| `api-response-unsupported` | The document names only a type no decoder reads, and the Realm declared none. |
+| `api-transport-failure` | The call timed out or its connection failed. |
+| `api-credential-echo` | The reply held the credential the call was made with. |
+
 ### Result admission
 
 After a handler completes, the host rechecks its original retained target before returning
@@ -589,9 +873,162 @@ imports from other modules already included in the same bounded capture.
 
 No download, installation or registry resolution occurs. Libraries compiled into a Wasm
 program remain part of that artifact; the reference Wasm backend supplies no host packages.
-Other ecosystems, runtime provisioning and private database persistence remain open.
+Other ecosystems and runtime provisioning remain open. WebAssembly modules the host mounts beside
+a Wasm Realm's handlers, with their private state, are [module dependencies](#module-dependencies).
 Unsupported storage requirements must be rejected before handler execution. No VFS syntax
 is introduced here.
+
+## Module dependencies
+
+A Wasm Realm may declare WebAssembly modules the host mounts beside its handlers. They are the
+`entries` of `dependencies/manifest.json`:
+
+```json
+{
+  "version": 1,
+  "runtime": "typescript",
+  "entries": [
+    { "name": "db", "module": "sqlite3-wasi", "version": "3.50", "sha256": "<64 hex>",
+      "kind": "sqlite", "persistent": true,
+      "init": "db/schema.sql", "migrations": ["db/0001-openings.sql", "db/0002-queue.sql"] },
+    { "name": "engine", "module": "stockfish", "version": "19.0.0", "sha256": "<64 hex>",
+      "kind": "pure-compute" }
+  ]
+}
+```
+
+A handler calls a module's method with the host call `dep:<name>.<method>`. The
+[TypeScript realms](TYPESCRIPT_REALMS.md#dependencies) guide shows the same declaration in
+`realm.ts` form and the `ctx.deps.<name>` members it generates.
+
+The host mounts a module only when the operator's allowlist names its exact module, version and
+digest, and only when its bytes hash to `sha256`. A refused entry takes every handler of the Realm
+out of service, including the ones that never call it, and the owner sees a loading problem that
+names the dependency.
+
+### Kinds
+
+Every module loads as a dependency kind. The kind decides what methods the module offers and
+whether it keeps state. The reference host provides two:
+
+| Kind | State | Methods | The entry may declare |
+| --- | --- | --- | --- |
+| `sqlite` | yes | one method, `exec`, whose rows come back as JSON records | `persistent`, `init`, `migrations` |
+| `pure-compute` | none | the methods the operator allows, narrowed by the entry's `methods` when it declares them | `methods` |
+
+The operator's allowlist entry names the module's kind, and that is the authority. A module's
+name implies no kind. A host may provide further kinds.
+
+`kind` on a manifest entry is optional. When present it is a lowercase name matching
+`[a-z][a-z0-9-]{0,63}`, and it must equal the kind the allowlist names. When absent, the module
+loads as whatever kind the allowlist names, which is how every manifest written without the field
+loads.
+
+The host refuses the Realm's dependency plan, with the code in the owner's loading problem, when:
+
+| Code | Refused because |
+| --- | --- |
+| `dependency-kind-unknown` | The allowlist names a kind this host does not provide. |
+| `dependency-kind-mismatch` | The entry's `kind` differs from the kind the allowlist names. |
+| `dependency-kind-unsupported` | The entry asks for something its kind cannot do: state from a stateless kind, or declared methods from a kind with a fixed method surface. |
+
+A `kind` that is not a lowercase name refuses the manifest itself.
+
+### Setup artifacts
+
+`init` and `migrations` name files inside the Realm, each with no leading `/` and no `..`
+segment. The host reads each one from the admitted capture as bytes, at most 1 MiB, and pins it
+by SHA-256. It hands the bytes to the kind, which decides how to read them; the `sqlite` kind
+reads them as UTF-8 SQL. Editing a file after admission changes nothing for the admitted
+version.
+
+The files form one chain. `init` is version 0, and each migration is the next version, in the
+order listed. An entry declares at most 64 migrations, names each one once, and declares `init`
+whenever it declares migrations.
+
+Persistent state records the chain it has applied. When it is mounted, the declared chain must
+extend the recorded one: every applied version keeps its digest, and none is removed. The
+versions past the recorded end are applied together, all or nothing. A mount that fails this
+check, or whose migration fails, refuses the dependency call and publishes nothing, so the stored
+state stays as it was. State that lives for one dispatch starts empty and has the whole chain
+applied on each mount.
+
+To change a schema, append a migration. Changing or removing an applied file is refused. State
+whose recorded chain is shorter than the declared one, such as state created while its Realm
+declared only `init`, has the missing versions applied on its next mount. A Realm that declares
+no migrations keeps the behaviour of `init` alone.
+
+### Persistent state
+
+With `persistent: true` the host keeps state for each World, Realm and dependency name. Two
+Worlds never share state, even when they install the Realm from the same checkout.
+
+The state is a series of generations, and one pointer selects the current one. A dispatch mounts
+the generation selected when it first calls the dependency. It publishes a new generation only
+when the dispatch succeeds, its result passes validation, and the state changed. A failed,
+refused, cancelled or timed-out dispatch publishes nothing, and the selected generation stays
+current. State larger than the host's limit, 64 MiB in the reference host, fails the dispatch and
+keeps the previous generation. A generation recorded under a different module, version or digest
+is reported to the owner. The host neither reuses nor wipes it.
+
+### Concurrent dispatches
+
+Dispatches against one persistent dependency may run at the same time. A dispatch can come to
+publish and find that another dispatch published after it mounted. The host then does one of two
+things:
+
+- **Replay.** When the kind's replay rules accept the dispatch's writes, the host restores the
+  newer generation, applies any setup versions it lacks, runs the dispatch's recorded writes again
+  on it, and publishes the result. Both dispatches' writes are kept.
+- **Discard.** Otherwise the dispatch's writes are not kept, and the host logs the reason.
+
+Either way the guest's answer stands. It was computed over the generation the dispatch mounted,
+and the host does not run the handler again. A dispatch in which a dependency call failed fatally
+never publishes, into the generation it read or into a newer one.
+
+The `sqlite` kind replays `INSERT OR REPLACE`, `REPLACE` and `INSERT ... ON CONFLICT ... DO
+UPDATE` statements on tables that have a primary key or a full unique index. It refuses to replay
+a dispatch that wrote any other statement, wrote a table without such a key, or both read and
+wrote one table. A Realm whose writes can race should write them as keyed upserts, so they survive
+a lost race.
+
+The reasons the reference host logs are `UNREPLAYABLE_WRITES`, `NOT_REPLAYABLE`, `REPLAY_FAILED`,
+`NEWER_GENERATION_INCOMPATIBLE` and `POINTER_MOVED`, with a detail from the kind beside them, such
+as `NOT_REPLAYABLE (unkeyed-table)`. The guest is told none of them.
+
+### Batch calls
+
+A `pure-compute` method can take many sets of arguments in one host call. The arguments are an
+object holding `batch`, a list with one entry per call:
+
+```json
+{"batch": [["<fen A>", 300000, 245, 1], ["<fen B>", 300000, 245, 1]]}
+```
+
+sent as `dep:engine.analyse`. Each entry is written the way one call's arguments are: a list for
+several positional arguments, or a lone value. The reply is `{"result": [answerA, answerB]}`, one
+answer per entry, in the order given.
+
+- A batch carries 1 to 256 entries. It counts as one host call against the dispatch's budget, and
+  its reply is bounded like any other host-call reply.
+- The host may run the entries on several instances of the module at once. Instances share
+  nothing, so every entry gets the answer it would get alone. A busy host runs a batch on fewer
+  instances, and a background batch is held to its share of the host's cores.
+- The first entry that fails stops the batch. A refused entry fails the whole call with an error
+  naming its position, as in `call 2 of the batch: ...`. A fatal one fails the dispatch, as it
+  would alone.
+- The dispatch deadline covers the whole batch.
+- A stateful kind has no batch form.
+
+A single `pure-compute` call never takes an object as its arguments, so no single call reads as
+a batch.
+
+A dependency call the host cannot serve answers with an error that names what refused it. When
+the memory the host sets aside for natively compiled modules is spent, the error names
+`native-memory-exhausted`.
+
+A dependency kind whose state is a set of files, and a file API for handlers, are not yet
+specified.
 
 ## Reference implementation
 
@@ -606,7 +1043,10 @@ in the main specification:
 | Captured source/consumer approval and publication | Implemented with World-load source discovery. |
 | Scheduled API-to-channel handlers | Captured schedules, approved GET operations, durable publication and consumer replay, including poller cursor persistence through `gateway.channel.position`/`publishBatch`. |
 | Captured callback to an approved sibling | Implemented within the same installation. |
-| Captured API operations and wallet bindings | Implemented for the read (GET) and write (`post`/`put`/`patch`/`delete`) profiles, each under its own grant. |
+| Captured API operations and wallet bindings | Implemented for the read (GET) and write (`post`/`put`/`patch`/`delete`) profiles, each under its own grant, with keyless reads and declared response types. |
+| [Module dependencies](#module-dependencies) | `sqlite` and `pure-compute` kinds, persistent generations with replay, setup migrations and pure-compute batches. |
+| [The model call](#the-model-call) | Owner-granted `ai_complete` under per-dispatch and daily budgets. |
+| [Scheduled handlers](#scheduled-handlers) | Each schedule under its own owner grant, run in the background class. |
 | Captured handler lenses | Versioned same-installation bindings; bounded JSON results, original-target refresh and prepared background runs. Completion and response checks retain admission; revocation clears stored data. Active work and settled storage are capped. Cache reuse is disabled. Opt-in content results hydrate owned focus under retained graph approval and select compatible built-in views; executable presentations are excluded. |
 | Legacy Realm lenses | Excluded in captured Worlds, including previously loaded definitions and retained views. Owner lenses remain available; cached results are isolated by owner. Versioned handler bindings use the captured route. |
 | Captured handler producers | Version-1 same-installation bindings, JSON batch keys and bounded record arrays. Owner precedence, retained World/approval checks, cancellation and call budgets apply. No result cache. `=`/`IN` filter pushdown through declared handler arguments; paging only through a declared cursor argument under a bounded page count, re-verified before every page. Reachable from a captured graph query along a declared join from a bound anchor; producers chain. Graph materialization preserves owner boundaries and host metadata. |
@@ -614,7 +1054,7 @@ in the main specification:
 | Captured Virtual Cypher | Implemented owned reads and same-installation captured producers/collections with retained resource grants and rollback materialization. |
 | Owner database target approval | Adoption, upgrade, revocation and read-only production SQL use through the owner connection facade are implemented. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
-| Additional dependency ecosystems, private Realm database persistence and VFS | Not implemented on this path. |
+| Additional package ecosystems, a Realm file volume and VFS | Not implemented on this path. |
 | Firecracker, generalized remote backends and resumable arbitrary computation | Not implemented. |
 
 Hosts must state which profile and capabilities they support. Generated types describe an

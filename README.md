@@ -192,6 +192,7 @@ tags:
 | `icon` | No | An image the realm ships, as a path **relative to the realm root**. See [Icons](#icons). |
 | `tags` | No | Categorization tags |
 | `host` | No | Execution host for the Realm's Functions: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
+| `capabilities` | No | Host capabilities a captured realm asks its owner to grant. `model` asks for the owner's model; see [the model call](HOSTED_EXECUTION.md#the-model-call). Absent means the realm asks for none. |
 
 ### Icons
 
@@ -1428,6 +1429,7 @@ realm and a declared credential the owner binds in a captured realm. See
 | `oauth2` | with `auth: oauth2` | OAuth2 config — see **OAuth2** below. |
 | `tags` | no | Allowlist of OpenAPI tag names. Filters huge specs to a coarse subset. |
 | `operation-ids` | no | Exact `operationId` allowlist. Composes with `tags` (tags pre-filter, operation-ids picks exact ops). Match is case-insensitive and treats `-`/`/` as `_`, so `repos/get`, `repos-get`, `repos_get` all match. |
+| `responses` | no | Captured realms: the response type of each operation, keyed by operation id. Absent means the type the OpenAPI document names, or JSON. See [response types](HOSTED_EXECUTION.md#response-types). |
 | `capability-tags` | no | Capability DECLARATION — what the API is FOR, in the host's vocabulary (`web-search`, `web-fetch`). Lets host code pick a tool by capability instead of by provider name. Unrelated to `tags`; see **Capability tags** below. |
 
 ### Capability tags
@@ -2543,7 +2545,7 @@ A wasm realm ships `dist/manifest.json` in the same [manifest format](#manifest-
 
 | Field | Meaning |
 |---|---|
-| `schedule` | A cron expression (Spring 6-field, evaluated in the host's timezone). Installation makes the schedule available but **does not activate it**. It starts only after adoption under the same digest-bound grant as a routine, and a realm update pauses it until that grant is valid again. A host shows a realm's Manifest Schedules as routines of an agent it proposes for the realm, so they are adopted the same way. A **Manifest Schedule** passes empty args (`{}`), so every `inputSchema` field must be optional. (A scheduled routine in `agents/` instead passes `{trigger: "cron", firedAt}` under a different input contract; see [routines that call a Realm Function](#routines-that-call-a-realm-function-and-dispatch-scoped-replies--forward-looking).) |
+| `schedule` | A cron expression (Spring 6-field, evaluated in the host's timezone). Installation makes the schedule available but **does not activate it**. It starts only after adoption under the same digest-bound grant as a routine, and a realm update pauses it until that grant is valid again. A host shows a realm's Manifest Schedules as routines of an agent it proposes for the realm, so they are adopted the same way. In a captured realm the owner grants each schedule on its own; see [scheduled handlers](HOSTED_EXECUTION.md#scheduled-handlers). A **Manifest Schedule** passes empty args (`{}`), so every `inputSchema` field must be optional. (A scheduled routine in `agents/` instead passes `{trigger: "cron", firedAt}` under a different input contract; see [routines that call a Realm Function](#routines-that-call-a-realm-function-and-dispatch-scoped-replies--forward-looking).) |
 | `onType` | The function is a method on a declared type — callable as `<obj>.<name>(args)` on an in-scope object, not as a bare gateway function. The handler receives the object as `input.self` and the caller's arguments as `input.args`. `schedule` does not combine with `onType`: a scheduled invocation has no receiver. |
 
 A Trigger Registration has one discriminated identity everywhere it appears in adoption, dispatch,
