@@ -1354,6 +1354,13 @@ source until a shared document corpus exists.
 unaided. A source behind OAuth, with a change feed, or needing a multi-step export (a Drive folder, a
 Notion workspace) still uses a handler and `ctx.ingest.*` ([`EXTERNAL_DOCUMENTS.md`](EXTERNAL_DOCUMENTS.md) §6).
 
+**Validation reads `sources.yml` as strictly as a producer.** A value outside a field's vocabulary
+(`visibility: publc`, `ordering: version-order`) is an error at that field — reported, never quietly
+read as the default, because the default is the dangerous reading: `unordered` switches off the bias
+detection an ordered source needs, and `private` hides a label meant to be public. A source missing
+its `name` is an error at its own path, and does not take the rest of the file with it. A misspelled
+key is a warning that names the key it was probably meant to be.
+
 ## `reference/`
 
 Reference (catalog / config) data a realm **brings into the KG** — the set of entities a realm's types describe that should exist regardless of what the user has done. Where `producers/` fetch data on demand and `populate` mirrors an external system, `reference/` seeds a fixed, realm-authored dataset: a controlled vocabulary, a lookup catalog, a set of well-known entities. Each `.yml` file in `reference/` is a list of records seeded (idempotently) into the KG on world load.
@@ -1852,6 +1859,11 @@ back, logs it, or records it in the grant.
 
 A channel in a captured realm references a credential exactly as an `apis/` entry does. The channel
 files themselves are described under `channels/`, which does not yet cover the captured form.
+
+**Validation refuses a `keys.yml` field it would have to drop.** A field with no `variable` is an
+error at its path rather than a key that silently does not exist; a misspelled key is a warning naming
+the likely intended one; a `validate` naming an API or operation the realm does not declare is a
+warning.
 
 ## `src/` and `tests/` — hand-authored TypeScript handlers
 
