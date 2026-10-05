@@ -317,12 +317,16 @@ Two budgets apply, both counted by the host:
   in flight at a time.
 - **Per day.** Each Realm in each World has a cap on calls and output tokens per UTC day. The
   reference defaults are 50 calls and 100,000 output tokens. The owner may set a Realm's own caps,
-  and zero in either turns the call off for that Realm. A call's output tokens count as the bound
-  it was given.
+  and zero in either turns the call off for that Realm.
 
-The output bound a call gets is the smallest of what it asked for, what is left of the dispatch's
-budget, what is left of the day's cap, and the output limit the operator or persona set for the
-model. A Realm's bound can lower the operator's limit and never raises it.
+The host reserves output tokens before the model is asked. The dispatch budget is charged the
+smaller of what the call asked for and what is left of that budget. The day's cap is then charged
+the smaller of that amount and what is left of the day. The model is held to the smaller of the
+day's charge and the output limit the operator or persona set for the model. Both charges are
+made before that limit applies, so a call can be charged more tokens than its model may write. A
+charge is kept when the model writes less, when the call fails, and when the day's cap refuses
+the call after the dispatch budget was charged. A Realm's bound can lower the operator's limit
+and never raises it.
 
 A refusal reaches the guest as `{"error": "host call refused", "code": "<code>"}`. In a Wasm
 guest the call rejects with an error whose `code` is one of:
@@ -502,10 +506,15 @@ move work into the foreground.
 What a Realm can observe:
 
 - **Priority.** Wherever background and interactive dispatches wait for the same capacity, the
-  interactive ones are served first. Background work together holds at most a share of each
-  host pool, half in the reference host, so an interactive call can always get in. A call nested
-  under a background dispatch is served ahead of other background work, so a dispatch waiting on
-  its nested call is not held up behind other background dispatches.
+  interactive ones are served first. Background dispatches that are not nested hold at most a
+  share of each host pool, half in the reference host. A call nested under a background dispatch
+  is served ahead of other background work, so a dispatch waiting on its nested call is not held
+  up behind other background dispatches.
+- **Nested allowance.** Each chain may run one nested background call past the share at a time.
+  All background work together, nested calls included, then holds at most a larger nested limit.
+  In the reference host the nested limit for dispatch slots is one slot below the pool, and never
+  below the share. With four slots, two background roots and one nested call can hold three. A
+  second nested call in the same chain waits under the share like any other background dispatch.
 - **Waiting.** A background dispatch that finds its share full waits, up to the host's admission
   timeout, 5 seconds in the reference host.
 - **Refusal.** Past that wait the dispatch is refused. It is refused at once when its own chain
@@ -594,7 +603,7 @@ The reference profile supports:
 | Validation | Types, required fields, enum and string-length limits; numeric ranges and regex annotations remain provider validation. |
 | Authentication | API key in a query parameter or header, HTTP bearer token, the credential in the URL path (`auth: path`), or no credential for a public read ([`auth: none`](#keyless-reads)); optional fixed `X-` headers and an optional [`User-Agent`](#the-user-agent-header). |
 | Transport | The assembled request URI is bounded; a non-2xx provider status, unsupported content encoding, or a response exceeding the transport's own deadline all refuse the call — a small valid JSON payload alone does not guarantee acceptance. |
-| Response | At most 1 MiB, decoded by the operation's [response type](#response-types): JSON unless the Realm or its document says otherwise; binary is refused; common credential echoes and diagnostic exception text are refused. |
+| Response | At most 1 MiB, decoded by the operation's [response type](#response-types): JSON unless the Realm declares another type; binary is refused; common credential echoes and diagnostic exception text are refused. |
 
 The initial implementation rejects unsupported auth schemes, parameter references, alternative
 servers, a read operation carrying a mutation, and credential injection into HTTP
@@ -738,10 +747,10 @@ it. The guest receives:
 | Declared type | The guest receives |
 | --- | --- |
 | `application/json`, any `+json` type | The document. An empty body is `null`. |
-| `application/x-ndjson`, `application/jsonl`, `application/json-seq` | `{records, truncated}`. Each record is one JSON object. A last record cut off before its line ends is dropped, and `truncated` is then `true`. |
-| `application/xml`, `text/xml`, any `+xml` type | `{"<root>": element}`, described below. |
+| `application/x-ndjson`, `application/jsonl`, `application/json-seq` | `{records, truncated}`. Each record is one JSON object. A record cut off before its line ends, the last NDJSON or JSON Lines line or any `json-seq` record, is kept when it is one whole object within the line limit. Otherwise it is dropped and `truncated` is `true`, while the records before it are returned. |
+| `application/xml`, `text/xml`, any `+xml` type | `{"<root>": element}`, described below. An empty body is `null`. |
 | `text/csv` | `{header, rows}`. Each row is a list of strings, read as RFC 4180, and rows may differ in length. With `header=present`, `header` is the first row. With `header=absent` or no parameter, `header` is `null` and every row is data. |
-| `application/yaml`, `application/x-yaml`, any `+yaml` type | The document. Anchors, aliases, tags and a second document are refused. |
+| `application/yaml`, `application/x-yaml`, any `+yaml` type | The document. An empty body is `null`. Anchors, aliases, tags and a second document are refused. |
 | `application/x-www-form-urlencoded` | An object of strings. A key that repeats holds an array of its values. |
 | `text/plain`, any other `text/` type | One string. |
 
@@ -773,7 +782,8 @@ the reply's own `Content-Type` and its body as a string, which the Realm's own c
 The declared type may be any type the host does not count as binary, such as
 `application/atom+xml`, or a range covering all types (`*/*`), all text types (`text/*`) or all
 application types (`application/*`). The reply must still be text: a binary
-`Content-Type` is refused whatever was declared.
+`Content-Type` is refused whatever was declared. An empty body arrives as `contentType: null` and
+`text: ""`, whatever `Content-Type` the reply carried.
 
 **Binary is refused.** A declaration naming a binary type, `image/*` included, refuses the whole
 file, raw or not. The host does not hand a guest binary bodies in any encoding.
@@ -796,9 +806,19 @@ The body is decoded as UTF-8 unless its `charset` names US-ASCII or ISO-8859-1. 
 is refused. The credential echo check runs on the decoded text and again on every decoded string
 and key.
 
-Each response type has limits on body bytes, record count, the longest line or value, and nesting
-depth. The reference defaults are 1 MiB, 10,000 records, 64 KiB and 32 levels, and the
-transport's 1 MiB limit applies first. A reply past a limit is refused whole.
+Every response type has a limit on body bytes. Each format adds the limits that fit it:
+
+- JSON: nesting depth and the longest string.
+- Record streams: record count, the longest record, and each record's depth.
+- XML: element count, the longest text or attribute value, and depth.
+- CSV: row count and the longest row.
+- YAML: depth and the longest scalar.
+- Form: pair count and the longest pair.
+- Text and `raw`: body bytes only.
+
+The reference defaults are 1 MiB of body, 10,000 records, rows, elements or pairs, 64 KiB for the
+longest line or value, and 32 levels. The transport's 1 MiB limit applies first. A reply past a
+limit is refused whole, except for the cut-off record a record stream drops.
 
 The host refuses the whole `apis/apis.yml` when a `responses:` entry:
 
@@ -963,28 +983,41 @@ no migrations keeps the behaviour of `init` alone.
 With `persistent: true` the host keeps state for each World, Realm and dependency name. Two
 Worlds never share state, even when they install the Realm from the same checkout.
 
-The state is a series of generations, and one pointer selects the current one. A dispatch mounts
-the generation selected when it first calls the dependency. It publishes a new generation only
-when the dispatch succeeds, its result passes validation, and the state changed. A failed,
-refused, cancelled or timed-out dispatch publishes nothing, and the selected generation stays
-current. State larger than the host's limit, 64 MiB in the reference host, fails the dispatch and
-keeps the previous generation. A generation recorded under a different module, version or digest
-is reported to the owner. The host neither reuses nor wipes it.
+A dispatch mounts the state most recently published when it first calls the dependency, and sees
+that one whole published state for the rest of the dispatch. Writes from other dispatches never
+appear partway through. A dispatch publishes its state only when it succeeds, its result passes
+validation, and the state changed. A publish replaces the whole state at once, so no dispatch
+mounts part of one publish. A failed, refused, cancelled or timed-out dispatch publishes nothing,
+and the state published before it stays current. State larger than the host's limit, 64 MiB in
+the reference host, fails the dispatch and keeps the previous state. State recorded under a
+different module, version or digest is reported to the owner. The host neither reuses nor wipes
+it.
+
+When the published state cannot be read whole and no earlier whole state remains, the dependency
+call fails fatally. The dispatch stops, the guest is handed no reply it could catch, and nothing
+is published. Every dispatch that mounts that state stops the same way until an operator repairs
+it. The host does not start over from empty state, since that would lose the Realm's data. The
+reference host logs this as `dependency-state-unreadable`.
 
 ### Concurrent dispatches
 
 Dispatches against one persistent dependency may run at the same time. A dispatch can come to
-publish and find that another dispatch published after it mounted. The host then does one of two
-things:
+publish and find that another dispatch published after it mounted. A publish is conditional on
+the state it was based on: when that state is no longer the latest, the publish is not applied
+over it. The host then does one of two things:
 
-- **Replay.** When the kind's replay rules accept the dispatch's writes, the host restores the
-  newer generation, applies any setup versions it lacks, runs the dispatch's recorded writes again
-  on it, and publishes the result. Both dispatches' writes are kept.
+- **Replay.** When the kind's replay rules accept the dispatch's writes, the host takes the newer
+  state, applies any setup versions it lacks, runs the dispatch's recorded writes again on it, and
+  publishes the result. Both dispatches' writes are kept.
 - **Discard.** Otherwise the dispatch's writes are not kept, and the host logs the reason.
 
-Either way the guest's answer stands. It was computed over the generation the dispatch mounted,
-and the host does not run the handler again. A dispatch in which a dependency call failed fatally
-never publishes, into the generation it read or into a newer one.
+A publish can also be discarded when the latest state moves again during the publish, or when the
+publish takes too long to complete, even if no other dispatch published. Its writes are then not
+kept, and the state published before it stays current.
+
+Either way the guest's answer stands. It was computed over the state the dispatch mounted, and
+the host does not run the handler again. A dispatch in which a dependency call failed fatally
+never publishes, over the state it read or over a newer one.
 
 The `sqlite` kind replays `INSERT OR REPLACE`, `REPLACE` and `INSERT ... ON CONFLICT ... DO
 UPDATE` statements on tables that have a primary key or a full unique index. It refuses to replay
@@ -992,9 +1025,11 @@ a dispatch that wrote any other statement, wrote a table without such a key, or 
 wrote one table. A Realm whose writes can race should write them as keyed upserts, so they survive
 a lost race.
 
-The reasons the reference host logs are `UNREPLAYABLE_WRITES`, `NOT_REPLAYABLE`, `REPLAY_FAILED`,
-`NEWER_GENERATION_INCOMPATIBLE` and `POINTER_MOVED`, with a detail from the kind beside them, such
-as `NOT_REPLAYABLE (unkeyed-table)`. The guest is told none of them.
+The reasons the reference host logs for a discarded publish are `UNREPLAYABLE_WRITES`,
+`NOT_REPLAYABLE`, `REPLAY_FAILED`, `NEWER_GENERATION_INCOMPATIBLE`, `POINTER_MOVED` and
+`LEASE_EXPIRED`, with a detail from the kind beside them, such as `NOT_REPLAYABLE
+(unkeyed-table)`. The guest is told none of them, and its answer stands. These differ from
+`dependency-state-unreadable`, which stops the dispatch before it answers.
 
 ### Batch calls
 
@@ -1025,7 +1060,8 @@ a batch.
 
 A dependency call the host cannot serve answers with an error that names what refused it. When
 the memory the host sets aside for natively compiled modules is spent, the error names
-`native-memory-exhausted`.
+`native-memory-exhausted`. A fatal failure, such as unreadable persistent state, gives the guest
+no error to catch and ends the dispatch.
 
 A dependency kind whose state is a set of files, and a file API for handlers, are not yet
 specified.
@@ -1044,7 +1080,7 @@ in the main specification:
 | Scheduled API-to-channel handlers | Captured schedules, approved GET operations, durable publication and consumer replay, including poller cursor persistence through `gateway.channel.position`/`publishBatch`. |
 | Captured callback to an approved sibling | Implemented within the same installation. |
 | Captured API operations and wallet bindings | Implemented for the read (GET) and write (`post`/`put`/`patch`/`delete`) profiles, each under its own grant, with keyless reads and declared response types. |
-| [Module dependencies](#module-dependencies) | `sqlite` and `pure-compute` kinds, persistent generations with replay, setup migrations and pure-compute batches. |
+| [Module dependencies](#module-dependencies) | `sqlite` and `pure-compute` kinds, persistent state with conditional publish and replay, setup migrations and pure-compute batches. |
 | [The model call](#the-model-call) | Owner-granted `ai_complete` under per-dispatch and daily budgets. |
 | [Scheduled handlers](#scheduled-handlers) | Each schedule under its own owner grant, run in the background class. |
 | Captured handler lenses | Versioned same-installation bindings; bounded JSON results, original-target refresh and prepared background runs. Completion and response checks retain admission; revocation clears stored data. Active work and settled storage are capped. Cache reuse is disabled. Opt-in content results hydrate owned focus under retained graph approval and select compatible built-in views; executable presentations are excluded. |
@@ -1716,15 +1752,19 @@ per app and per user. It removes them when the app's approval goes away or the r
 revoked. The reference limits are:
 
 - 64 keys per app and user.
-- Keys of 1 to 128 characters drawn from `[A-Za-z0-9_.:-]`.
+- Keys of 1 to 128 characters drawn from `[A-Za-z0-9_.:-]`, starting with a letter or digit.
 - Values up to 4 KiB each and 32 KiB in total.
 - 1,024 preference requests per session.
 
-A refused request rejects with one of these codes: `preference_key_invalid`,
-`preference_value_invalid`, `preference_value_too_large`, `preference_too_many_keys`,
-`preference_total_too_large` or `preference_busy`. Preference requests are serialized with
-`realm.call`, one at a time and in order, and at most 32 can wait. A request beyond that
-limit is refused with `preference_busy`.
+A request refused for a key, value, storage or queue limit rejects with one of these codes:
+`preference_key_invalid`, `preference_value_invalid`, `preference_value_too_large`,
+`preference_too_many_keys`, `preference_total_too_large` or `preference_busy`. Any other
+failure rejects with no code. That covers a request past the session's limit, a request that
+times out, and a host that cannot be reached.
+
+Preference requests run one at a time, in the order the app made them, and at most 32 can wait.
+A request beyond that limit is refused with `preference_busy`. Preference requests are not
+ordered with `realm.call`: a preference request made after a handler call can settle before it.
 
 The host renders the frame document with the page's own doctype first, or with
 `<!doctype html>` when the page has none, so apps render in standards mode.
