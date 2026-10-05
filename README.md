@@ -873,6 +873,48 @@ So `WHERE i.html_url CONTAINS 'acme-corp/widgets'` turns `is:issue author:X {fil
 >
 > Before declaring a `pushdown:` rule, call the source twice — once with the filter, once without — and confirm the **counts differ**. Declare rules only for keys you have proven narrow, and say so in a comment. When a source's filter surface is partly unsupported, the honest producer declares the few verified keys and leaves the rest to graph-side filtering; document which properties do *not* push down, because a query author will otherwise assume a `WHERE` on any property is cheap.
 
+##### Declared pushdown for query, table, file and feed producers
+
+`remote` is not the only kind that can filter at its source. A `sparql`, `sql`, `cypher`, `tabular` or `feed` producer declares `pushdown:` too. Each entry names a property the source can filter on, the operators it applies, and the type its values take at the source:
+
+```yaml
+- kind: sparql
+  name: saintsOfCountry
+  endpoint: https://query.wikidata.org/sparql
+  keyVar: country
+  query: |
+    SELECT ?country ?saint ?died WHERE {
+      VALUES ?country { {{keys}} }
+      ?saint wdt:P27 ?country ; wdt:P570 ?died .
+      {{filter:died}}                       # the filter goes HERE, before the label lookups
+      ?saint rdfs:label ?saintLabel . FILTER(LANG(?saintLabel) = "en")
+    }
+  pushdown:
+    - property: died
+      type: dateTime                        # string | integer | decimal | boolean | date | dateTime | iri
+      ops: [GREATER_THAN_OR_EQUAL, LESS_THAN]   # omit to allow every operator the type supports
+```
+
+Where the filter goes depends on the kind:
+
+| Kind | Where the filter is applied |
+|---|---|
+| `sparql` | At its `{{filter:<property>}}` slot, as `FILTER(<expr> <op> <literal>)`. `expr` defaults to `?<property>`. For an aggregate, declare `having: true` with the aggregate as `expr` (`expr: "COUNT(DISTINCT ?s)"`, slot after `GROUP BY`), and the slot renders `HAVING(…)`. |
+| `cypher` | At its `{{filter:<property>}}` slot, as ` AND (<expr> <op> $param)`, so place it after an existing condition (`WHERE o.customer IN $keys {{filter:total}}`). `expr` is required (`expr: "o.total"`). |
+| `sql` | Appended to the generated statement as `AND (<column> <op> :param)`. The property is the column. No `expr`: the statement stays generated. |
+| `tabular`, `feed` | Applied while reading, before a row becomes a record or counts against a per-key cap. A feed filters on `title`, `url`, `publishedAt` or `summary`. |
+| `generative`, `aggregate`, `agentic-rag` | Not supported. Every predicate is applied after the fetch. |
+
+The operators are `EQUALS`, `CONTAINS` (text only), `GREATER_THAN`, `GREATER_THAN_OR_EQUAL`, `LESS_THAN`, `LESS_THAN_OR_EQUAL` and `IN`.
+
+Rules:
+
+- **Only the author knows where the filter saves work.** The host can always wrap a query and filter its result, but that saves the source nothing. The slot puts the filter inside the query, before the expensive part. If nothing is pushed, the slot renders as empty text.
+- **The host binds or escapes every value; none is spliced in raw.** Each value is parsed as the declared `type` and written from the parsed value: a typed RDF literal (`"20"^^xsd:integer`, an `xsd:dateTime`, an escaped string), or a bound SQL or Cypher parameter. A value that does not parse as its type, or an operator the entry does not list, is not pushed. It stays a filter the graph applies after the fetch and never causes an error.
+- **The cache key holds exactly the predicates pushed.** A predicate the producer pushes changes what the source returns, so it is keyed. A predicate it does not push shares the cached fetch with the unfiltered query.
+- **A pushed filter must be exact.** The graph still applies every predicate after the fetch, so a looser source filter only costs extra rows. A stricter one, such as an equality that misses a language-tagged literal, loses rows nothing can recover. Compare through the expression that makes the source agree with the graph, for example `expr: "STR(?label)"`.
+- **Validation.** `realm_validate` reports an error for a declared entry whose slot is missing from the query, and for an entry the kind cannot honour (`having` without `expr`, a `cypher` entry without `expr`, an `sql` entry on a stored procedure or an unexposed column, a field a feed item does not have). It warns about a slot with no entry, and about a declared property the query does not appear to project.
+
 **`project` paths: use `[*]`, never `[0]`.** An INDEXED path is not honoured and projects **null silently** — no warning, no error, just an empty property, and any predicate over it then drops every row. Only the `[*]` form reaches into a nested array, and it yields a **list**, so a single-valued nested field arrives as a one-element list the consumer must unwrap. Write `address: "Location[*].FullAddress"`, not `Location[0].FullAddress`. (Verified 2026-07-28: with `[0]`, every address and coordinate in a fetched collection was null while the flat scalar fields projected fine — the kind of defect that reads as "the source didn't return that field".)
 
 **`project` takes paths, not expressions.** A JSONPath filter (`steps[?(@.conclusion=='failure')].name`) or function (`steps.length()`) projects **null silently**, exactly like an indexed path. Project the parallel lists (`step_names: "steps[*].name"`, `step_conclusions: "steps[*].conclusion"`) and derive in Cypher: `[i IN range(0, size(j.step_names) - 1) WHERE j.step_conclusions[i] = 'failure' | j.step_names[i]]`.
