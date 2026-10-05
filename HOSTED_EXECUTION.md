@@ -596,7 +596,7 @@ The reference profile supports:
 
 | Declaration | Support |
 | --- | --- |
-| Specification | Vendored OpenAPI 3 JSON under `apis/`; no remote documents or external references. |
+| Specification | Vendored OpenAPI 3 document under `apis/`, as JSON (`.json`) or YAML (`.yaml`, `.yml`); YAML carries no alias, anchor, tag or second document. No remote documents or external references. |
 | Destination | One fixed HTTPS origin per API, port 443, validated public addresses and verified TLS hostname; no redirects. |
 | Operations | Explicit GET operation IDs for reads, at most 128 per Realm; `post`/`put`/`patch`/`delete` operation IDs for writes under the [write-operation profile](#write-operations), each under its own grant. |
 | Arguments | At most 64 scalar path/query parameters and 64 KiB JSON; a read operation takes no request body and no caller headers beyond the fixed set below. Each string argument is checked for a path-safe alphabet or a nonempty, control-free string as its location requires, capped at 2,048 characters; `body` is a reserved argument name a read operation cannot use; an integer is bounded to a signed 64-bit value and a number must be finite. |
@@ -679,7 +679,7 @@ An entry for a public API declares `auth: none`:
 ```yaml
 - name: wikibooks
   type: openapi
-  url: wikibooks.json
+  url: wikibooks.yml
   auth: none
   operation-ids: [getPage]
 ```
@@ -725,7 +725,7 @@ Reads and writes both take an entry.
 ```yaml
 - name: lichess
   type: openapi
-  url: lichess.json
+  url: lichess.yml
   auth: bearer
   credential: lichess
   operation-ids: [mastersExplorer, playerExplorer, openings, feed]
