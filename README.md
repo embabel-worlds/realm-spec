@@ -601,7 +601,7 @@ For `kind: remote`, `queryArgs` declares optional scalar request inputs (`string
 `number`, `boolean`), supplied as `realm` values on the edge. Undeclared, ambiguous or invalid
 inputs are rejected, not silently dropped. `sourceFilters` lists filter-capable source fields;
 listing one does not send it. An unsent condition on a declared filter can yield
-`FILTER_NOT_PUSHED` when a bounded read cannot establish a match (see Virtual Cypher §7.2.2).
+`UNPUSHED_FILTER` when a bounded read cannot establish a match (see Virtual Cypher §7.2.2).
 
 Producer `kind`s:
 
