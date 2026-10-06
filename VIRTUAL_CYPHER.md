@@ -120,9 +120,8 @@ These distinctions appear in the result envelope next to `rows` and `warnings`. 
 |---|---|---|---|
 | `fetchedRecords` | integer | on query, ask and saved-view results (the admin REST endpoints omit a zero) | Records the producers returned before query-side filtering, cache-served ones included. |
 | `materializedNodes` | integer | on query, ask and saved-view results (the admin REST endpoints omit a zero) | Graph nodes made available to the query from those records. |
-| `aggregate` | boolean | only when `true` | The query computes an aggregate (`count`, `sum`, …). Under an incompleteness warning its figures are not totals. The query text itself can stay withheld. |
 | `answerBoundary` | object `{kind, unresolvedQuestion?}` | only on a non-empty record card | `kind: SUPPORTING_CONTEXT_ONLY`: the rows support the lookup but do not answer its original filter. `unresolvedQuestion` restates what is still unanswered. |
-| `cypher` | string | an ask result (`kg_ask`): on an empty result, a requested explanation, or a record card. A saved-view result: only on a requested explanation. A direct query (`kg_query`) never echoes it, since the caller wrote it. The admin REST query endpoints always include it. | The executed query. Without it, `aggregate` still tells a computed total from a list. |
+| `cypher` | string | an ask result (`kg_ask`): on an empty result, a requested explanation, or a record card. A saved-view result: only on a requested explanation. A direct query (`kg_query`) never echoes it, since the caller wrote it. The admin REST query endpoints always include it. | The executed query, when present. |
 
 ```json
 { "rows": [], "warnings": [], "fetchedRecords": 12, "materializedNodes": 12,
@@ -2928,13 +2927,11 @@ is classified and surfaced as a warning on the result:
 | `MATERIALIZATION_FAILED` | the source returned data the graph could not store | the records **exist** but are missing from the result, so an answer of "none" is definitely wrong. The fix is the engine's, not the caller's. |
 | `REDUCTION_FAILED` | an `aggregate` reduction or an `extract` call failed | the anchor's reduced or extracted records are **absent**, not empty. Retried on the next traversal. |
 
-A row is not proof of a complete answer. A single-value aggregate — `count = 0` included — is
-inconclusive and withheld when the same result carries any diagnostic that leaves the facts
-incomplete (`NEEDS_FILTER`, `UNPUSHED_FILTER`, `PARTIAL_RESULT`, `MATERIALIZATION_FAILED`,
-`INCOMPLETE_TRAVERSAL`, a failed fetch, reduction or computation). List rows under the same
-diagnostics remain usable as a partial result; the diagnostic still prevents a claim that the
-returned set is complete. An empty result is not absence when records were fetched but none
-matched, or when `FILTER_STARVED` reports that the query's filters rejected every fetched
+A row is not proof of a complete answer. Rows and totals from an incomplete read are retained as
+`PARTIAL` and accompanied by an `incomplete` explanation; they are not presented as complete
+totals. The diagnostic still prevents a claim that the returned set is complete. An empty result
+is not absence when records were fetched but none matched, or when `FILTER_STARVED` reports that
+the query's filters rejected every fetched
 candidate; such a result carries `FETCHED_NOT_MATCHED`. The exception is a read the engine
 reports as complete with an unsent filter applied in the graph: that empty is exact and does not
 carry `UNPUSHED_FILTER`. A direct query result reports how many
