@@ -2305,7 +2305,7 @@ embabel-realm sync ~/dev/realm-hubspot     # or pass an explicit path
 > legacy user/workspace scope alternatives. The guarantees below are release gates for multi-world
 > and shared-store deployment, not a description of current isolation.
 
-Canonical terminology is defined in the [Realm domain glossary](./CONTEXT.md).
+Canonical terminology is defined in the [Realm domain glossary](./GLOSSARY.md).
 
 The portable rule is simple: **isolate by world and context; authorize every execution as exactly one
 principal.** A world may admit several human and service principals. Concurrent executions of the
