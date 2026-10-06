@@ -51,7 +51,7 @@ realm-name/
 │   └── my-producers.yml
 ├── reference/            # Reference/catalog data seeded into the KG on load (YAML, optional)
 │   └── my-reference.yml
-├── views/                # Named Cypher views (YAML, optional) — appear in the console Views list
+├── views/                # Named Cypher views (YAML, optional) — runnable by name, and a node view composes as a label
 │   └── my-views.yml
 ├── rules/                # DERIVE rule sets (YAML, optional) — derived labels/relationships, one rule set per file
 │   └── my-rules.yml
@@ -1096,6 +1096,70 @@ for (const p of busy) {
 ```
 
 `params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below. Virtual Cypher calls are available to a captured handler once the owner separately approves `cypher_query`, following [the captured graph-query profile](HOSTED_EXECUTION.md#me-captured-graph-query-profile).
+
+## `views/` — saved queries, and the two shapes they come in
+
+A realm ships named Cypher queries under `views/*.yml`. They appear in the console's Views list and
+are runnable by name, which is most of what they are for. The part that is easy to miss is that one
+of the two shapes **composes**: its name is a label, and a larger query may match it.
+
+```yaml
+# views/key-accounts.yml
+- name: KeyAccounts
+  description: Contacts worth more than £100k ARR, whoever owns them.
+  cypher: |
+    MATCH (me:AssistantUser)-[:HAS_HUBSPOT_OWNER]->()-[:OWNS_CONTACT]->(c:HubSpotContact)
+    WHERE c.arr > 100000
+    RETURN c
+```
+
+```cypher
+-- Used as a label. The view's MATCH clauses are inlined, and `c` is a HubSpotContact like any other.
+MATCH (c:KeyAccounts) WHERE c.renewalDate < date('2026-12-01')
+MATCH (c)-[:HAS_HUBSPOT_DEAL]->(d:HubSpotDeal)
+RETURN c.email, d.name
+```
+
+**Node view, or tabular view. The body decides, not a flag.**
+
+| | Body | Used as |
+|---|---|---|
+| **Node view** | `MATCH … RETURN <one bare node variable>` | a label **or** by name. COMPOSES. |
+| **Tabular view** | a projection — `RETURN c.email AS email, count(d) AS deals` | by name only. TERMINAL. |
+
+A node view yields nodes of exactly one type and keeps their identity, so the view's name reads as a
+named subtype: `KeyAccounts ⊆ HubSpotContact`. A tabular view's rows are not nodes, so matching it as
+a label cannot answer — and is refused at validation rather than quietly returning nothing.
+
+**The type may be VIRTUAL, and referencing the view materializes it.** This is the composition worth
+knowing about: a node view whose body traverses a declared join to a virtual type is, as a label, a
+way to say "these fetched records" once and reuse it. `MATCH (a:NdisDisabilityFilers)` expands the
+view, materializes its `AisReturn`s through their producer, and the rest of the query treats them as
+the §2 execution model always does — transient, rolled back with the read.
+
+Two consequences follow from the fact that a reference is an INLINE of the body, not a subquery:
+
+- **A view's own variables are private.** Only the returned variable becomes the caller's alias;
+  every other variable the body declares is renamed per use. Two uses of one view in a query never
+  share its internals, and a caller's `c` never meets the body's.
+- **The anchor rules still apply, through the view.** A view does not grant a virtual label a bound
+  anchor it would not otherwise have: what the body writes is what the engine sees. A body that pins
+  its anchor composes the way the same query would written out longhand.
+
+| Field | Required | Description |
+|---|---|---|
+| `name` | yes | What it is run and matched by. A node view may NOT be named like a label the world already holds — matching that label anywhere, including inside other views, would silently come to mean "the nodes this view selects". |
+| `cypher` | yes | The body. Standard Cypher, parsed by the real parser; there is no `DEFINE VIEW` statement and no subquery form. |
+| `description` | no | What it answers, for the Views list and for a model choosing between views. |
+| `params` | no | Declared bind values, each with a `type` (`string`, `int`, `number`, `float`, `double`, `boolean`, `date`), a `description`, and ideally a `default` so the view stays runnable bare. One value each: a view needing a list reads it inside its own body rather than taking `IN $p`. |
+| `outputLabel` | inferred | The type a node view's rows are. **Inferred** when the body returns a single bare node variable, which is why most views never declare it. REQUIRED on a `materialized` view, where there is nothing to infer from until the body runs. |
+| `materialized` | no | `false` (default) expands the body at query time, always fresh. `true` commits the result and reads the cache until the TTL expires — the interactive query then does no producer calls at all. |
+| `ttl` | no | Cache lifetime for a materialized view (`30m`, `2h`, `1d`). Default `1h`. Ignored when regular. |
+
+**What is refused, rather than answered wrong:** a tabular view matched as a label; a node view named
+like an existing label; an argument the view never reads; a fractional number for an `int` parameter;
+and a label in the body that is a near miss for one the realm knows (`GitHubIsue` beside
+`GitHubIssue`), reported at the view's file and line.
 
 ## `lenses/`
 
