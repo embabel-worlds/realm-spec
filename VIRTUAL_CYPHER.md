@@ -1207,10 +1207,11 @@ with a `FOLLOW_CAPPED` note naming the budget, how many items went unread, and t
 items is never mistaken for a complete search. **A filter never answers for a page nobody opened.**
 A `WHERE` that reads a followed field (`m.content IS NULL`, `NOT m.content CONTAINS …`, as much as
 `CONTAINS`) leaves the unread items out rather than judging their missing text, and the note says
-how many were left out and that an aggregate over the filtered rows is a LOWER bound. A query that
-only projects the field keeps every item, with the field null where its page went unread, and the
-note says whose value is unknown — a `count()` of the rows stands, a `count`/`collect` over the
-field is a lower bound. Speaker-attributed transcript prose survives inside
+how many were left out and that a count over the filtered rows is a LOWER bound, while a total,
+average, minimum or maximum over them describes only the items read and may be off in either
+direction. A query that only projects the field keeps every item, with the field null where its
+page went unread, and the note says whose value is unknown — a `count()` of the rows stands, a
+`count`/`collect` over the field is a lower bound. Speaker-attributed transcript prose survives inside
 the windows, which is the point: `summarize(m.content, '…')` over followed Hansard fragments can
 honestly answer "what was discussed, and by whom". Follow knobs are ceiling-clamped (pages ≤ 5,
 excerpt ≤ 8000 chars) and page fetches ride the same pace gate as the feed itself.
@@ -1311,8 +1312,9 @@ unbounded `*` is additionally capped at 10 hops.
 
 **Degradation.** If the walk stops short of the query's declared depth — budget, frontier width,
 or the unbounded-`*` cap — the result carries an `INCOMPLETE_TRAVERSAL` warning naming the hop
-reached and the bound hit. Results then cover only the hops walked and any subtree total is a
-**lower bound**. Nothing is ever silently truncated; a tree that simply ends, or ends exactly at
+reached and the bound hit. Results then cover only the hops walked: a count over the subtree is a
+**lower bound**, while a total, average, minimum or maximum over it describes only the hops walked
+and may be off in either direction (an unwalked value can be negative, or the extreme). Nothing is ever silently truncated; a tree that simply ends, or ends exactly at
 the declared depth, carries no warning.
 
 **Per-hop provenance.** Every edge the traversal fetched carries three queryable properties:
@@ -3176,10 +3178,10 @@ is classified and surfaced as a warning on the result:
 | `PRODUCER_ERROR` (`FETCH_FAILURE`) | a timeout, a missing gateway tool, a non-auth error | the source could **not** be reached — *not* "no data". Fix the integration. |
 | `PRODUCER_ERROR` (`RATE_LIMITED`) | the source throttled the call (an HTTP 429) | the source is up and the credentials are fine — the result is **unanswered, not empty**. Ask again shortly, or pin a specific entity so fewer calls are needed. Never "reconnect". |
 | `PRODUCER_ERROR` (`AUTH_EXPIRED`) | a 401 / "token expired" / `EXPIRED_AUTHENTICATION` | the OAuth token has **expired** — reconnect to refresh. The empty result is because the source rejected the call. |
-| `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page; a call budget ran out mid-fan-out; a declared floor or gate dropped records | the fetch **succeeded but is incomplete** — the source has more. *Not* a failure. The detail says which cause, because the fixes differ: raise the cap, or simply ask again (a budgeted run keeps its completed work and resumes rather than restarting). |
+| `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page; a call budget ran out mid-fan-out; a declared floor or gate dropped records | the fetch **succeeded but is incomplete** — the source has more. A count over it is a **lower bound**; a total, average, minimum or maximum describes only the records fetched and may be off in either direction. *Not* a failure. The detail says which cause, because the fixes differ: raise the cap, or simply ask again (a budgeted run keeps its completed work and resumes rather than restarting). |
 | `PARTIAL_RESULT` (`NOT_FOUND`) | the source answered a definitive 404 for one key of a fan-out | that key **does not exist** — as opposed to "we could not find out", which is `FETCH_FAILURE`. The answer is short by exactly the named keys; the source is not down, and the other keys' rows are good. |
-| `PARTIAL_RESULT` (`DERIVED_LOWER_BOUND`) | a DERIVE rule set concluded while the facts its rules read were themselves incomplete (another diagnostic fired, or a demand went unmet) | membership and any aggregate over it are a **lower bound, not a total**. The fixpoint is correct over what was materialized and says nothing about what was not — a rule body cannot fetch (§13.6). Not a failure, and not "nothing was derived". |
-| `INCOMPLETE_TRAVERSAL` | a variable-length traversal (§5.12) stopped short of its declared depth | the warning names the hop reached and the bound hit (`maxFanoutTotal`, frontier width, or the unbounded-`*` cap). Rows cover only the hops walked; any subtree total is a **lower bound**. |
+| `PARTIAL_RESULT` (`DERIVED_LOWER_BOUND`) | a DERIVE rule set concluded while the facts its rules read were themselves incomplete (another diagnostic fired, or a demand went unmet) | membership, and any count over it, is a **lower bound, not a total**; a total, average, minimum or maximum over the members describes only those concluded and may be off in either direction. The fixpoint is correct over what was materialized and says nothing about what was not — a rule body cannot fetch (§13.6). Not a failure, and not "nothing was derived". |
+| `INCOMPLETE_TRAVERSAL` | a variable-length traversal (§5.12) stopped short of its declared depth | the warning names the hop reached and the bound hit (`maxFanoutTotal`, frontier width, or the unbounded-`*` cap). Rows cover only the hops walked: a count over the subtree is a **lower bound**, while a total, average, minimum or maximum describes only the hops walked and may be off in either direction. |
 | `UNKNOWN_VIA` | an edge pinned `{via:'…'}` that no declared join offers | the rows are **real but came from a different join** than the one named. The query still answers — a via that does not exist must not cost a good answer — and the warning lists the vias that do exist so it can be re-issued. Matters most where several joins converge on one label, since the substitution is otherwise invisible. |
 | `AMBIGUOUS_LABEL` | the query named a parent label that more than one installed type answers to through the same edge | **nothing was fetched**, so the empty result is not "no data". The engine will not choose between a customer's two helpdesks on the caller's behalf; the detail names the types, so the query can be re-issued naming one. |
 | `NEEDS_FILTER` | a source that cannot be swept was asked without a narrowing predicate | the answer is **unknown until the query is narrowed** — not "no data". |
@@ -3711,9 +3713,10 @@ set's declared params, so depth is tunable per invocation with a default you cho
 
 **When the facts are incomplete anyway, the engine says so.** A rule set that evaluates while any
 fetch was capped, refused, truncated or left a demand unmet reports `PARTIAL_RESULT` and states that
-its membership — and any count or total over it — is a **lower bound**, naming the unmet demand
-where there is one. Report it to your reader as a lower bound; never present a derived count as a
-total. This is not a failure and not "nothing was derived".
+its membership — and any count over it — is a **lower bound**, naming the unmet demand where there
+is one. A total, average, minimum or maximum over the members is no bound at all: it describes only
+the members concluded and may be off in either direction. Report the count to your reader as a lower
+bound and the rest as covering only what was concluded; never present any of them as complete. This is not a failure and not "nothing was derived".
 
 **The rule of thumb:** make the fact set complete, and prefer making it complete *cheaply*. Loading
 the data (a local table, a promoted watchlist) beats demanding a deep walk, and a demand beats
