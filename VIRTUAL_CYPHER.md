@@ -108,22 +108,30 @@ outlives the run**:
    under the engine's reserved `__vc` prefix — still reads it. Both names are reserved to the
    engine, so hiding them never hides the caller's data.
 
-   **A fetched `userId` is exposed as `_sourceUserId`.** On every fetched node and brought child,
-   `userId` is the world scope, never the record's own field. A record's own `userId` is readable
-   as `_sourceUserId`, and the schema the generator is shown names it that way. A mirrored
-   source's persisted nodes store it under the same name. A type keeps declaring the source's own
-   field name, `userId`. A filter written on `_sourceUserId` reaches the source as
-   its `userId` field: a `pushdown:` rule keeps naming the source field (`property: userId`), and
-   a record screened before materialization is judged by that field. A fetched type or brought
-   child that declares both `userId` and `_sourceUserId`, uses `_sourceUserId` as its identity
-   while declaring `userId`, or uses `userId` as its identity is a load problem against the
-   declaring realm. Queries over such a realm still run, and the record's own `userId` is what
-   `_sourceUserId` holds. A type keyed by `userId` is identified by `_sourceUserId`: records with
-   the same source `userId` are one node, however often they are fetched, and a pin on
-   `_sourceUserId` finds it.
+   **A fetched record never sets the node's scope.** On every fetched node and brought child,
+   `userId`, `worldId`, `workspaceId` and `visibleTo` are the scope the world stamps, never the
+   record's own fields, so no source can hand a node to whichever user it names. A record's own
+   field of one of those names is readable under its alias: `userId` as `_sourceUserId`, `worldId`
+   as `_sourceWorldId`, `workspaceId` as `_sourceWorkspaceId`, and `visibleTo` as
+   `_sourceVisibleTo`. The schema the generator is shown names them that way. A mirrored source's
+   persisted nodes store a record's `userId` under the same name. A type keeps declaring the
+   source's own field name, `userId`. A filter written on an alias reaches the source as the field
+   it stands for: a `pushdown:` rule keeps naming the source field (`property: userId`), and a
+   record screened before materialization is judged by that field. A record field under the
+   engine's reserved `__vc` prefix is dropped: those names say which run may see a node, and a
+   record does not choose its own visibility.
+
+   A fetched type or brought child keyed by any of the four scope fields — the key would sit on a
+   property the record never fills — or one that declares a scope field and also declares or keys
+   on its alias, is a load problem against the declaring realm. Queries over such a realm still
+   run, and the record's own field is what its alias holds. A type keyed by `userId` is identified
+   by `_sourceUserId`: records with the same source `userId` are one node, however often they are
+   fetched, and a pin on `_sourceUserId` finds it.
 
 4. **Run.** Your full query now runs over the combined graph. `WHERE`, `ORDER BY`, `RETURN`,
-   aggregates — all of Cypher — apply to virtual nodes exactly as to real ones.
+   aggregates — all of Cypher — apply to virtual nodes exactly as to real ones. That includes
+   Unicode normalization: `normalize(s[, NFC|NFD|NFKC|NFKD])` and `s IS [NOT] [form] NORMALIZED`
+   answer over fetched records as over the same records stored, NFC when no form is written.
 
 5. **Roll back.** The virtual nodes vanish. A re-run re-fetches (cheap, because of caching).
    Nothing is ever persisted by a read query.
@@ -193,7 +201,8 @@ These are **rejected at plan time** (fail-closed), with a message:
 | `MATCH (p:Person)-[:HAS_HUBSPOT_CONTACT]->(hc)` with no predicate on `p` | **Unbound anchor** — `p` matches every person; the fan-out is unbounded. Pin or filter the anchor. |
 | `MATCH (i:Item)-[:MENTIONS]->(t:Tag)` where `Tag` is brought only via `TAGGED` | **Brought child off its declared edge** — a brought label is reachable only through the exact relationship its own `brings:` entry names, and only from the join whose target brought it. |
 | ``MATCH (`a b`:Repo)``, ``MATCH (`distinct`:Repo)`` | **A variable that needs backticks** — variables are plain names. Refused by name with the rename to use, never as a syntax error the caller did not make. A word that reads back bare (`count`, `match`, `all`) is a legal name; column aliases and property keys may be quoted as usual. |
-| `UNION`, `CALL { }` subqueries in a scoped query | Not scoped clause-by-clause by the rewriter → rejected. The refusal shows how to keep one statement: collect, concatenate and `UNWIND` for rows from two label sets (the second set optional, so an empty set keeps the other's rows), or aggregate one set, carry it through `WITH` and aggregate the other behind `OPTIONAL MATCH` for two totals in one row, or, for one row per group, `UNWIND` the distinct union of both sets' group keys and aggregate each set per key, so a group only one set has is kept. The `CALL { }` refusal carries the same shapes, and each refusal names the other construct as refused too, so a retry does not trade one refused construct for the other. |
+| `UNION` in a scoped query, including inside a `CALL { }` body | Each half is a separate scope, which the rewriter does not scope clause-by-clause → rejected. The refusal shows how to keep one statement: collect, concatenate and `UNWIND` for rows from two label sets (the second set optional, so an empty set keeps the other's rows), or aggregate one set, carry it through `WITH` and aggregate the other behind `OPTIONAL MATCH` for two totals in one row, or, for one row per group, `UNWIND` the distinct union of both sets' group keys and aggregate each set per key, so a group only one set has is kept. Two `CALL { }` subqueries side by side are another way to keep one statement, and are answered. |
+| `MATCH (s:Shop) CALL { MATCH (s)-[:TAGGED]->(t) RETURN t.tag AS tag } RETURN tag` | **A `CALL { }` body sharing a name with the statement around it without the two being one variable** — an outer name the body does not import (including under `CALL ()`), or a name the body binds and does not return that the outer query uses again after it. The body's `s` would be a second, unbound variable read as the caller's. Refused naming it, with the import (`CALL (s) { … }`) or the rename (`s2`) that answers. `CALL (*)` is refused with the explicit import list the body needs. `OPTIONAL CALL` is refused as a form this engine cannot read. Every other read-only `CALL { }` is answered on every engine, its body scoped like the statement around it — uncorrelated, side by side, nested, importing (`CALL (s) { … }` or a leading `WITH s`), returning rows or an aggregate, or feeding a hop outside it; a fetched hop inside a body is fetched for the rows that reach it. |
 | Anything the Cypher parser can't parse | **Fail closed** — an unparseable query is rejected, never run unscoped. |
 | `MATCH (n:!Topic)`, `n IS !Topic`, `WHERE n:!Person` | **Single-label negation** — refused before it runs, naming the spellings that work: `WHERE NOT n:Topic`, or a combined label expression such as `:Topic&!Person`. A `!` inside a string or comment is data. |
 | `RETURN apoc.text.capitalize(p.name)`, `CALL db.labels()` | **A procedure or function library this engine does not provide** — refused as an unknown function, naming it, not as a write. The refusal points at the built-in functions to use instead, and for schema questions at the schema the query guide shows. |
@@ -201,6 +210,8 @@ These are **rejected at plan time** (fail-closed), with a message:
 | `RETURN p.name AS passage, count(v) AS n ORDER BY n DESC, b.bookOrder` | **A variable the projection dropped** — after a `WITH` or `RETURN` that aggregates or is `DISTINCT`, `ORDER BY` may use only a projected alias or repeat a projected expression. Refused before any fetch, naming every out-of-scope variable at once. A realm view with this shape fails `realm_validate`; one already installed is reported against its realm at load, stays listed, and is refused with the defect named when called. |
 | `x IS :: LIST<INTEGER>`, `x IS :: INTEGER \| STRING`, `x IS NOT :: INTEGER` | **A type predicate this surface cannot read faithfully** — refused for what it is, quoting the type as written, with the rewrite to use; never reported as a syntax error. A plain `x IS :: INTEGER` (or `IS :: INTEGER NOT NULL`) runs on every surface, and a missing value is of every nullable type. |
 | `… WITH x MATCH (t:Tag {k: 2}) …` where `t` was bound before the `WITH` dropped it | **A dropped name re-bound with its own labels or properties, on a surface that cannot keep the two apart** — refused with the rename to use (`(t2:Tag {…})`), rather than letting the second node match any node the caller can see. |
+| `MATCH ((a:Person)-[:KNOWS]->(b:Person)){1,3}`, `-[:KNOWS]->{1,3}` | **A quantified path pattern or quantified relationship** over the caller's own nodes, over a fetched label, or under a shortest-path selector — a repeated node cannot be scoped one repetition at a time, and a fetch is planned hop by hop. Refused naming the repetition, with the variable-length relationship of the same bounds and direction (`(a)-[:KNOWS*1..3]->(b)`), carrying an inner condition onto the path's nodes; a longer repeated pattern is written out hop by hop. One over nodes that need no per-user scope, outside a selector, runs as written. A fixed quantifier `{n}` is read as `{n,n}`. |
+| `MATCH p = ANY 2 (a)-[:R*1..5]->(b)` | **The `ANY k` path selector** — refused, naming it. `SHORTEST k` keeps the k shortest paths between each pair of ends, and `ANY` keeps one. |
 
 **A name a `WITH` drops is gone.** A later `MATCH` that binds the same name binds a NEW variable,
 with its own pins, joins and filters — nothing carries over from the first. In
@@ -209,6 +220,11 @@ the second `r` is every repository, so it is an unbound anchor: the answer is fl
 `NEEDS_FILTER` naming `r`, never widgets' pull requests counted as if they were all of them. A name
 the `WITH` carries — bare, `WITH g AS h`, or `WITH *` — stays the same variable, and `UNWIND list AS
 x` is not a re-binding.
+
+**A path selector keeps the paths it names.** `ALL` alone is Cypher's default and means every
+path, never only the shortest. `ANY SHORTEST`, `ALL SHORTEST`, `SHORTEST k`, `SHORTEST k GROUPS`
+and `ANY` select per pair of end nodes, shortest first: the selector picks among the pattern's paths,
+and the `WHERE` filters what it picked.
 
 A `brings:` entry naming a `childType` the realm does not declare is refused earlier still, when the
 realm is validated — before any query reaches the planner. The remaining case is a **non-event**: a
@@ -3158,6 +3174,34 @@ work or row budget, or a rule set that exceeds `maxRounds` or `maxPairs` (§13.7
 `BUDGET_EXCEEDED`, naming the limit and its unit, and returns nothing: never a partial set presented
 as complete. A statement budget is fixed and cannot be raised from a query. The refusal names the
 levers: aggregate earlier, add a `LIMIT`, narrow the `MATCH`, filter before sorting.
+
+**Some statements are refused by their shape, before anything parses them.** These bounds are read
+from the statement's text on every query surface, so nothing is fetched or run; a string literal, a
+comment or a quoted name is data and counts for nothing. Each refusal names what it found and the
+spelling that answers. A rule body (§13) meets the nesting and regular-expression bounds too.
+
+- **Nesting.** One expression nests inside another by brackets, `CASE` inside `CASE`, a prefix `NOT`,
+  a unary sign, or a property read or subscript chained onto a value (`x.a.b`, `x[0][1]`). All of
+  these count together toward one limit of 128 levels; past it the statement is refused as
+  `BUDGET_EXCEEDED`, naming the constructs that made it deep.
+- **Literal ranges.** A `range()` whose bounds or step are written as literals is checked before
+  execution. One whose bounds are more than a 64-bit integer apart, so its size cannot be counted
+  exactly, or that makes more values than a list holds, is refused as `INVALID_QUERY`, as is a FLOAT
+  bound or step. `UNWIND`s of literal ranges, one directly after another, whose product exceeds
+  10,000,000 rows are refused as `BUDGET_EXCEEDED`. A `LIMIT` after them is not counted as bounding
+  them, since a sort, an aggregation or a `DISTINCT` before it reads every row first.
+- **Regular expressions.** A `=~` whose pattern backtracks super-linearly on a text it does not
+  match — a repetition of varying length nested in a repetition with nothing to separate one turn
+  from the next (`(a+)+`, `(\w+\s?)*`), or a repeated alternation whose branches overlap (`(a|aa)*`,
+  `(\w|\d)+`) — or whose pattern is longer than 4,096 characters, is refused as `BUDGET_EXCEEDED`.
+  A match cannot be stopped once it has started, so it is refused rather than tried. `([a-z]+,)*`
+  and `(cat|car)+` are linear and run.
+
+What an expression costs is bounded as it runs, too. On the in-process engine a regular-expression
+match is charged to the statement's work budget for every character it reads, and a STRING is
+charged for the characters it builds, so a pattern only the run can see is still bounded. No STRING
+may exceed 16,777,216 characters: the in-process engine refuses to build a longer one, and an answer
+holding one is refused on either engine, as `BUDGET_EXCEEDED`, naming the expression that grew it.
 
 **Query-shape advice:** `EXPLAIN` also names a shape the store runs correctly but quadratically —
 an equality join between two matched sets with a function wrapping one side, `WHERE k.id =
