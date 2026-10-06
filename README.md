@@ -490,6 +490,35 @@ A type whose `parents:` includes `Signal` (the host-defined signal base type) is
     customerId: "Stripe customer id"
 ```
 
+### Value domains — `values:`
+
+A property whose legal values are a fixed set declares them. The shorthand is a list; the
+mapping form says the same thing explicitly:
+
+```yaml
+- name: FrDeptLifeExpectancy
+  properties:
+    sex:    { type: string, description: "'F' women or 'M' men.", values: [F, M] }
+    status: { type: string, description: "'A' final, 'R' revised, 'P' provisional.", values: { list: [A, R, P] } }
+    region: { type: string, description: "Region code.", values: { source: distinct, max: 50 } }
+```
+
+| Form | Meaning |
+|------|---------|
+| `values: [a, b]` / `values: {list: [a, b]}` | A **closed** domain. The text-to-Cypher prompt lists it ("use one of these EXACTLY") and the host refuses a generated query that compares the property with any other literal. |
+| `values: {source: distinct, max: N}` | Enumerate the values the data actually holds, for pickers and parameter UIs. **Not** closed: it constrains nothing and guards nothing. |
+
+Declare a closed domain on every coded property — measure codes, statuses, indicator labels,
+age bands, sexes — and on the key of every **literal-seeded anchor** (`set: { …, values:
+[france] }` on an anchor reached only as `(:FrDepartements {set:'france'})`): without it the
+generator is shown the key's name and never its value. Take the set FROM THE SOURCE: a closed
+domain that misses a real value refuses correct queries, and that refusal is the realm's bug.
+
+Anything a person might ask about this type that the data does NOT carry belongs in its
+`description` ("published per sex — never average them", "departement level only") AND in the
+adversarial half of [`tests/questions.yml`](#testsquestionsyml--the-natural-language-battery):
+the first tells the generator, the second proves it listened.
+
 ### Persistence (graph-backed)
 
 Every entry created via `create_entry` for a type defined here lands as a node in the world graph (the same graph the host's Cypher / schema-projector / proposition-recall tools talk to). Two consequences worth knowing when writing a realm:
@@ -4197,6 +4226,9 @@ disappointed them — each becomes a permanent regression test.
 ```
 
 Expectation kinds: `nonEmpty: true` (rows must come back — the floor); `minRows: n`;
+`mustConstrain: [{label, property}]` — whenever the generated query reads `label`, it must pin
+`property` (a filter, an inline map, or a grouping key); use it where a figure can reconcile
+while answering a different question, e.g. a life expectancy fitted over both sexes at once;
 `matchesView: { name, column, args? }` — the top row's figure from the ask must equal the top
 row's figure from invoking the named view (the realm reconciling against itself). Money and
 count questions should always use `matchesView`; generation is stochastic, and "nonzero" once
@@ -4207,8 +4239,9 @@ the count form checked against the list form.
 The other half asks what it cannot — a measure the sources do not carry, at the wrong
 granularity, or about a population the data never describes — because that is where a generator
 stops answering and starts inventing. A correct response there is a typed refusal, an honestly
-named answer, or a flagged one; a query referencing a property no label declares, or an answer
-column claiming a word the query never selects, is a fabrication and fails the run.
+named answer, or a flagged one; a query referencing a property no label declares, a literal
+outside a property's declared [`values:`](#value-domains--values), or an answer column claiming a
+word the query never selects, is a fabrication and fails the run.
 
 Ask each adversarial question SEVERAL times. Generation is stochastic: a fabrication that
 appears one run in five is still a fabrication, and a single green run proves almost nothing.
