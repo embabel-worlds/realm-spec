@@ -1426,6 +1426,9 @@ A mirrored source records what it actually holds, per partition:
 })
 ```
 
+A coverage record describes one world's mirror. It is kept per world, source and partition, and
+another world's walk of a source by the same name never answers for it.
+
 Because the engine already knows which labels a query touches, it can attach the matching coverage to
 every result through the **existing `{rows, warnings}` envelope** — no new plumbing, and no realm has
 to remember to do it. A street-level question carries *"Inner West complete as at 29 Jul"*; a
@@ -1445,12 +1448,13 @@ source is quietly incorrect, and the surface cannot tell. With it, `on-first-use
 and a full statewide mirror becomes an optimisation rather than a correctness requirement — so build
 the coverage record BEFORE building any ingestion.
 
-### `visibility: public` — shared nodes, and why the scope differs from `reference/`
+### `visibility: public` — a world's mirror, and why the scope differs from `reference/`
 
-Mirrored public data is identical for every user, so mirroring it per world duplicates it, re-crawls
-it per user, and lets each copy drift. Nodes from a `visibility: public` source therefore carry the
-**`Public`** label and the scope rewriter never scopes them — the same treatment as a REFERENCE
-taxonomy, for a very different kind of data.
+A mirrored public dataset belongs to no user: its only writer is the source's ingestion, not a
+person. A source that declares `visibility: public` therefore opens its `label`, and its anchor's
+label, in the world that installs the realm. The records its ingestion writes there carry the
+**`Public`** label and the world they were mirrored for, and the scope rewriter reads them without a
+per-user predicate — the same treatment as a REFERENCE taxonomy, for a very different kind of data.
 
 The distinction matters operationally even though the scoping is identical. A `reference/` vocabulary
 is a handful of curated nodes, seeded, static, safe to wipe and rebuild, small enough to project into
@@ -1458,33 +1462,48 @@ a prompt. A mirrored public dataset is hundreds of thousands of rows with a refr
 window, and an ingestion job as its only legitimate writer. Treating them as one thing invites a
 factory reset that deletes the register, or a schema projection that inlines it.
 
-Two hard rules:
+The declaration is narrow, and the engine holds it there:
 
-- **Only a deployment-admin-approved ingestion job for a declared `visibility: public` source may
-  write `Public` nodes.** It must use a deployment-owned public/anonymous credential, never a
-  world-owned credential or private input. No realm installation or user-facing path may create a
-  public node or globally register a public label; either would be a cross-tenant widening primitive.
-- **`Public` is opt-in per label and never inferred.** The deployment reserves the label globally;
-  the rewriter's default stays fail-closed at PRIVATE and an unregistered label is private. If two
-  worlds can install different realm revisions, a public/reference identity must include the dataset
-  revision or the deployment must migrate that dataset atomically. World-local version skew must not
-  mutate a single unversioned public identity.
+- **It takes effect only in the world that installs the realm.** A label name is not a namespace:
+  another world's `Customer` may be its owner's private CRM records, or a mirror of a different
+  feed. Everywhere else the label keeps its ordinary scope. A world has one owner, so the mirrored
+  records are readable by that owner and by everything acting in the world for them — chat,
+  handlers, routines and agents — and by no other user. Removing the realm withdraws the
+  declaration: once the world is rebuilt without it, the label is private again there too.
+- **It opens only what ingestion wrote.** In the declaring world, `MATCH (c:Customer)` answers the
+  source's mirrored records and the caller's own `Customer` records. It never answers another
+  user's, and never another world's mirror filed under the same label: a declaration makes no
+  user-owned node readable.
+- **A source may not open a label somebody else declares.** A source whose label, or anchor label,
+  is declared by another realm installed in the world, or by the world's own types, is refused at
+  load and named in the realm's status, and nothing it declares takes effect. A label the platform
+  itself scopes private or organization-shared is never opened.
+- **Each world keeps its own mirror and coverage.** Two worlds that install a realm with the same
+  public source each walk it and hold their own copy, merged on the record's identity *and* the
+  world, so neither can read or rewrite the other's. A field in a fetched record that claims to name
+  the world is dropped. Coverage is kept per world, source and partition. There is no mirror shared
+  across worlds.
+- **Only ingestion writes `Public`.** `Public` and `Coverage` are reserved to the platform's own
+  writers. A realm type, a realm provenance label, a DERIVE head, a projection's `hub:` or
+  `target:`, and any record a query fetches or materializes cannot carry either label. A type name,
+  provenance label or rule set naming one is a load problem; a projection naming one is no spine;
+  and a query that would materialize a node carrying one is refused.
+- **`Public` is opt-in per label and never inferred.** The rewriter's default stays fail-closed at
+  PRIVATE, and a label no source in the world declares public is private.
 
 ### Me source authority profile
 
-Realm loading does not grant public visibility or shared mirror access. The host
-refuses those declarations and protects host-configured sources against replacement
-by Realm names or labels. Public source and anchor scopes require trusted host
-configuration; static private and organization scopes cannot be widened.
+Source contracts are kept per world. The contracts a world's realms declare decide how that world's
+reads are served — which mirror answers, which coverage record judges a partition, what age limit
+and completeness rule apply — and a realm in another world declaring the same source name or label
+changes none of it. A world's contracts are replaced whole each time it is built, so a read in
+progress sees one build or the next and never a mix, and they are dropped when the world is evicted.
 
-The legacy source catalog described in this section is process-wide. Loading a captured
-World removes prior Realm metadata and disables subsequent live Realm contributions for
-that process. Host configuration remains available. This process-wide catalog itself has
-no World-scoped metadata and no retained mirror/coverage receiver of its own. Captured
-Worlds instead use the separate [captured collection snapshot
-profile](HOSTED_EXECUTION.md#captured-collection-snapshots), which already implements
-per-World source read/storage approval and a retained, authority-partitioned mirror and
-coverage receiver. A producer or handler grant does not authorize public graph access.
+Captured Worlds use the separate [captured collection snapshot
+profile](HOSTED_EXECUTION.md#captured-collection-snapshots), which implements per-World source
+read/storage approval and a retained, authority-partitioned mirror and coverage receiver. A producer
+or handler grant does not authorize public graph access.
+
 ### `lane: documents` — a collection that lands as searchable DOCUMENTS
 
 Everything above mirrors records into the graph. A collection of long-form, reasonably stable
