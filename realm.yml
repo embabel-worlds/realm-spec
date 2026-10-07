@@ -3,6 +3,7 @@ description: "The Embabel Realm specification (README.md is the contract) plus a
 version: 0.2.0
 author: Embabel
 url: https://github.com/embabel/realm-spec
+category: developer
 tags:
   - meta
   - developer-tools

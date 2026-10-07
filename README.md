@@ -177,6 +177,7 @@ version: 0.1.0
 author: Embabel
 url: https://github.com/embabel/realm-github
 icon: icon.svg
+category: developer
 tags:
   - integrations
   - developer-tools
@@ -190,7 +191,8 @@ tags:
 | `author` | No | Author or organization name |
 | `url` | No | Source repository or documentation URL |
 | `icon` | No | An image the realm ships, as a path **relative to the realm root**. See [Icons](#icons). |
-| `tags` | No | Categorization tags |
+| `category` | No | What the realm is for: one id from the published list of categories. See [Category](#category). |
+| `tags` | No | Free-text keywords, for finding the realm. They are not its category. |
 | `maturity` | No | The author's own readiness claim: `experimental`, `beta`, `stable` or `deprecated`. Absent means the realm makes no claim — which is **not** a claim of being finished. See [Maturity](#maturity). |
 | `host` | No | Execution host for the Realm's Functions: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
 
@@ -280,6 +282,57 @@ Two consequences worth stating, because they are easy to get backwards:
   them; one that discovers realms without reading their manifests (a repository
   scan working within an unauthenticated API budget, say) carries no claims, and
   must then show everything rather than infer.
+
+### Category
+
+```yaml
+category: finance
+```
+
+What the realm is **for**, as one id from a closed list. It is how a store is
+browsed by somebody who does not yet know which realm they want: a short list of
+purposes to choose from, rather than every word any author has used.
+
+**The list is published, and it is the authority.** It lives at
+[`realm-categories.yml`](https://github.com/embabel/default-installation/blob/main/realm-categories.yml)
+in `embabel/default-installation`, and is carried, whole, in the realm catalogue
+built from it. Each entry has an `id`, a `label`, an `icon` and a `description`.
+This document does not repeat the ids, because a copy here would drift from the
+list realms are judged against. A category is added by a change to that file,
+and an id is never renamed or reused once realms declare it.
+
+One value, compared case-insensitively. A realm has one category: the thing it is
+mainly for. A realm that could sit in two picks the one a person looking for it
+would try first.
+
+**Check it before publishing.** A manifest is judged against the list with no
+token and no network:
+
+```
+python3 scripts/build-realms-index.py --check path/to/realm.yml
+```
+
+from a checkout of `embabel/default-installation`. It fails on a missing category
+and on an id that is not listed, naming the ids it could have been.
+
+**Absence is not an error.** Hosts are required to treat a missing `category` as
+*uncategorised*, and an **unrecognized** value the same way, rather than refusing
+the realm or guessing at what was meant — for the reason given under
+[Maturity](#maturity): one misspelled line in one repository must not break a
+directory everybody browses. An uncategorised realm is still listed, still found
+by search and still installable.
+
+**It is not a tag.** Tags are free text, for finding things, and nothing reviews
+them. Many say how a realm is built (`openapi`, `skills`) rather than what it is
+for, and most are used by one realm only. A realm keeps its tags as search
+keywords; it says what it is for here.
+
+**What a host may do with it** *(informative — the behaviour of the reference
+host, not part of the contract)*: the catalogue carries a realm's `category` only
+when it is on the list, and a store may offer the categories as a way to browse,
+each with the list's own label and icon. A host that discovers realms without
+reading their manifests carries no categories, and must then show those realms as
+uncategorised rather than infer one.
 
 ## `actions/`
 
