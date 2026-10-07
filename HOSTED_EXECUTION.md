@@ -1401,7 +1401,7 @@ superseded revisions of that installation/source. Otherwise a full store refuses
 These limits cover retained application payload and finite metadata; graph-engine logs
 and physical overhead are host infrastructure concerns. Graph operations have a 15-second
 server deadline. Hosts unable to provide bounded atomic storage refuse this profile rather
-than falling back to the legacy shared mirror writer.
+than falling back to the legacy mirror writer.
 
 The Docker adapter permits two active invocations per installation within the configured
 global container cap (default four), allowing a querying handler to call its captured
