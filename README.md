@@ -3496,6 +3496,40 @@ agent raises for a person's approval is named after the answer, with where to ap
 a link to the host's approvals when the host knows where they are. Nothing is approved from the
 client.
 
+### From an MCP client — _host surface_
+
+A host may expose every agent on its MCP doors, so Claude Desktop, Claude Code, Codex, Cursor or any
+MCP client talks to the same agent the console does, in the same conversation machinery: the same
+persona, scope, refusals and governance as [talking to an agent](#talking-to-an-agent). The caller is
+the speaker, as from an OpenAI client, and an agent key minted for some agents reaches only them.
+
+**One tool per agent.** Each agent the caller may talk to now is a tool named `talk_to_<name>`. A
+name that is not already `[a-z0-9_-]` and at most 64 characters with the prefix — a capital, a
+realm-qualified name, a long name — is folded to those characters and suffixed with a short hash of
+the original, so two agents never share a tool and a tool's name depends on its agent's name alone.
+The tool list is the caller's own: another person's agents are never listed, an agent that may not
+talk now is not offered, and a call to it is refused with the reason, checked again on every call.
+
+| Argument | Meaning |
+|---|---|
+| `message` | What to say. Required. One message is one turn. |
+| `conversation` | The conversation to carry on, as the previous answer named it. Omit to start one. The same id is `embabel_conversation` from an OpenAI client, so one conversation continues from either. |
+
+**The answer** is the agent's reply as text, with the conversation id to pass back. Every request the
+turn raised for a person's approval follows it, in the request's own words — who asks, what would
+change, about whom, the evidence it read, and whether it was drafted after reading text from outside
+the business — with how to decide it. The same is carried as structured content for a host that
+renders it.
+
+**Deciding in the chat.** `approve_request` (`id`) and `reject_request` (`id`, `reason`) decide a
+request as the caller, exactly as the host's approvals do: approving makes the change once, as the
+person approving; rejecting needs a reason, which the agent keeps. An agent key decides only what its
+agents asked. A model should call either only on the person's explicit say-so.
+
+**An approval card.** Where the host draws MCP Apps, each agent tool names a `ui://` resource that
+renders the turn's requests with Approve and Reject, deciding through the same two tools. A host that
+does not draw them loses nothing: the text carries every request and how to decide it.
+
 ### What an inline routine sees
 
 The triggering event is bound in scope as one normalised shape, whatever the signal type:
