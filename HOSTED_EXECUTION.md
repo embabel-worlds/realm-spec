@@ -478,7 +478,7 @@ The reference profile supports:
 | Operations | Explicit GET operation IDs for reads, at most 128 per Realm; `post`/`put`/`patch`/`delete` operation IDs for writes under the [write-operation profile](#write-operations), each under its own grant. |
 | Arguments | At most 64 scalar path/query parameters and 64 KiB JSON; a read operation takes no request body and no caller headers beyond the fixed set below. Each string argument is checked for a path-safe alphabet or a nonempty, control-free string as its location requires, capped at 2,048 characters; `body` is a reserved argument name a read operation cannot use; an integer is bounded to a signed 64-bit value and a number must be finite. |
 | Validation | Types, required fields, enum and string-length limits; numeric ranges and regex annotations remain provider validation. |
-| Authentication | API key in a query parameter or header, HTTP bearer token, or `auth: none` for a public read API; optional fixed `X-` headers. |
+| Authentication | API key in a query parameter or header, HTTP bearer token, or `auth: none` for a public read API; optional fixed `X-` headers. The host sends its own `User-Agent`, naming the host and the calling Realm, unless the operation's key travels in that header. |
 | Transport | The assembled request URI is bounded; a non-2xx provider status, unsupported content encoding, or a response exceeding the transport's own deadline all refuse the call — a small valid JSON payload alone does not guarantee acceptance. |
 | Response | At most 1 MiB of strict UTF-8 JSON; common credential echoes and diagnostic exception text are refused. |
 
