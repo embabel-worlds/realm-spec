@@ -436,14 +436,25 @@ to an external datasource. The host channel journal is a separate delivery facil
 
 A captured Realm may declare approved API operations in `apis/apis.yml` using vendored
 OpenAPI documents. Each operation binds a fixed destination and a key from the owner's
-wallet. In the governed profile, `token-env` identifies a wallet entry; it does not authorize
-an environment-variable fallback. The fallback a conventional Realm may use in the local or
-first-party tier ([Auth](README.md#auth)) never applies to a captured Realm. The guest supplies
-operation arguments, never credentials, headers, server overrides or an alternative URL.
+wallet, unless its entry is declared `auth: none`. In the governed profile, `token-env`
+identifies a wallet entry; it does not authorize an environment-variable fallback. The fallback a
+conventional Realm may use in the local or first-party tier ([Auth](README.md#auth)) never
+applies to a captured Realm. The guest supplies operation arguments, never credentials, headers,
+server overrides or an alternative URL.
+
+An entry declared `auth: none` reads a public API and sends no credential. It names no
+`credential` and no `token-env`, lists no write operations, and its document declares no
+security requirement on the selected operations and no credential placeholder in its server
+URL; any of those refuses the Realm's API declarations. The owner still approves each of its
+operations, and the host's allowed origins still decide where it may go. An approval names the
+operation and its destination, so a capture that sends it elsewhere, or switches it between
+`none` and a credential, needs approving again. A keyless call is held to the same argument,
+transport and response limits as any other read. GraphQL sources do not take `none`.
 
 Owner preview shows the captured digest, installation revision, operation destination and
-required wallet key name. Grant and revoke requests select the displayed installation and
-revision. Granting an operation binds the current wallet value. Changing or deleting that
+required wallet key name, or that the operation needs none. Grant and revoke requests select
+the displayed installation and revision. Granting a credentialed operation binds the current
+wallet value. Changing or deleting that
 value prevents its use while the value is absent or differs from the approved value.
 A different value requires approval. That holds however the value changed, including a person
 replacing a key entry that stores the same wallet entry. Restoring the identical approved value
@@ -467,7 +478,7 @@ The reference profile supports:
 | Operations | Explicit GET operation IDs for reads, at most 128 per Realm; `post`/`put`/`patch`/`delete` operation IDs for writes under the [write-operation profile](#write-operations), each under its own grant. |
 | Arguments | At most 64 scalar path/query parameters and 64 KiB JSON; a read operation takes no request body and no caller headers beyond the fixed set below. Each string argument is checked for a path-safe alphabet or a nonempty, control-free string as its location requires, capped at 2,048 characters; `body` is a reserved argument name a read operation cannot use; an integer is bounded to a signed 64-bit value and a number must be finite. |
 | Validation | Types, required fields, enum and string-length limits; numeric ranges and regex annotations remain provider validation. |
-| Authentication | API key in a query parameter or header, or HTTP bearer token; optional fixed `X-` headers. |
+| Authentication | API key in a query parameter or header, HTTP bearer token, or `auth: none` for a public read API; optional fixed `X-` headers. The host sends its own `User-Agent`, naming the host and the calling Realm, unless the operation's key travels in that header. |
 | Transport | The assembled request URI is bounded; a non-2xx provider status, unsupported content encoding, or a response exceeding the transport's own deadline all refuse the call — a small valid JSON payload alone does not guarantee acceptance. |
 | Response | At most 1 MiB of strict UTF-8 JSON; common credential echoes and diagnostic exception text are refused. |
 
