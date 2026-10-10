@@ -168,6 +168,18 @@ the key a join fetches by; every other property compares exactly, so `{age: 40}`
 A naked `MATCH (hc:HubSpotContact)` — no anchor — is **rejected** (§4). This is what stops Virtual
 Cypher from trying to fetch *every* contact in HubSpot.
 
+**A declared everyone-door is taken implicitly.** A realm may declare a door whose identity has a
+default — `scope: { metadata: { identity: "true", default: "all" } }` — meaning "the whole
+population". When exactly one of a label's joins runs from such a door and is keyed on that
+identity property, a bare `MATCH (i:Invoice)` is planned as if
+`(:Books {scope:'all'})-[:HAS_INVOICE]->(i:Invoice)` had been written, and returns the same rows.
+The rule is not loosened: declaring the door is the realm's opt-in, the same declaration that
+already seeds `(:Books)` when the door is written without a pin. Predicates on the bare node are
+pushed to the source exactly as they are through the written door. A label with no such door is
+rejected as above, and so is a label with two or more, since "everyone" would then name more than
+one population; the rejection names each door. A node pinned on a key a join declares as
+`materializedKeyField` is still found by that key, not by listing everyone.
+
 **Per-world and per-context scope.** The world selects the outer data boundary; the context selects a
 confidentiality boundary within it; the principal supplies authority. The probe runs through the
 fail-closed scope rewriter under immutable host-bound `(worldId, contextId, access-policy revision)`,
@@ -197,7 +209,7 @@ These are **rejected at plan time** (fail-closed), with a message:
 
 | Pattern | Why rejected |
 |---|---|
-| `MATCH (hc:HubSpotContact) RETURN hc` | **Naked virtual scan** — no anchor to probe. Virtual labels are reached only by traversing a declared join from a bound anchor; otherwise the engine would try to fetch *every* contact. |
+| `MATCH (hc:HubSpotContact) RETURN hc` | **Naked virtual scan** — no anchor to probe. Virtual labels are reached only by traversing a declared join from a bound anchor; otherwise the engine would try to fetch *every* contact. The one exception is a label with exactly one declared everyone-door (§2), which the engine takes for it. |
 | `MATCH (p:Person)-[:HAS_HUBSPOT_CONTACT]->(hc)` with no predicate on `p` | **Unbound anchor** — `p` matches every person; the fan-out is unbounded. Pin or filter the anchor. |
 | `MATCH (i:Item)-[:MENTIONS]->(t:Tag)` where `Tag` is brought only via `TAGGED` | **Brought child off its declared edge** — a brought label is reachable only through the exact relationship its own `brings:` entry names, and only from the join whose target brought it. |
 | ``MATCH (`a b`:Repo)``, ``MATCH (`distinct`:Repo)`` | **A variable that needs backticks** — variables are plain names. Refused by name with the rename to use, never as a syntax error the caller did not make. A word that reads back bare (`count`, `match`, `all`) is a legal name; column aliases and property keys may be quoted as usual. |
