@@ -43,7 +43,7 @@ framework or data store. The reference provider is a Spring Boot starter; the co
 
 **The host calls the provider. The provider never has to call the host.** An existing application
 should not have to discover, register with, or hold a credential for a world in order to be useful
-to one. Every provider-to-host direction in this document is an optional extension (§8), off unless
+to one. Every provider-to-host direction in this document — push delivery (§7.3) and the tunnel (§8) — is optional, off unless
 the application's owner configures it.
 
 A provider may be installed into many worlds. It does not know or care how many.
@@ -64,7 +64,9 @@ A provider may be installed into many worlds. It does not know or care how many.
 | Query | `POST {provider}/query` | 4.3 |
 | Aggregate | `POST {provider}/aggregate` | 4.4 |
 | Invoke a verb | `POST {provider}/verbs/{name}` | 5 |
-| Changes | `GET {provider}/changes` | 7 |
+| Changes | `GET {provider}/changes` | 7.1 |
+| Events | `GET {provider}/events` | 7.2 |
+| Subscribe to push delivery | `POST {provider}/subscriptions` | 7.3 |
 
 - Errors are [RFC 9457](https://www.rfc-editor.org/rfc/rfc9457) problem details with a `code` from
   the table in §4.6. The host classifies by `code` and HTTP status, never by message text.
@@ -109,7 +111,10 @@ and the host builds the realm from it alone. It carries an `ETag`; the host reva
   "auth": { "schemes": ["bearer"], "actingUser": "required" },
   "types": [ ... ],
   "verbs": [ ... ],
-  "changes": { "supported": true }
+  "changes": { "supported": true },
+  "events": [ ... ],
+  "eventRetention": "P7D",
+  "delivery": { "push": true }
 }
 ```
 
@@ -121,7 +126,9 @@ and the host builds the realm from it alone. It carries an `ETag`; the host reva
 | `auth` | §3.4. |
 | `types` | §3.1. |
 | `verbs` | §5. |
-| `changes` | Whether `GET /changes` exists (§7). |
+| `changes` | Whether `GET /changes` exists (§7.1). |
+| `events`, `eventRetention` | The events the provider publishes, and how long it keeps them (§7.2). |
+| `delivery` | Whether the provider can push events and changes to a host that subscribes (§7.3). |
 
 ### 3.1 Types
 
@@ -233,7 +240,7 @@ wrong for somebody.
 
 **The default scope is `user` because the safe mistake is a cache miss.** A provider that declares
 `shared` is stating that its authorization does not vary the answer for this type. A host that has
-the changes feed (§7) may hold records longer than `ttlSeconds` and invalidate on change instead.
+the changes feed (§7.1) may hold records longer than `ttlSeconds` and invalidate on change instead.
 
 A **failed** fetch is never negatively cached. "Could not ask" must not become "asked, and there was
 nothing".
@@ -616,7 +623,7 @@ A rejected request is never sent to the provider. The host reports the rejection
 **Verbs the provider approves itself.** An application with its own approval workflow, such as a
 purchase order that goes through the app's own sign-off, does not need the host to collect the
 approval. It declares `required: "never"` and answers the call with `202 Accepted` and
-`{ "status": "pending", "reference": "PO-88123" }`. The outcome arrives through the changes feed (§7)
+`{ "status": "pending", "reference": "PO-88123" }`. The outcome arrives as an event or a change (§7)
 like any other change to its records.
 
 ## 6. Spines and identity bridging
@@ -652,9 +659,14 @@ forms the world collected them in, and it need not normalize again.
 What a provider cannot do is assert identity between spine nodes, or attach a record to a spine by
 anything but a declared property. Spine resolution stays deterministic and stays the host's.
 
-## 7. Changes
+## 7. Changes and events
 
-A provider that can say what changed lets the host stop guessing with TTLs.
+Two kinds of news flow from a provider. **Changes** say that a record is different now, so the host
+can stop guessing with TTLs. **Events** say that something happened that means something — an
+invoice became overdue, a customer cancelled — so the world's handlers and agents can react. Both are
+available to a host that only polls. A provider that can reach the host may also push them (§7.3).
+
+### 7.1 Changes
 
 ```http
 GET {provider}/changes?since={cursor}
@@ -675,23 +687,115 @@ GET {provider}/changes?since={cursor}
   signal, not a replication stream, so it carries no record bodies.
 - A provider may answer `410 Gone` for a cursor it no longer holds. The host then drops its cache
   for that provider and starts again from now.
-- The host polls. How often is the host's decision; the provider may answer `Retry-After`.
+- Changes are reported only after they are committed. A host told about an uncommitted change
+  would refetch the old record and cache it as new.
 
-Because the host polls, a provider offering changes still never has to know the host exists.
+### 7.2 Events
 
-## 8. Optional provider-to-host extensions
+The manifest declares the events a provider publishes:
 
-Some deployments want the provider to reach the host. Each of these is an extension the
-application's owner turns on deliberately; none is required, and a host must work with a provider
-that has none of them.
+```json
+"events": [
+  {
+    "name": "InvoiceOverdue",
+    "description": "An open invoice passed its due date unpaid.",
+    "subject": "Invoice",
+    "payload": { "type": "object",
+                 "properties": { "number": { "type": "string" }, "daysOverdue": { "type": "integer" } },
+                 "required": ["number"] }
+  }
+]
+```
+
+| Field | Meaning |
+|---|---|
+| `name`, `description` | The event, as shown to the owner and to agents choosing what to react to. |
+| `subject` | Optional. The type the event is about. The event's `key` is then that record's identity, and the host can traverse from the event to the record and on into the world. |
+| `payload` | JSON Schema (2020-12) for the event's own data. Events carry what happened; the record itself is fetched. |
+
+Each event becomes a **source** in the world: something a handler or an agent can be triggered by,
+like any other realm's sources.
+
+```http
+GET {provider}/events?since={cursor}
+```
+
+```json
+{
+  "events": [
+    { "id": "evt-90311", "name": "InvoiceOverdue", "key": "INV-1001",
+      "occurredAt": "2026-10-10T00:00:05Z",
+      "payload": { "number": "INV-1001", "daysOverdue": 1 },
+      "changes": [{ "type": "Invoice", "key": "INV-1001", "op": "upsert" }] }
+  ],
+  "next": "e-004410"
+}
+```
+
+- `id` is unique per provider and stable. The host deduplicates on it, so redelivery is harmless,
+  and the same event arriving both by poll and by push (§7.3) is one event.
+- `changes` is optional. An event that also changed records says so, and the host invalidates
+  them as if they had arrived on the changes feed, so a handler reacting to the event reads the new
+  record, not a cached old one.
+- Events are published only after the transaction that produced them commits, and in commit order
+  per `key`.
+- The cursor rules are those of §7.1. A provider keeps events for at least as long as it declares
+  in `eventRetention` (ISO 8601 duration, at least `P1D`), and answers `410 Gone` for an older
+  cursor. A host that receives `410` reports the gap: events it can no longer get are lost, and the
+  world should know that rather than assume a quiet day.
+
+### 7.3 Push delivery
+
+A provider whose application *can* reach the world may deliver events and changes as they happen,
+rather than waiting to be polled. That is the application's choice, so it is declared in the
+manifest, and the host still sets up delivery: the application never has to find the world itself.
+
+```json
+"delivery": { "push": true }
+```
+
+When it installs a provider that declares `push`, the host subscribes:
+
+```http
+POST {provider}/subscriptions
+```
+
+```json
+{
+  "callback": "https://world.example.com/api/v1/providers/billing/inbox",
+  "secret": "<per-subscription signing secret>",
+  "events": ["InvoiceOverdue"],
+  "changes": true
+}
+```
+
+The provider answers `201` with a subscription id. It then sends a `ping` to the callback and treats
+the subscription as live only if the ping is acknowledged. A provider that cannot reach the
+callback (a firewall, no route out) answers the subscription with `409` and code `UNREACHABLE`, and
+the host polls instead. The host removes its subscription with `DELETE {provider}/subscriptions/{id}`
+when the realm is removed.
+
+Each delivery is a `POST` to the callback with a batch in the same shape as a poll response:
+`events` and `changes`. It is signed per the [Standard Webhooks](https://www.standardwebhooks.com/)
+scheme (`webhook-id`, `webhook-timestamp`, `webhook-signature`, an HMAC over the body with the
+subscription's secret).
+
+- **The host acknowledges with `2xx` only after it has durably stored the batch.** Anything else, or no
+  answer, and the provider retries with backoff for at least `eventRetention`.
+- **Push never replaces the cursor.** The host keeps its poll cursor and polls occasionally even while
+  push is live, and the `id` dedupes the overlap. A delivery lost on both paths is then caught by
+  the next poll, not lost silently.
+- The secret authenticates deliveries to *this* callback only. It grants no other access to the
+  world. It is not an API key, and the application holds no general credential for the world.
+
+A provider may serve several subscriptions, one per world that installed it, and delivers to each
+independently.
+
+## 8. Other provider-to-host directions
 
 | Extension | Why |
 |---|---|
-| **Change push** | The provider POSTs its change entries (§7) to a host ingress URL, instead of being polled, for lower latency. |
-| **Outbound tunnel** | The provider holds an outbound connection to the host and receives operations over it. For a provider behind a firewall the host cannot reach. The operations and their semantics are unchanged; only who opened the socket differs. |
-
-Both require configuring the provider with a host URL and a credential, which is exactly the
-coupling the core protocol avoids. They are specified separately when they are built.
+| **Outbound tunnel** | The provider holds an outbound connection to the host and receives operations over it. This is for a provider behind a firewall the host cannot reach. The operations and their semantics are unchanged; only who opened the socket differs. Specified separately when it is built. |
 
 An application that wants to *consume* a world — run its views, query its graph — uses the world's
 existing REST and GraphQL doors. That is a client of the world, not this protocol.
@@ -716,6 +820,7 @@ This is what makes the world side one URL. Given `https://billing.example.com/em
 | `filter`, `sort`, `project` | the pushdown declared on every producer of that type, used by the planner as §4.1 describes |
 | `aggregate` | aggregate pushdown for `count`/`sum`/… over that type, keyed or grouped |
 | `cache`, `cost` | the producers' cache policy and pacing |
+| `events[]` | world sources, delivered by poll or by push subscription |
 | `verbs[]` | gateway operations; `approval` becomes the verb's approval policy in the world |
 
 4. Validate it like any other realm, install it, and report anything inert: a spine the world does
@@ -880,10 +985,6 @@ credential. Each tenant's world sees only its own types, including tenant-specif
 
 ### 14.4 Events and time
 
-- **Domain events as sources.** Beyond invalidation, the provider publishes events that mean
-  something — `InvoiceOverdue`, `CustomerChurned` — with schemas in the manifest. The host turns
-  each one into a world source that handlers and agents can react to.
-  [CloudEvents](https://cloudevents.io/) would be the envelope.
 - **Standing queries.** The world registers a `where` with the provider — "customers whose balance
   exceeds their limit" — and the provider reports records entering and leaving the set. That pushes
   down a watch, not just a filter, and the provider evaluates it on its own writes, which is where

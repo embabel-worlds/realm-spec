@@ -298,6 +298,9 @@ public interface EmbabelRealm {
     /** Record that records changed, for the changes feed. */
     RealmChanges changes();
 
+    /** Publish events declared at run time, inside the caller's transaction. */
+    RealmEvents events();
+
     /** The manifest as the world will see it now. */
     RealmManifest manifest();
 }
@@ -357,6 +360,53 @@ drops its cache and starts again. That is slower, but never wrong.
 catches direct changes. It cannot see a change to another entity that alters this view: renaming a
 customer changes every `InvoiceView` that shows the customer's name. An explicit `upsert` is the
 complete answer.
+
+### 6.2 Events
+
+An event is an ordinary Spring application event whose class is annotated:
+
+```java
+@RealmEvent(subject = InvoiceView.class, changes = true)
+@JsonClassDescription("An open invoice passed its due date unpaid.")
+public record InvoiceOverdue(@RealmEventKey String number, int daysOverdue) {
+}
+```
+
+```java
+@Transactional
+public void markOverdue(Invoice invoice) {
+    invoice.markOverdue();
+    events.publishEvent(new InvoiceOverdue(invoice.number(), invoice.daysOverdue()));
+}
+```
+
+The application publishes it with the `ApplicationEventPublisher` it already uses. The starter
+declares the event in the manifest from the record: its name, its description, its subject and a
+payload schema from its components. When the event is published inside a transaction, the starter
+writes it to an **outbox table in the same transaction**. The event is therefore committed exactly
+when the business change is, and never for a change that rolled back. `GET /events` reads the
+outbox. `changes = true` adds the subject's upsert to the event (protocol §7.2).
+
+When Spring Modulith is on the classpath, the starter uses its event publication registry rather
+than its own outbox table, so an application that already externalizes events has one record of
+them, not two.
+
+Events need durable storage, and the starter refuses to start with `@RealmEvent` types and no
+`DataSource`. A lost change only costs a refetch; a lost event is something the world never hears
+about.
+
+```yaml
+embabel:
+  realm:
+    events:
+      retention: P7D
+      push: true          # this application may call out to worlds that subscribe (protocol §7.3)
+```
+
+`push` is the application owner's decision. With it off, the manifest does not declare
+`delivery.push`, the application makes no outbound calls, and worlds poll. With it on, the starter
+serves `POST /subscriptions`, pings each callback, and delivers from the outbox with signing, retries and
+backoff. One outbox feeds both polls and pushes, which is why a world can use both safely.
 
 ## 7. The acting user
 
@@ -421,7 +471,7 @@ bindings through a `RealmArgumentResolver`, which follows the framework's
 An application that also uses `embabel-agent` may expose goals marked
 `@AchievesGoal(export = @Export(remote = true))` as verbs, with
 `embabel.realm.export-goals: true`. An agent run is long, so such a verb answers `202` with a
-reference (protocol §5.2) and reports its outcome through the changes feed. This is off by default.
+reference (protocol §5.2) and reports its outcome as an event (protocol §7.2). This is off by default.
 Whether `remote = true` should be enough on its own is a decision for the framework, not the
 starter.
 
