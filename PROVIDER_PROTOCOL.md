@@ -60,6 +60,7 @@ A provider may be installed into many worlds. It does not know or care how many.
 | Operation | Method and path | § |
 |---|---|---|
 | Manifest | `GET {provider}` | 3 |
+| Realm documents and skills | `GET {provider}/{about}`, `GET {provider}/skills/{name}/…` | 3.7 |
 | Fetch by keys | `POST {provider}/fetch` | 4.2 |
 | Query | `POST {provider}/query` | 4.3 |
 | Aggregate | `POST {provider}/aggregate` | 4.4 |
@@ -124,6 +125,7 @@ and the host builds the realm from it alone. It carries an `ETag`; the host reva
 | `protocol` | The protocol major version. A host refuses a version it does not speak, and says which. |
 | `name` | The realm name the provider asks for. The host prefixes it (`provider-billing`) and resolves collisions; the provider does not choose the final name. |
 | `title`, `description` | Shown to the owner on install and to models that read the realm brief. Write them for both. |
+| `version`, `about`, `skills`, … | Realm metadata and skills (§3.7). |
 | `auth` | §3.4. |
 | `types` | §3.1. |
 | `verbs` | §5. |
@@ -403,6 +405,71 @@ not have. Anything outside the application is reached through spines (§6), neve
 
 The index is also the answer to large applications. A manifest with hundreds of types is better
 split into realms an owner can choose between, than paged.
+
+### 3.7 Realm metadata and skills
+
+A realm is more than its types. An owner choosing what to install, and a model deciding how to use
+what was installed, both need to know what the realm is for and how it is meant to be used. The
+manifest carries that at the top level, in the same terms as a git realm's `realm.yml`
+([README](README.md#realmyml)), so a provider's realm and an authored one are described alike:
+
+```json
+{
+  "protocol": "1",
+  "name": "billing",
+  "title": "Billing",
+  "description": "Customers, invoices, payments and refunds from the billing system.",
+  "version": "4.2.0",
+  "author": "Acme Finance Engineering",
+  "url": "https://wiki.acme.example/billing",
+  "icon": "icon.svg",
+  "category": "finance",
+  "tags": ["invoicing", "payments"],
+  "maturity": "beta",
+  "about": "about.md",
+  "skills": [
+    { "name": "collections", "description": "Chase overdue invoices: who to remind, when to escalate, when a refund needs approval.",
+      "files": ["references/escalation.md"], "digest": "sha256:9f2c…" }
+  ],
+  "types": [ ... ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `version`, `author`, `url`, `category`, `tags`, `maturity` | As in `realm.yml`. `maturity` is the provider's own readiness claim; absent is not a claim of being finished. |
+| `icon` | A path relative to the provider URL, served from it. |
+| `about` | A path to a Markdown document: what the realm holds, what its numbers mean, and what it does not cover. It is shown to the owner on install and is part of the realm's brief for models. Keep it a description and a pointer; how-to belongs in skills. |
+| `skills` | Skills the realm brings, below. |
+
+The index of §3.6 repeats `title`, `description`, `icon`, `category` and `maturity` for each realm, so
+an owner can choose between realms without fetching every manifest.
+
+**Skills.** A provider can ship [Agent Skills](https://agentskills.io/specification): instructions a
+model activates when a user's request matches them, at no cost otherwise. They are the right place
+for what the developers know about using their own application well. Examples: which verb to try
+before which, what "overdue" means in this business, when a refund will need approval and how to say
+so.
+
+```http
+GET {provider}/skills/{name}/SKILL.md
+GET {provider}/skills/{name}/references/{file}
+GET {provider}/skills/{name}/assets/{file}
+```
+
+- `SKILL.md` is a standard Agent Skills file: YAML front matter with `name` and `description`, then
+  Markdown instructions. `references/` and `assets/` hold files the instructions point to. The
+  manifest lists the files under each skill as `files`, so the host fetches exactly those.
+- `digest` covers the whole skill. The host refetches a skill only when its digest changes.
+- A skill arrives with its realm and leaves with it, like any realm's skills. An agent scoped to the
+  realm gets its skills, and one that is not scoped to it does not.
+- Instructions name the realm's types, verbs and events by their manifest names. The host checks
+  those names on install and reports a skill that mentions a verb the manifest does not have, rather
+  than letting a model try to call it.
+- **No `scripts/`.** A provider's skill is instructions and reference material. A script would be
+  code the application ships into the world to run, which needs a sandbox, an approval and a
+  signature to trust. That is a future (§14.6), not version 1. A skill that declares scripts is
+  installed without them, and the host says so.
 
 ## 4. Reading
 
@@ -964,6 +1031,8 @@ This is what makes the world side one URL. Given `https://billing.example.com/em
 | `filter`, `sort`, `project` | the pushdown declared on every producer of that type, used by the planner as §4.1 describes |
 | `aggregate` | aggregate pushdown for `count`/`sum`/… over that type, keyed or grouped |
 | `cache`, `cost` | the producers' cache policy and pacing |
+| metadata, `about` | the realm's `realm.yml` fields and brief |
+| `skills[]` | the realm's skills, without scripts |
 | `events[]` | world sources, delivered by poll or by push subscription |
 | `verbs[]` | gateway operations; `approval` becomes the verb's approval policy in the world |
 
@@ -1149,6 +1218,9 @@ credential. Each tenant's world sees only its own types, including tenant-specif
 
 ### 14.6 Trust, audit and economics
 
+- **Skills with scripts.** A provider skill that ships a script, run in the world's sandbox under the
+  same approval and capability rules as a captured realm's code, and trusted through a signed
+  manifest.
 - **Signed manifests.** The provider signs its manifest. A world pins the signer on install and is
   warned if a later manifest is signed by someone else: supply-chain protection for the realm
   itself.

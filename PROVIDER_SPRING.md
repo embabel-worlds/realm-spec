@@ -10,6 +10,12 @@ to see, and gets a realm. The world side is the application's URL. Everything el
 explains how the developer's choices become the manifest, and how the starter pushes down as much of
 each query as their methods can take.
 
+**The starter is written in Java.** Its users are Java developers, so its stack traces, sources,
+generics and annotations are what they already read, and it adds no Kotlin runtime to their
+classpath. The baseline is Java 17 and Spring Boot 3.2, the first Boot release whose Spring Data has
+both the scroll API and `Limit`. Everything Embabel-specific that it can use (§8) is an optional
+dependency.
+
 ---
 
 ## 1. Principles
@@ -103,6 +109,57 @@ and its exposed types are already the module's API.
 
 A `@RealmReference` to a type in another of the application's realms is a sibling reference, and the
 starter emits it with that realm's name.
+
+### 2.2 Metadata and skills
+
+A realm's metadata (protocol §3.7) is configuration, with defaults the build already knows:
+
+```yaml
+embabel:
+  realm:
+    title: Billing
+    description: Customers, invoices, payments and refunds from the billing system.
+    author: Acme Finance Engineering
+    url: https://wiki.acme.example/billing
+    category: finance
+    tags: [invoicing, payments]
+    maturity: beta
+```
+
+- `version` defaults to the application's version from Spring Boot's `BuildProperties`, when the
+  build generates build info.
+- `icon` defaults to `classpath:embabel/realm/icon.svg`, and `about` to
+  `classpath:embabel/realm/ABOUT.md`, when they exist.
+- With several realms, each realm's metadata sits under its name, and its resources under
+  `embabel/realm/<name>/`.
+
+Skills are files, in the standard Agent Skills layout, under `src/main/resources`:
+
+```
+src/main/resources/embabel/skills/
+└── collections/
+    ├── SKILL.md
+    └── references/
+        └── escalation.md
+```
+
+The starter serves each skill, lists its files in the manifest and computes its digest. It refuses to
+start if a skill's front matter is missing `name` or `description`, if the name does not match its
+directory, or if the skill has a `scripts/` directory. A skill that names a verb or type the realm does
+not expose is reported at startup, so the mistake surfaces in the developer's build rather than at
+the world's install. With several realms, a skill belongs to the realm whose directory holds it
+(`embabel/skills/<realm>/<skill>/`).
+
+Front matter is parsed with SnakeYAML, which Spring Boot already brings. A skill can also be
+registered from code, which is how an application generates one, such as a skill listing tenant-specific
+custom fields:
+
+```java
+realm.skill("collections")
+        .description("Chase overdue invoices: who to remind, when to escalate, when a refund needs approval.")
+        .instructions(new ClassPathResource("skills/collections.md"))
+        .reference("escalation.md", escalationPolicy::renderMarkdown);
+```
 
 ## 3. Types
 
@@ -381,6 +438,8 @@ public interface EmbabelRealm {
 
     RealmVerbBuilder verb(String name);
 
+    RealmSkillBuilder skill(String name);
+
     /** Read the annotations on an object that is not a bean, as scanning does for beans. */
     void register(Object instance);
 
@@ -565,6 +624,31 @@ An application that also uses `embabel-agent` may expose goals marked
 reference (protocol §5.2) and reports its outcome as an event (protocol §7.2). This is off by default.
 Whether `remote = true` should be enough on its own is a decision for the framework, not the
 starter.
+
+### 8.5 Skills: the same format, and the framework's loader when it is there
+
+`embabel-agent-skills` implements the Agent Skills specification for agents. It loads skill
+directories into `LoadedSkill`s, whose `SkillDefinition` carries `name`, `description`, `license`,
+`compatibility`, `metadata`, `allowed-tools` and the instructions, and it validates them. The
+provider uses the same format, so a skill written for an application's own agents and a skill
+exported to worlds are the same kind of file.
+
+When `embabel-agent-skills` is on the classpath, the starter loads and validates skills through
+`DirectorySkillDefinitionLoader` instead of its own parser (reading a packaged jar's skills as a zip
+file system, since the loader takes a `Path`), so the two cannot disagree about what
+a valid skill is. It also accepts the framework's `LoadedSkill` directly:
+
+```java
+realm.skill(loadedSkill);
+```
+
+An application whose agents already use `Skills.withLocalSkills(...)` can then export the same
+directory without copying it. The application chooses which skills to export. A skill written for
+its own agents may describe internal tools that the world cannot call, and the startup check above
+reports any that name something the realm does not expose.
+
+The dependency stays optional, as it is a Kotlin module: an application that does not already use
+embabel-agent never sees the Kotlin runtime.
 
 ## 9. Testing
 
