@@ -87,7 +87,8 @@ are strict where a lenient rule would quietly break a join.
 | `datetime` | RFC 3339 with an offset (`"2026-10-10T09:30:00Z"`) |
 | `duration` | ISO 8601 (`"PT15M"`) |
 | `enum` | string, one of the declared values |
-| `list` | array of one scalar type |
+| `list` | array of one scalar type, or of parts (§3.5) |
+| `object` | a nested object with declared properties — a value (§3.5) |
 
 **Keys are always strings on the wire**, in the canonical form of their declared type: an integer
 key `42` is sent and echoed as `"42"`, never `42.0` or `"4.2E1"`. A provider that receives a key it
@@ -179,7 +180,7 @@ what the world sees, at the layer where it already decides what its own UI sees.
 |---|---|
 | `name` | The label in the world, before the host applies the realm's namespace. |
 | `identity` | The property that identifies a record of this type. It must also be a lookup. |
-| `properties` | Name → `{type, description?, spine?, values?, item?}`. `item` is the element type of a `list`. Only declared properties are read from records; anything else a record carries is dropped. |
+| `properties` | Name → `{type, description?, spine?, values?, item?, properties?, references?}`. `item` is the element type of a `list`; `properties` are an `object`'s (§3.5). Only declared properties are read from records; anything else a record carries is dropped. |
 | `lookups` | The properties the provider can fetch by, in batches (§4.2). Relationships (§3.2) and identity bridging (§6) are lookups too. A lookup that can cap its records per key adds `"limitPerKey": true`. |
 | `filter` | What the provider can evaluate itself, in fetches, queries and aggregates alike (§4.1). Absent means nothing. |
 | `sort` | Properties the provider can order by. |
@@ -223,8 +224,8 @@ traverses it both ways:
   property is traversable only from the invoice side, and the host says so when it installs.
 - From an invoice to its customer, by the lookup on `Customer.id`.
 
-The referenced type must be in the same manifest. A provider never names another realm's types;
-reaching across realms is what spines are for (§6).
+The referenced type must be in the same manifest, or in a sibling realm of the same application (§3.6).
+A provider never names any other realm's types; reaching across applications is what spines are for (§6).
 
 ### 3.3 Caching
 
@@ -267,6 +268,141 @@ as it would for that person in its own UI.
 
 The provider is the authority on what a user may see. The host never filters a provider's answer
 for authorization; it only refrains from sharing an answer the provider said was per-user.
+
+### 3.5 Nested data: values and parts
+
+Application data is rarely flat. An invoice has a billing address and a list of lines. These are two
+different kinds of nesting, the distinction domain-driven design draws, and the protocol keeps them
+apart because the world treats them differently.
+
+**A value** has no identity of its own. An address is the invoice's address, and two invoices with
+the same address do not share anything. It is declared as an `object` property:
+
+```json
+"billingAddress": { "type": "object", "properties": {
+  "line1":    { "type": "string" },
+  "city":     { "type": "string" },
+  "postcode": { "type": "string" } } }
+```
+
+On the wire it is a nested JSON object. In the world it becomes flat properties on the owning node,
+named by joining the path in camel case (`billingAddressPostcode`), because graph properties are
+scalars. Filters, sorts and `fields` address it by path: `billingAddress.postcode`. A property inside
+a value can carry `spine`, so an invoice's postcode can attach to the place it names. Values may
+contain values, to a depth of 3, but not lists of values. A list of things that each have fields is a
+list of parts.
+
+**A part** has an identity, but only within its owner. Line 3 of `INV-1001` exists only as part of that
+invoice, and it is created, changed and deleted with it. Parts are an aggregate's members. Each part
+becomes a **type and a node** in the world, so it can be matched, filtered, joined and counted like any
+other type:
+
+```json
+{
+  "name": "InvoiceLine",
+  "description": "One line of an invoice.",
+  "partOf": { "type": "Invoice", "property": "lines", "relationship": "HAS_LINE", "ownerKey": "invoiceNumber" },
+  "identity": "lineNo",
+  "properties": {
+    "lineNo":        { "type": "integer" },
+    "invoiceNumber": { "type": "string" },
+    "sku":           { "type": "string", "spine": "Product" },
+    "quantity":      { "type": "integer" },
+    "amount":        { "type": "decimal" }
+  },
+  "lookups": [{ "by": "sku", "maxKeys": 200 }, { "by": "invoiceNumber", "maxKeys": 200 }],
+  "filter": { "properties": { "sku": ["eq", "in"], "amount": ["gt", "gte", "lt", "lte"] } },
+  "aggregate": { "groupBy": ["sku"], "measures": { "count": true, "sum": ["quantity", "amount"] } }
+}
+```
+
+The owner declares the parts as a list property:
+
+```json
+"lines": { "type": "list", "item": { "part": "InvoiceLine" } }
+```
+
+| `partOf` | Meaning |
+|---|---|
+| `type`, `property` | The owning type, and the property on it that holds the parts. |
+| `relationship` | The edge the world draws from owner to part: `(:Invoice)-[:HAS_LINE]->(:InvoiceLine)`. |
+| `ownerKey` | The part's property holding its owner's identity. A part returned outside its owner — by its own lookup or query — always carries it, so the world can attach it. |
+
+A part is reachable in two ways, and the world uses whichever the query makes cheaper:
+
+- **Inside its owner.** Fetching invoices with `"fields": ["number", "lines"]` returns each invoice
+  with its lines embedded. `"lines.sku"` returns them with only that property, plus `lineNo`. Lines
+  are not returned unless `fields` asks for them, so an invoice listing never pays for its lines.
+- **On its own.** A part can declare lookups, a query and aggregates like any type. "Which invoices
+  contain SKU X?" is a lookup on `InvoiceLine.sku` that returns lines carrying `invoiceNumber`, with
+  no invoice scan. "Units sold per SKU" is an aggregate over lines, computed in the provider.
+
+A part's identity is its owner's identity plus its own. It has no lookup by its own identity alone,
+because `lineNo: 3` means nothing without an invoice. A change to a part is reported as a change to
+its owner (§7.1), because the owner is the unit that changes. Parts may own parts — an order's
+shipments, a shipment's packages — to a depth of 3.
+
+**Filtering through parts.** `exists` (§4.1) takes a part property in place of a referencing type:
+
+```json
+{ "exists": { "part": "lines", "where": { "property": "sku", "op": "in", "value": ["SKU-1", "SKU-7"] } } }
+```
+
+On an `Invoice` read this keeps the invoices with a line for either SKU, evaluated by the provider in
+one query. The capability is declared as `"lines"` in the owner's `filter.exists`.
+
+The test for choosing between a value, a part and a referenced type is the same as the spine test in
+[VIRTUAL_CYPHER.md §5.4.2](VIRTUAL_CYPHER.md#542-an-identity-is-a-spine-a-record-is-a-parent-label),
+applied inside one application:
+- If it has no identity, it is a **value**.
+- If it has an identity only inside its owner, and lives and dies with it, it is a **part**.
+- If something else refers to it independently, it is a **type** with a reference (§3.2).
+
+### 3.6 Several realms from one application
+
+One application may serve several realms. An ERP's billing, inventory and HR are different
+realms to a world owner, who may want only one. A finance view and a sales view of the same data are
+different realms, each behind its own credential. Each realm is a complete provider at its own
+URL — its own manifest, credential, cache, events and subscriptions — so nothing else in this protocol
+changes.
+
+An application with several realms may serve an **index** at a root URL:
+
+```http
+GET https://erp.example.com/embabel
+```
+
+```json
+{
+  "protocol": "1",
+  "application": "Acme ERP",
+  "realms": [
+    { "name": "billing",   "title": "Billing",   "url": "https://erp.example.com/embabel/billing",
+      "description": "Customers, invoices, payments and refunds." },
+    { "name": "inventory", "title": "Inventory", "url": "https://erp.example.com/embabel/inventory",
+      "description": "Products, stock levels and warehouses." }
+  ]
+}
+```
+
+A response with `realms` and no `types` is an index, not a manifest. Given an index URL, the world
+lists the realms and the owner chooses which to install. Given a realm's own URL, the world installs
+that realm. The world side is still one URL. Every realm URL in an index must have the index's
+origin, so an index cannot point a world at another application.
+
+**Sibling references.** Realms from one index share the application's identities, so one may
+reference another's type directly:
+
+```json
+"customerId": { "type": "integer", "references": { "realm": "crm", "type": "Customer", "relationship": "BILLED", "direction": "in" } }
+```
+
+A sibling reference is allowed only between realms of the same index. If the world installs one realm
+without its sibling, the reference is inert, and the world reports it as it does a spine it does
+not have. Anything outside the application is reached through spines (§6), never by raw id.
+
+The index is also the answer to large applications. A manifest with hundreds of types is better
+split into realms an owner can choose between, than paged.
 
 ## 4. Reading
 
@@ -320,7 +456,8 @@ records without returning them:
 ```
 
 On a `Customer` query this keeps the customers that have an open, overdue invoice. `via` is the
-referencing property (§3.2), and the capability is declared as `"Invoice.customerId"`. The inner
+referencing property (§3.2), and the capability is declared as `"Invoice.customerId"`. `exists` over
+a part (§3.5) names the part property instead: `{ "exists": { "part": "lines", "where": … } }`. The inner
 `where` is limited by `Invoice`'s own `filter` declaration. One level of `exists` is allowed; an
 `exists` nested inside another is not.
 
@@ -344,7 +481,11 @@ degraded index) answers with `"applied": false` and **must not** then apply `lim
 everything answers with `"applied": true`. The echo lets the host rely on what happened on this call,
 not just on what the manifest promised.
 
-**Projection.** `fields` lists the properties the host needs. A provider that declared `project`
+**Paths.** A filter, sort or field may name a property inside a value by its path
+(`billingAddress.postcode`). The capability is declared under the same path.
+
+**Projection.** `fields` lists the properties the host needs. Parts are returned only when `fields`
+names them (§3.5). A provider that declared `project`
 returns at least those, plus the identity and the lookup property. It may return more.
 
 **Order and limit.** `sort` is a list of `{property, direction}`. The host sends `limit` (on a
@@ -804,7 +945,8 @@ existing REST and GraphQL doors. That is a client of the world, not this protoco
 
 This is what makes the world side one URL. Given `https://billing.example.com/embabel`:
 
-1. `GET` the manifest. Refuse an unsupported `protocol` and say which version the host speaks.
+1. `GET` the URL. If it is an index (§3.6), let the owner choose realms, and install each as below.
+   Refuse an unsupported `protocol` and say which version the host speaks.
 2. Ask the owner for a credential if `auth.schemes` needs one, and keep it in the wallet.
 3. Synthesize a realm, entirely from the manifest:
 
@@ -815,6 +957,8 @@ This is what makes the world side one URL. Given `https://billing.example.com/em
 | `spine` on a property | `hub: <spine>` on that property |
 | each `lookup` | a producer of kind `provider`, keyed by that property, with the lookup's `maxKeys` as its batch size |
 | `references` | a join between the two types, through the lookup on the referencing property |
+| an `object` property | flat properties on the node, named by camel-cased path |
+| a part type | a type whose nodes hang off the owner by `partOf.relationship`, filled from the owner's fetches or the part's own lookups |
 | a lookup by a spine-bound property | a join anchored on that spine |
 | `query` | a scan producer |
 | `filter`, `sort`, `project` | the pushdown declared on every producer of that type, used by the planner as §4.1 describes |
@@ -887,8 +1031,6 @@ provider is not the requirement.
   one piece of host knowledge on the provider side. Is that acceptable as the price of per-user
   authorization and verifiable approvals, or should `actingUser` default to `ignored` and per-user
   be the opt-in?
-- **Manifest size.** A provider with hundreds of types — an ERP — may need the manifest paged or
-  split by module.
 - **Writes as records.** Verbs cover consequential operations. Whether a provider should also accept
   plain creates and updates against its types, or whether those must always be verbs, is undecided.
   §14.3 sketches one answer.
