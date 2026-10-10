@@ -1058,7 +1058,7 @@ The reference provider is a Spring Boot starter, described in
   `Specification`, a Querydsl `Predicate` or a jOOQ `Condition` receives the whole filter tree,
   translated by the starter and tested by the conformance kit. `Sort`, `Limit`, `ScrollPosition`
   and `Window` carry ordering, limits and cursors.
-- It enforces **approval** itself, from `@Approval` on `@RealmVerb` methods.
+- It enforces **approval** itself, from `@RealmVerb.Approval` on `@RealmVerb` methods.
 - It follows the **Embabel agent framework's conventions**: annotations that a reader turns into
   metadata, Jackson descriptions, and an injected `EmbabelRealm` for registering things from code,
   as `AgentPlatform` is used for agents.

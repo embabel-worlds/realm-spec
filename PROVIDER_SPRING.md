@@ -97,7 +97,7 @@ embabel:
 
 ```java
 @RealmType(name = "Product", realm = "inventory", entity = Product.class)
-public record ProductView(@RealmId String sku, String name, int onHand) {
+public record ProductView(@RealmType.Id String sku, String name, int onHand) {
 }
 ```
 
@@ -107,7 +107,7 @@ With Spring Modulith on the classpath, `embabel.realm.per-module: true` makes ea
 its own realm, named after the module. A module is already the application's unit of encapsulation,
 and its exposed types are already the module's API.
 
-A `@RealmReference` to a type in another of the application's realms is a sibling reference, and the
+A `@RealmType.Reference` to a type in another of the application's realms is a sibling reference, and the
 starter emits it with that realm's name.
 
 ### 2.2 Metadata and skills
@@ -169,10 +169,10 @@ A realm type is the view the service layer returns, not the entity. Annotate it:
 @RealmType(name = "Customer", entity = Customer.class)
 @JsonClassDescription("A company that buys from us.")
 public record CustomerView(
-        @RealmId Long id,
+        @RealmType.Id Long id,
         String name,
-        @Spine("Organization") String website,
-        @Spine("Person") String billingEmail,
+        @RealmType.Spine("Organization") String website,
+        @RealmType.Spine("Person") String billingEmail,
         Tier tier,
         @JsonPropertyDescription("Outstanding, in the account currency.") BigDecimal balance) {
 }
@@ -180,9 +180,9 @@ public record CustomerView(
 @RealmType(name = "Invoice", entity = Invoice.class)
 @JsonClassDescription("An invoice issued to a customer.")
 public record InvoiceView(
-        @RealmId String number,
-        @RealmPath("customer.id")
-        @RealmReference(type = CustomerView.class, relationship = "BILLED", direction = Direction.IN)
+        @RealmType.Id String number,
+        @RealmType.Path("customer.id")
+        @RealmType.Reference(type = CustomerView.class, relationship = "BILLED", direction = Direction.IN)
         Long customerId,
         BigDecimal amount,
         LocalDate dueDate,
@@ -193,10 +193,10 @@ public record InvoiceView(
 | Annotation | Manifest |
 |---|---|
 | `@RealmType(name, entity)` | a type. `entity` is optional and lets the starter translate filters into queries on that entity (§4). |
-| `@RealmId` | `identity` |
-| `@Spine("Organization")` | `spine` on the property (protocol §6) |
-| `@RealmReference` | `references` (protocol §3.2) |
-| `@RealmPath("customer.id")` | where the property lives on `entity`, when it is not the same name |
+| `@RealmType.Id` | `identity` |
+| `@RealmType.Spine("Organization")` | `spine` on the property (protocol §6) |
+| `@RealmType.Reference` | `references` (protocol §3.2) |
+| `@RealmType.Path("customer.id")` | where the property lives on `entity`, when it is not the same name |
 | `@JsonClassDescription`, `@JsonPropertyDescription` | `description` |
 | Java types | protocol types: `BigDecimal` → `decimal`, `LocalDate` → `date`, `Instant`/`OffsetDateTime` → `datetime`, an enum → `enum` with its constants, a `List<String>` → `list` of `string` |
 
@@ -211,20 +211,20 @@ A view record's components may themselves be records. What they become depends o
 ```java
 @RealmType(name = "Invoice", entity = Invoice.class)
 public record InvoiceView(
-        @RealmId String number,
+        @RealmType.Id String number,
         Address billingAddress,                                    // a value: no annotation
-        @RealmPart(relationship = "HAS_LINE") List<InvoiceLineView> lines,
+        @RealmType.Part(relationship = "HAS_LINE") List<InvoiceLineView> lines,
         BigDecimal amount) {
 }
 
-public record Address(String line1, String city, @Spine("UkPlace") String postcode) {
+public record Address(String line1, String city, @RealmType.Spine("UkPlace") String postcode) {
 }
 
 @RealmType(name = "InvoiceLine", entity = InvoiceLine.class)
 public record InvoiceLineView(
-        @RealmId int lineNo,
-        @RealmOwnerKey String invoiceNumber,
-        @Spine("Product") String sku,
+        @RealmType.Id int lineNo,
+        @RealmType.OwnerKey String invoiceNumber,
+        @RealmType.Spine("Product") String sku,
         int quantity,
         BigDecimal amount) {
 }
@@ -233,10 +233,10 @@ public record InvoiceLineView(
 | Component | Protocol | JPA mapping the translator follows |
 |---|---|---|
 | a record with no `@RealmType` | a value (`object`), filterable by path, e.g. `billingAddress.postcode` | `@Embedded`, or columns on the same entity |
-| `@RealmPart List<T>`, where `T` is a `@RealmType` | a part type, `partOf` the owner | `@OneToMany` with orphan removal, or `@ElementCollection` |
-| a `@RealmType` with `@RealmReference` instead | a referenced type (protocol §3.2) | `@ManyToOne` |
+| `@RealmType.Part List<T>`, where `T` is a `@RealmType` | a part type, `partOf` the owner | `@OneToMany` with orphan removal, or `@ElementCollection` |
+| a `@RealmType` with `@RealmType.Reference` instead | a referenced type (protocol §3.2) | `@ManyToOne` |
 
-`@RealmOwnerKey` marks the part's `ownerKey`. With JPA it maps to the owning association's id (here
+`@RealmType.OwnerKey` marks the part's `ownerKey`. With JPA it maps to the owning association's id (here
 `invoice.number`), so the part's own lookups can return it without loading the invoice.
 
 A `Specification<Invoice>` translates `exists` over `lines` into a correlated subquery on the
@@ -295,7 +295,7 @@ The second method declares, without the developer stating any of it:
 - a batched lookup on `customerId`, at most 100 keys;
 - every filter operator that the `Specification` translator supports for each property's type,
   with `and`, `or` and `not`;
-- `exists` over each `@RealmReference` whose entity association the translator can follow;
+- `exists` over each `@RealmType.Reference` whose entity association the translator can follow;
 - sorting by every exposed property that maps to an entity attribute;
 - `limitPerKey`, because the method takes a `Limit` alongside its keys.
 
@@ -343,7 +343,7 @@ Every operator, null rule and `exists` is checked against the protocol's semanti
 therefore as exact for an application that wrote three annotations as for one that wrote a
 translator by hand.
 
-A property whose `@RealmPath` does not resolve on the entity is still returned, but it is not
+A property whose `@RealmType.Path` does not resolve on the entity is still returned, but it is not
 declared filterable or sortable. The host evaluates those filters itself.
 
 ### 4.4 Aggregates
@@ -369,7 +369,7 @@ class RefundService {
                subject = InvoiceView.class,
                effect = Effect.EXTERNAL,
                idempotent = true,
-               approval = @Approval(
+               approval = @RealmVerb.Approval(
                        required = Required.WHEN,
                        when = "amount > 500",
                        reason = "Refunds over 500 need a second person.",
@@ -381,7 +381,7 @@ class RefundService {
     @RealmVerb(description = "Write off an invoice's outstanding balance.",
                subject = InvoiceView.class,
                effect = Effect.WRITE,
-               approval = @Approval(required = Required.DECIDED, reason = "Write-offs above a customer's limit need approval."))
+               approval = @RealmVerb.Approval(required = Required.DECIDED, reason = "Write-offs above a customer's limit need approval."))
     @Transactional
     public WriteOffResult writeOff(WriteOffRequest request, RealmCall call) {
         var invoice = invoices.require(request.number());
@@ -393,7 +393,7 @@ class RefundService {
 }
 ```
 
-| `@Approval` | Protocol (§5.2) |
+| `@RealmVerb.Approval` | Protocol (§5.2) |
 |---|---|
 | `required = NEVER` (the default) | `"never"` |
 | `required = ALWAYS` | `"always"` |
@@ -518,7 +518,7 @@ An event is an ordinary Spring application event whose class is annotated:
 ```java
 @RealmEvent(subject = InvoiceView.class, changes = true)
 @JsonClassDescription("An open invoice passed its due date unpaid.")
-public record InvoiceOverdue(@RealmEventKey String number, int daysOverdue) {
+public record InvoiceOverdue(@RealmEvent.Key String number, int daysOverdue) {
 }
 ```
 
@@ -578,7 +578,7 @@ predicate inside a `Specification` see the same user they would see in the UI.
 Different fields and objects for different roles — per connection, and per acting user through Jackson's `@JsonView` — are a protocol future ([§14.1](PROVIDER_PROTOCOL.md#141-who-sees-what)).
 
 A type whose methods carry method security, or whose query consults the current user, is declared
-`cache.scope: user`. A type marked `@RealmType(cache = @RealmCacheScope(SHARED))` asserts that
+`cache.scope: user`. A type marked `@RealmType(cache = @RealmType.Cache(SHARED))` asserts that
 authorization does not vary its answer.
 
 ## 8. Alignment with the Embabel agent framework
@@ -593,6 +593,27 @@ stereotypes, and `AgentMetadataReader` reads `@Action` and `@AchievesGoal` metho
 realm starter keeps the same split between annotation and reader. It does **not** add a class
 stereotype, because a realm method lives on a bean that already has one, usually `@Service`. The
 realm annotations describe how an existing bean is exposed, the way `@Transactional` does.
+
+**Naming follows `@LlmTool.Param`.** The framework nests an annotation's helpers inside it
+(`@LlmTool.Param`, `@LlmTool.Meta`) rather than giving each one a top-level name. The starter does
+the same, so the top level is a handful of `Realm`-prefixed annotations: `@RealmType`, `@RealmLookup`,
+`@RealmQuery`, `@RealmAggregate`, `@RealmVerb`, `@RealmEvent` and `@RealmPackage`. Everything else
+hangs off the one it belongs to:
+- `@RealmType.Id`, `.Spine`, `.Reference`, `.Path`, `.Part`, `.OwnerKey` and `.Cache`;
+- `@RealmVerb.Approval`;
+- `@RealmEvent.Key`.
+
+Nesting keeps generic names like `Id`, `Spine` and `Approval` from colliding with JPA's `@Id` or the
+application's own annotations, and an IDE completing `@RealmType.` lists exactly what a type can carry.
+
+The parameter-binding annotations (`@RealmFields`, `@RealmSearch`, `@RealmPredicate`, `@RealmFilters`)
+stay top-level, like Spring MVC's `@RequestParam`, because they apply to lookups, queries and
+aggregates alike.
+
+There is no `Embabel` holder class. In Java such a class is not a namespace. Two Embabel libraries
+each defining one would collide in any file that uses both, and a static import removes the prefix
+anyway. The `com.embabel.realm` package is the namespace. `EmbabelRealm` keeps the prefix because it
+is the one type that stands for the realm itself, as `@EmbabelComponent` stands for a component.
 
 ### 8.2 One description for every consumer
 
@@ -685,5 +706,5 @@ but does not implement exactly fails the build, not a world's query.
 | `@RealmLookup` on batched service methods | joins from anywhere in the world into the application, including identity bridging in their code |
 | `Specification`, `Sort`, `Limit`, `ScrollPosition` parameters | filters, ordering, per-key limits and paging evaluated next to the data |
 | `@RealmAggregate` | counts and sums computed in the database |
-| `@RealmVerb` with `@Approval` | operations its agents can propose, approved by the right people and enforced by the application |
+| `@RealmVerb` with `@RealmVerb.Approval` | operations its agents can propose, approved by the right people and enforced by the application |
 | `realm.changes().upsert(...)` | caches that are invalidated when data changes, not merely when a TTL expires |
