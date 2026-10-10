@@ -14,6 +14,10 @@ guest to bypass those checks.
 consumers, dependencies, producers, graph queries, goals, lenses, watches, apps, write proposals,
 and the owner approvals each one needs.
 
+**Exposing an existing application to worlds?** The [World Provider Protocol](PROVIDER_PROTOCOL.md)
+(proposal) lets an application declare its own types, lookups, verbs and identity bridges, so a
+world installs it from its URL alone, with no realm authored by hand.
+
 ---
 
 ## Repository convention
