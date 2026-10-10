@@ -70,6 +70,40 @@ The starter detects what is on the classpath and enables the matching support:
 
 None of them is required.
 
+### 2.1 Several realms
+
+An application that serves more than one realm (protocol §3.6) names them in configuration and
+assigns each type, method and event to one:
+
+```yaml
+embabel:
+  realm:
+    index: /embabel                      # serves the protocol's index of the realms below
+    realms:
+      billing:
+        title: Billing
+        description: Customers, invoices, payments and refunds.
+      inventory:
+        title: Inventory
+        description: Products, stock levels and warehouses.
+        auth: { schemes: [basic] }       # each realm may have its own credential
+```
+
+```java
+@RealmType(name = "Product", realm = "inventory", entity = Product.class)
+public record ProductView(@RealmId String sku, String name, int onHand) {
+}
+```
+
+Each realm is served at `<index>/<name>`. `realm` may also be set once for a package, in
+`package-info.java` with `@RealmPackage(realm = "inventory")`, so a module's types need not repeat it.
+With Spring Modulith on the classpath, `embabel.realm.per-module: true` makes each application module
+its own realm, named after the module. A module is already the application's unit of encapsulation,
+and its exposed types are already the module's API.
+
+A `@RealmReference` to a type in another of the application's realms is a sibling reference, and the
+starter emits it with that realm's name.
+
 ## 3. Types
 
 A realm type is the view the service layer returns, not the entity. Annotate it:
@@ -111,6 +145,60 @@ public record InvoiceView(
 
 Only the record's components are exposed, and only exposed properties can be filtered on. An entity
 column that is not on the view cannot be filtered on.
+
+### 3.1 Nested records: values and parts
+
+A view record's components may themselves be records. What they become depends on one annotation
+(protocol §3.5):
+
+```java
+@RealmType(name = "Invoice", entity = Invoice.class)
+public record InvoiceView(
+        @RealmId String number,
+        Address billingAddress,                                    // a value: no annotation
+        @RealmPart(relationship = "HAS_LINE") List<InvoiceLineView> lines,
+        BigDecimal amount) {
+}
+
+public record Address(String line1, String city, @Spine("UkPlace") String postcode) {
+}
+
+@RealmType(name = "InvoiceLine", entity = InvoiceLine.class)
+public record InvoiceLineView(
+        @RealmId int lineNo,
+        @RealmOwnerKey String invoiceNumber,
+        @Spine("Product") String sku,
+        int quantity,
+        BigDecimal amount) {
+}
+```
+
+| Component | Protocol | JPA mapping the translator follows |
+|---|---|---|
+| a record with no `@RealmType` | a value (`object`), filterable by path, e.g. `billingAddress.postcode` | `@Embedded`, or columns on the same entity |
+| `@RealmPart List<T>`, where `T` is a `@RealmType` | a part type, `partOf` the owner | `@OneToMany` with orphan removal, or `@ElementCollection` |
+| a `@RealmType` with `@RealmReference` instead | a referenced type (protocol §3.2) | `@ManyToOne` |
+
+`@RealmOwnerKey` marks the part's `ownerKey`. With JPA it maps to the owning association's id (here
+`invoice.number`), so the part's own lookups can return it without loading the invoice.
+
+A `Specification<Invoice>` translates `exists` over `lines` into a correlated subquery on the
+collection. "Invoices with a line for these SKUs" is one SQL statement. A part type takes its own
+annotated methods like any other type, and the starter declares its lookups and aggregates from them:
+
+```java
+@RealmLookup(by = "sku", maxKeys = 200)
+List<InvoiceLineView> linesForSkus(Collection<String> skus, Specification<InvoiceLine> where) { ... }
+
+@RealmAggregate(groupBy = {"sku"}, count = true, sum = {"quantity", "amount"})
+List<RealmGroup> salesBySku(Specification<InvoiceLine> where, RealmAggregation aggregation) { ... }
+```
+
+Parts are returned only when the host asks for them. A method that takes `@RealmFields Set<String>`
+can choose its fetch plan from it, for example calling a repository method annotated
+`@EntityGraph(attributePaths = "lines")` only when `lines` was requested. A method that ignores
+`fields` still works; it loads more than it needs. Spring Data JDBC loads an aggregate whole, so
+there the parts are always present and simply omitted from the response when not asked for.
 
 ## 4. Reading
 
@@ -281,6 +369,9 @@ prefer configuration in code. For these, inject `EmbabelRealm`:
 
 ```java
 public interface EmbabelRealm {
+
+    /** The handle for one of the application's realms; this interface itself is the default realm. */
+    EmbabelRealm realm(String name);
 
     /** Register a type; an annotated class contributes its annotations, which the builder can override. */
     <T> RealmTypeBuilder<T> type(Class<T> type);
