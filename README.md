@@ -4021,17 +4021,20 @@ description: What a pastor reads in a conversation, and how he is bearing it him
 slots:
   - name: rapport
     scope: conversation
-    description: "How much trust there is. 1 wary, 10 they tell you what they tell nobody."
-    type: ordinal
-    range: [1, 10]
-    default: 4
+    description: "How much trust there is between you."
+    type: metric
+    kind: assessment
+    low: wary
+    high: they tell you what they tell nobody
+    good: high
+    default: 0.4
   - name: stage
     scope: subject
     description: "What has actually been SAID about faith, not what he hopes."
     type: stage
     stages: [unspoken, curious, asking, wrestling, seeking, declined]
     default: unspoken
-  - { name: contentment, scope: agent, type: ordinal, range: [1, 10], default: 6 }
+  - { name: contentment, scope: agent, type: metric, kind: feeling, low: heavy, high: glad, good: high, default: 0.6 }
   - { name: questionsOpen, scope: conversation, type: count, default: 0 }
   - { name: askedToStop, scope: subject, type: boolean, default: false }
   - { name: card, scope: subject, type: text, limit: 400, default: "" }
@@ -4049,6 +4052,9 @@ slots:
 | `slots[].description` | no | What it holds, in the words the extraction step reads. |
 | `slots[].default` | yes | The value before anything has been observed. |
 | `slots[].range` | for `ordinal`/`ratio` | `[min, max]` inclusive. A host clamps to it rather than failing a turn. |
+| `slots[].kind` | for `metric` | What sort of reading it is: `feeling`, `assessment`, `measure`, or a kind a realm declares. See [Metrics](#metrics). |
+| `slots[].low`, `slots[].high` | for `metric` | What 0 and what 1 mean, in words: `heavy` and `glad`. |
+| `slots[].good` | no, for `metric` | `high` or `low`: which end is good, so a surface can colour it. Omit it when neither is. |
 | `slots[].stages` | for `stage` | The ordered states. Movement need not be forward. |
 | `slots[].limit` | no | Longest `text`; most items in a `list` or `entities`. A host caps whether or not one is given. |
 
@@ -4056,7 +4062,8 @@ slots:
 
 | Type | Holds | For |
 |---|---|---|
-| `ordinal` | a whole number on a declared scale | a reading: rapport, mood, confidence |
+| `metric` | a reading from 0 to 1, with a kind and named poles | rapport, mood, contentment, health — see [Metrics](#metrics) |
+| `ordinal` | a whole number on a declared scale | superseded by `metric`; still loads |
 | `stage` | one of a declared, ordered set of states | where a decision has got to |
 | `count` | a non-negative whole number | questions still owed |
 | `ratio` | a real number on a declared scale | a proportion |
@@ -4081,6 +4088,100 @@ they stay true for the conversation, and while either is set a host withholds th
 what it was trying to achieve, because stating an objective and a prohibition together is
 contradictory input, and a model resolves that by acknowledging the request and then proceeding
 anyway.
+
+### Metrics
+
+A `metric` is a reading on the one scale every metric shares: **0 to 1**. Its poles say what the ends
+mean and its `kind` says what sort of reading it is. One scale is what lets readings be compared
+across personas, agents and things without anyone remembering that one author's 7 was out of 10 and
+another's out of 5.
+
+```yaml
+- name: contentment
+  scope: agent
+  type: metric
+  kind: feeling        # what sort of reading
+  low: heavy           # what 0 means
+  high: glad           # what 1 means
+  good: high           # optional: which end is good
+  default: 0.6
+```
+
+- **Every value is 0 to 1.** A default outside it, or a `range` other than `[0, 1]`, is a load
+  problem and the slot is dropped. A value the extraction step returns outside it is clamped rather
+  than failing the turn.
+- **Both poles are required, and a metric's fields are checked.** A field a metric does not
+  declare — a misspelt `hihg`, a third pole such as `mid` — drops the slot with a load problem, since a
+  reading whose ends nobody named cannot be read back.
+- **A kind is a type.** The host ships `feeling` (the reader's own affect), `assessment` (a judgement
+  of a person or thing) and `measure` (computed from data). A notebook spells a kind as an identifier
+  and the type is its PascalCase: `feeling` is `Feeling`, `self-regard` is `SelfRegard`. A kind no
+  type declares drops the slot with a load problem.
+- **A realm adds a kind by declaring a type under `Metric`**, in `types/` like any other type:
+
+  ```yaml
+  - name: Vitality
+    description: How a thing is, as a reading.
+    parents: [Metric]
+  ```
+
+  A notebook in the same world may then declare `kind: vitality`. The new kind inherits every
+  property a reading carries (below).
+- **`ordinal` still loads.** Its readings are recorded normalised to 0–1 — `(value - min) / (max -
+  min)` — with no kind, and a host reports a load warning recommending `type: metric`. Its page and
+  prompt keep the scale the author wrote; only the recorded reading is normalised.
+
+#### Every change is kept
+
+The page holds a metric's latest value. Each time that value **changes**, the host also records a
+reading, so a metric has a history:
+
+- **Only on change.** The first real observation is recorded; a model repeating the same value is not
+  a new reading, and a slot still at its default — never observed — is never recorded at all.
+- **Every scope is recorded**, `conversation` included: its page ends with the exchange, but how the
+  exchange went is history worth keeping.
+- **A reading carries** `metric`, `notebook`, `metricKey` (`<notebook>/<metric>`), `kind`, `value`,
+  `previous` (absent on a first reading), `at` (a datetime), `persona`, `agent` (when the reader was
+  an agent), `scope`, `conversationId`, `subjectId` (the person being spoken to) and `evidence` (the
+  words that moved it, when the reader gave any).
+- **It is linked to what it is about**: `(r)-[:ABOUT]->(:AssistantUser)` for a `subject` metric, and
+  `(r)-[:ABOUT]->(:Agent)` for an `agent` metric. `(:Agent)-[:READ]->(r)` names the agent that took
+  it, and `(r)-[:OF]->(:ConfigMetric)` its declaration.
+- **A reading about a person is that person's data.** It is visible to them and to no other user,
+  whether a query asks for every reading or names the person. A reading about an agent belongs to the
+  world the agent lives in.
+
+#### Querying readings
+
+A host reading carries `:Embabel:Stat:Metric:<Kind>`, and every level answers:
+
+```cypher
+MATCH (r:Feeling) ...                 // one kind
+MATCH (r:Embabel:Metric) ...          // every reading the host keeps
+MATCH (x:Stat) ...                    // all measured data the host keeps
+MATCH (x:Embabel) ...                 // everything the host owns
+
+// How has my mood moved?
+MATCH (r:Embabel:Metric {metric: 'mood'})-[:ABOUT]->(me:AssistantUser)
+RETURN r.at, r.value, r.persona, r.evidence ORDER BY r.at
+
+// Which agents' contentment fell this week?
+MATCH (a:Agent)-[:READ]->(r:Feeling {metric: 'contentment'})
+WHERE r.at > datetime() - duration('P7D') AND r.value < r.previous
+RETURN a.name, count(r) AS falls, min(r.value) AS lowest
+```
+
+The declarations themselves are `ConfigMetric`, read from the notebook files as they stand:
+`(me:AssistantUser)-[:HAS_CONFIG]->(d:ConfigMetric)` lists every metric the world's notebooks
+declare, with `kind`, `low`, `high`, `good`, `scope`, `notebook` and the `personas` that keep it.
+
+**`Metric` and the kind names are shared vocabulary; `Embabel` and `Stat` are reserved.** A realm may
+declare its own `Metric` — a monitoring realm's series — or its own `Feeling`, and it loads and works
+like any type. A bare `MATCH (m:Metric)` then returns the realm's nodes and the host's readings
+together, as any shared label does ([LABELS_AND_COMPOSITION.md §5](LABELS_AND_COMPOSITION.md)); qualify
+it with `Embabel` to mean the host's, or with the realm's own label to mean the realm's. A realm may
+not declare a type named `Embabel` or `Stat`, name either as a parent, or take either as its realm
+label: each is a load problem, because a node carrying one claims the host wrote it.
 
 ### Who updates them
 
