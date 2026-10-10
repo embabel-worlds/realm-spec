@@ -756,6 +756,21 @@ It checks every declared aggregate against the same reduction over fetched rows,
 approval rule against calls with and without a token. A capability that the application declares
 but does not implement exactly fails the build, not a world's query.
 
+### 9.1 The adoption skill
+
+The starter's artifact carries the adoption skill (protocol §11.1): the shared core at the protocol
+version the starter implements, plus `references/spring.md`. One command installs it into a project's
+agent skills directory:
+
+```shell
+mvn com.embabel.realm:embabel-realm-maven-plugin:install-skill        # or ./gradlew embabelInstallSkill
+```
+
+A developer can then ask their coding agent to "expose this application to Embabel worlds", and the
+agent surveys the service layer, proposes what to expose, waits for agreement, implements it with
+the starter and runs `@RealmConformance`. The draft of the Spring reference is
+[`provider-skill/embabel-world-provider/references/spring.md`](provider-skill/embabel-world-provider/references/spring.md).
+
 ## 10. What the developer writes, and what the world gets
 
 | The developer writes | The world gets |

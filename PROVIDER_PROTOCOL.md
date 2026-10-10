@@ -29,8 +29,9 @@ Three things follow, and they are the reason for the protocol:
   its ids relate to the world's actually lives (§6).
 
 The protocol is language-neutral: HTTP and JSON, with nothing that assumes the provider's language,
-framework or data store. The reference provider is a Spring Boot starter; the conformance kit
-(§11) is what makes a provider in any other language trustworthy.
+framework or data store. The reference provider is a Spring Boot starter. The conformance kit
+(§11) is what makes a provider in any other language trustworthy, and the adoption skill every
+provider library ships (§11.1) is what makes one easy to drop in.
 
 ---
 
@@ -1245,6 +1246,42 @@ that runs against any provider URL and checks every MUST in this document:
 The kit reads the provider's own manifest and data, so it needs no fixtures. A provider in C#,
 TypeScript, Python, Go or anything else is conformant when the kit passes. Porting the Spring
 provider is not the requirement.
+
+### 11.1 The adoption skill
+
+The conformance kit makes a provider library trustworthy, and the adoption skill makes it easy to
+adopt. Every provider library, in every language, **ships an
+[Agent Skill](https://agentskills.io/specification) that lets a coding agent drop the provider into an
+existing application.** It is the first thing a developer meets, so it carries the protocol's
+principles to the place where code is written.
+
+It is not the same as a realm's skills (§3.7). Those are for agents inside a world, using an
+installed realm. The adoption skill is for the coding agent in the application's repository, while
+the provider is being built. One of the things it does is help write the realm's skills.
+
+**One core, one reference per stack.** The skill's core is language-neutral and maintained here,
+beside this specification, in [`provider-skill/embabel-world-provider/`](provider-skill/embabel-world-provider/SKILL.md).
+Its hard rules and workflow change when the protocol changes, in the same pull request. Each library
+adds exactly one file, `references/<stack>.md`, which maps the core's workflow onto that library and
+lists the stack's pitfalls. A library release bundles the core at the protocol version it implements,
+plus its own reference.
+
+The core's workflow is the same everywhere:
+1. **Survey** the application read-only: service layer, views, identity, authorization, side effects,
+   events, and shared identities that can become spines.
+2. **Propose** an exposure plan and wait for the developer's agreement. What a world sees is the
+   application owner's decision.
+3. **Implement** it through the library.
+4. **Verify** it, with the conformance kit as the last word.
+5. **Hand over** the URL, the credential, what was exposed and what was left out.
+
+A library ships the skill in the way its ecosystem distributes files, and offers one command that
+installs it into a project's agent skills directory. Examples:
+- a resource in the Maven or Gradle artifact, installed by the build plugin;
+- a `skills/` directory in the npm or PyPI package, installed by the package's CLI;
+- `contentFiles` in a NuGet package.
+
+The skill is versioned with the library, so a project's skill always describes the library it has.
 
 ## 12. Prior art
 
