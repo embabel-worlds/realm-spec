@@ -1,6 +1,6 @@
 # Labels and Composition
 
-**Spec version: 0.1.0**
+**Spec version: 0.2.0**
 
 Normative. What a realm author can rely on when they declare a type hierarchy or a shared
 capability label, stated as observable behaviour: things you can check by writing YAML or
@@ -177,6 +177,36 @@ prefer a qualified specific type name (`UkPlace`) with a shared parent (`Place`)
 a generic name two realms will fight over; the realm label is the disambiguator of last
 resort, not a licence to collide.
 
+### 5.1 The host's labels: reserved provenance, shared vocabulary
+
+The host owns types too, and marks them the way a realm does: every node of a type the host itself
+owns carries **`Embabel`**, its provenance label, and measured system data — the readings personas
+and agents take — carries **`Stat`** beneath it. A host metric reading is
+`:Embabel:Stat:Metric:Feeling`.
+
+**Guarantee — the host's provenance is reserved.** A realm may not declare a type named `Embabel`
+or `Stat`, name either in `parents:`, or have either as its realm label, derived or declared. Each is
+reported at load, and nothing the realm declares carries the label. So `MATCH (r:Embabel:Metric)`
+returns the host's readings and nothing a realm wrote. The labels of the host's `Config*` catalog
+are the host's in the same way.
+
+**Guarantee — the host's vocabulary is shared.** `Metric` and the kinds beneath it (`Feeling`,
+`Assessment`, `Measure`) are names a realm may declare for itself. A realm's declaration loads and
+works like any other type, owns the name in its world, and carries the realm's label; the host's
+readings keep their labels beside it. Observable:
+
+```cypher
+MATCH (m:Metric) RETURN m                // the realm's nodes and the host's readings
+MATCH (m:Embabel:Metric) RETURN m        // the host's readings only
+MATCH (m:Grafana:Metric) RETURN m        // the realm's only
+```
+
+**Guarantee — a realm extends the host's vocabulary with `parents:`.** A type declaring
+`parents: [Metric]` resolves to the world's own `Metric` when one is declared and to the host's
+otherwise, and its nodes carry `:Metric` either way. They never carry `Embabel` or `Stat`, which
+only the host writes. A join the host declares on `Metric` answers for a node named by the child
+label: `(r:Vitality)-[:READ]-(a:Agent)` walks the same edge as `(r:Metric)-[:READ]-(a:Agent)`.
+
 ---
 
 ## 6. Results
@@ -235,6 +265,10 @@ once per entity.
 ---
 
 ## Changelog
+
+**0.2.0** — §5.1: the host's own labels. `Embabel` and `Stat` are reserved provenance; `Metric` and
+its kinds are shared vocabulary a realm may declare, qualified with `Embabel` to mean the host's; a
+realm extends them with `parents: [Metric]`, and a join declared on a parent answers for its children.
 
 **0.1.0** — first published contract: label intersection, ancestor labels physically present,
 property and behaviour inheritance, host parents excluded, cross-realm capability labels,
