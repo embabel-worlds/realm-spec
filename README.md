@@ -709,6 +709,8 @@ Producers are the source-specific fetchers a `virtualJoins.producer` references 
 - name: contactsByEmail
   kind: remote                    # a RemoteRepository — gateway op (realm handler or learned API)
   operation: objectsSearch
+  queryArgs: { segment: string }    # optional typed request input from an edge's realm map
+  sourceFilters: [segment]         # source capability; does not itself narrow a request
   records: "$.results[*].properties"
   keyArg: "filterGroups.0.filters.0.values"   # where the key LIST is injected (list mode)
   args: { objectType: contacts, filterGroups: [ { filters: [ { propertyName: email, operator: IN } ] } ] }
@@ -733,6 +735,12 @@ Producers are the source-specific fetchers a `virtualJoins.producer` references 
   datasource: warehouse           # a realm/world SQL datasource (sql/datasources.yml)
   query: "SELECT id, customer_email, total FROM orders WHERE customer_email IN (:keys)"
 ```
+
+For `kind: remote`, `queryArgs` declares optional scalar request inputs (`string`, `integer`,
+`number`, `boolean`), supplied as `realm` values on the edge. Undeclared, ambiguous or invalid
+inputs are rejected, not silently dropped. `sourceFilters` lists filter-capable source fields;
+listing one does not send it. An unsent condition on a declared filter can yield
+`UNPUSHED_FILTER` when a bounded read cannot establish a match (see Virtual Cypher §7.2.2).
 
 Producer `kind`s:
 
@@ -1022,6 +1030,18 @@ paging: { style: cursor, size: 100, maxPages: 10, cursorParam: after, cursorPath
 | `cursorParam` / `cursorPath` | `after` / — | Cursor style only: request arg + JSONPath to the next cursor. `startPage` is ignored. |
 
 Omitting `startPage` preserves one-based requests (`1, 2, …`). A negative value is invalid. For either starting convention, a short page ends the walk normally; a full final page at `maxPages` reports the existing truncation warning.
+
+**A listing that may be one page: `singlePage: true`.** A `remote` producer without `paging` whose
+operation declares a page, offset or cursor argument but no page-size argument may answer only the
+page the source chooses, often its default first page. Declare `singlePage: true` on such a producer
+(a learned OpenAPI listing does this automatically). Every non-empty read then reports
+`PARTIAL_RESULT` (`TRUNCATED`), and nothing counted or summed through it is presented as an exact
+total. An empty read is still a complete answer. The warning also appears when the source did return
+everything, because the producer cannot tell.
+
+An operation that declares no paging and no page size returns its whole collection as far as a
+client can tell, so its reads are complete. A learned listing that declares a page size sends it at
+the declared default, and only a full page reports `PARTIAL_RESULT` (`TRUNCATED`).
 
 `param` / `sizeParam` name **parameters declared on the operation**, so an API that takes paging somewhere other than the query string is addressed by naming the parameters it actually declares. A handful of APIs pass paging (and even filtering) as HTTP **headers** — the NSW planning feed used by `realm-nsw-property` takes `PageSize`, `PageNumber` and a JSON `filters` string as headers. Declare them as `in: header` parameters in the vendored spec and name them here; the walker then drives them correctly (verified against a live world, 2026-07-28).
 
