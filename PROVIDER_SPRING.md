@@ -418,6 +418,65 @@ anything the method already wrote.
 Idempotency keys and their first answers are kept in an `IdempotencyStore`. The default is a JDBC
 table when a `DataSource` exists, and in memory otherwise.
 
+### 5.1 Dry runs
+
+`@RealmVerb(dryRun = true)` declares that the verb supports a dry run (protocol §5.1). The method
+learns it is in one from `RealmCall`, and records what it would do instead of doing it:
+
+```java
+@RealmVerb(description = "Refund part or all of a paid invoice.", subject = InvoiceView.class,
+           effect = Effect.EXTERNAL, idempotent = true, dryRun = true,
+           approval = @RealmVerb.Approval(required = Required.WHEN, when = "amount > 500",
+                                          reason = "Refunds over 500 need a second person."))
+@Transactional
+public RefundResult issueRefund(RefundRequest request, RealmCall call) {
+    var invoice = invoices.requirePaid(request.number());
+    invoice.refund(request.amount());
+    call.records().update(InvoiceView.class, invoice.number(), "status", invoice.previousStatus(), invoice.status());
+    if (call.isDryRun()) {
+        call.external("payment", "Refund " + request.amount() + " to the card ending " + invoice.cardLast4());
+        return null;
+    }
+    return payments.refund(invoice, request.amount());
+}
+```
+
+The starter runs a dry run in a transaction it always rolls back, so a method that writes through
+JPA before checking `isDryRun()` still leaves nothing behind. Rollback cannot recall an email or a
+payment, though. The method must check `isDryRun()` before any external effect, and the conformance
+kit's dry-run check is what catches one that does not. The starter suppresses `@RealmEvent` events and
+change records published during a dry run, and evaluates the approval rule to report `approval`
+without verifying any token.
+
+### 5.2 Proposed agents
+
+A proposed agent (protocol §5.3) is the same YAML a realm author writes in `agents/`, placed under
+`src/main/resources/embabel/agents/`, with routines whose `spec.kind` is `verb`:
+
+```yaml
+# src/main/resources/embabel/agents/collections.yml
+name: collections
+job: Make sure no invoice goes unpaid without someone chasing it.
+routing: Overdue invoices, reminders, refunds, write-offs
+routines:
+  - name: dunning
+    description: Every weekday morning, remind customers whose invoices are newly overdue.
+    schedule: "0 0 8 * * MON-FRI"
+    spec:
+      kind: verb
+      verb: runDunning
+      input: { asOf: now }
+```
+
+There is no annotation for it. An agent is a proposal about how the world should use the
+application, not something the application's code does, so it reads better as the document a realm
+author would write. The starter refuses to start if a routine names a verb the realm does not expose,
+or if a routine uses any kind other than `verb`. It also warns about a mapped input that cannot
+satisfy the verb's schema.
+
+An application that also uses `embabel-agent` and wants a conversational colleague exposes the agent
+over the framework's A2A support and names the endpoint with `a2a:` in the agent's YAML.
+
 ## 6. `EmbabelRealm`: registering from code
 
 Annotations cover types and methods known at compile time. Some applications know theirs only at
@@ -707,4 +766,7 @@ but does not implement exactly fails the build, not a world's query.
 | `Specification`, `Sort`, `Limit`, `ScrollPosition` parameters | filters, ordering, per-key limits and paging evaluated next to the data |
 | `@RealmAggregate` | counts and sums computed in the database |
 | `@RealmVerb` with `@RealmVerb.Approval` | operations its agents can propose, approved by the right people and enforced by the application |
+| `dryRun = true` and `call.isDryRun()` | approvers and observing agents see what a call would do before it happens |
+| an `agents/*.yml` resource | a proposed colleague whose routines run the application's verbs, governed by the world |
+| nothing at all | typed TypeScript for every type and verb, and methods on the types, for the world's scripts (protocol §9.1) |
 | `realm.changes().upsert(...)` | caches that are invalidated when data changes, not merely when a TTL expires |

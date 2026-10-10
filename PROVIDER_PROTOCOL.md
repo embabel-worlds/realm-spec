@@ -129,6 +129,7 @@ and the host builds the realm from it alone. It carries an `ETag`; the host reva
 | `auth` | §3.4. |
 | `types` | §3.1. |
 | `verbs` | §5. |
+| `agents` | Proposed agents (§5.3). |
 | `changes` | Whether `GET /changes` exists (§7.1). |
 | `events`, `eventRetention` | The events the provider publishes, and how long it keeps them (§7.2). |
 | `delivery` | Whether the provider can push events and changes to a host that subscribes (§7.3). |
@@ -768,6 +769,7 @@ authorization.
 | `input`, `output` | JSON Schema (2020-12). The host validates `input` before calling. |
 | `effect` | `read`: no change anywhere. `write`: changes the provider's own data. `external`: has an effect outside the provider that cannot be taken back — an email sent, a payment made. |
 | `idempotent` | Whether repeating the same call is safe. |
+| `dryRun` | Whether the verb accepts a dry run (§5.1). |
 | `approval` | §5.2. Absent means `{ "required": "never" }`. |
 
 ### 5.1 Calling a verb
@@ -775,6 +777,40 @@ authorization.
 `POST {provider}/verbs/{name}` carries the input as its body, the acting user, and an
 `Idempotency-Key` header the host generates per logical attempt and reuses on retry. A provider
 that has seen that key returns the first answer again.
+
+**Dry runs.** A verb that declares `"dryRun": true` accepts `POST {provider}/verbs/{name}?dryRun=true`.
+The provider validates the input and authorizes the call exactly as for a real call. It then reports
+what the call *would* do, and does none of it:
+
+```json
+{
+  "dryRun": true,
+  "records": [
+    { "type": "Invoice", "key": "INV-1001", "op": "update",
+      "changes": { "status": { "from": "paid", "to": "partiallyRefunded" } } }
+  ],
+  "external": [
+    { "kind": "payment", "description": "Refund 1280.00 to the card ending 4242" }
+  ],
+  "approval": { "required": true, "reason": "Refunds over 500 need a second person." }
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `records` | Changes to the provider's own records, as `create`, `update` or `delete`, with the changed properties of an update. |
+| `external` | Effects outside the provider, described for a person: the email that would be sent, the payment that would be made. |
+| `approval` | Whether the real call would need approval, and why. This is how a host learns the answer for a `decided` verb before asking anyone. |
+
+A dry run needs no approval and no idempotency key, and it must have no effect. It writes no record,
+calls no external system and publishes no change or event. The conformance kit checks this. A dry run
+is a prediction, not a reservation: the real call may differ if the data changed in between, and the
+provider's real answer is the one that counts.
+
+A host uses dry runs in three places:
+- it shows the approver of a call what the call will do (§5.2);
+- it lets an agent check a plan before acting;
+- it gives an agent in the observing stage something to report (§5.3).
 
 ### 5.2 Approval
 
@@ -833,6 +869,83 @@ purchase order that goes through the app's own sign-off, does not need the host 
 approval. It declares `required: "never"` and answers the call with `202 Accepted` and
 `{ "status": "pending", "reference": "PO-88123" }`. The outcome arrives as an event or a change (§7)
 like any other change to its records.
+
+### 5.3 Routines and agents
+
+A world's agents are colleagues the world governs. The world chooses their sponsor, sets their
+stage (off duty, observing, on duty) and runs only the version their sponsor signed
+([README, `agents/`](README.md#agents--agents-and-their-routines)). A realm proposes agents and the
+world decides about them. A provider gets exactly the same arrangement: it proposes, and the world
+governs.
+
+**A routine whose body is a verb.** A routine has a trigger — a signal or a cron schedule — and a
+body. With `spec.kind: verb`, the trigger stays in the world and the body is one of the provider's
+verbs:
+
+```json
+{
+  "name": "dunning",
+  "description": "Every weekday morning, remind customers whose invoices are newly overdue.",
+  "schedule": "0 0 8 * * MON-FRI",
+  "spec": { "kind": "verb", "verb": "runDunning", "input": { "asOf": "now" } }
+}
+```
+
+```json
+{
+  "name": "refund-on-cancellation",
+  "match": { "signalType": "crm.SubscriptionCancelled" },
+  "spec": { "kind": "verb", "verb": "refundUnusedPeriod",
+            "input": { "customerEmail": "signal.properties.email", "cancelledAt": "signal.occurredAt" } }
+}
+```
+
+- `input` maps each input property to a path into the routine's context: `signal.subject`,
+  `signal.occurredAt`, `signal.properties.<name>`, or `now`. Any other JSON value is passed as a
+  constant. Paths are the whole language; there is no templating. The host validates the mapped input
+  against the verb's schema before calling, and records a routine whose mapping cannot satisfy the
+  schema as a problem when it loads.
+- The trigger may be any signal in the world, from any realm. That is why the trigger lives in the
+  world: a CRM's cancellation can drive the billing system's refund, and neither application knows
+  about the other.
+- The call is an ordinary verb call. It carries approval (§5.2), idempotency (an `Idempotency-Key`
+  derived from the routine execution, so a redelivered trigger never runs the verb twice) and the
+  provider's own authorization. The acting user is the agent's sponsor.
+- **Stage.** On duty, the host calls the verb. Observing, it calls the verb as a dry run if the verb
+  declares `dryRun`, and reports what it would have done. It never calls a `write` or `external` verb
+  for real. If the verb has no dry run, it reports that the routine would have run. Off duty, nothing
+  runs.
+
+**Proposed agents.** The manifest may carry `agents`, in the shape of a realm's agent files: `name`,
+`job`, `routing`, `routines` and `duties`. Routines may use `kind: verb` and nothing else, because a
+provider ships no code into the world. As with a realm's agents, the world ignores any sponsor,
+owner or stage a manifest declares. A proposed agent arrives off duty, with no sponsor, and unsigned.
+
+```json
+"agents": [
+  {
+    "name": "collections",
+    "job": "Make sure no invoice goes unpaid without someone chasing it.",
+    "routing": "Overdue invoices, reminders, refunds, write-offs",
+    "routines": [ { "name": "dunning", "...": "as above" } ],
+    "duties": [ { "name": "no-silent-overdue", "text": "No invoice is overdue for a week without a reminder",
+                  "holds": "SilentOverdueInvoice", "every": "0 0 * * * *" } ]
+  }
+]
+```
+
+**What a sponsor signs.** For a verb-backed routine, the signature covers the agent and routine
+definitions, the input mapping, and the declaration of every verb its routines call: name, schemas,
+`effect` and `approval`. A provider that changes any of these causes an unsigned change on the agent,
+which runs the signed version until the sponsor signs again. The world cannot sign the provider's
+code, only what the provider declares about it. The specification says so plainly because that is
+where the provider's own release discipline takes over.
+
+**Conversational agents.** An agent people talk to is reached over
+[A2A](https://a2a-protocol.org/), not over this protocol. A proposed agent may name an A2A endpoint
+relative to the provider URL (`"a2a": "a2a/collections"`), and the world offers it as a colleague,
+under the same sponsorship and stage rules. This protocol carries the agent's proposal and its
+governance, and A2A carries the conversation.
 
 ## 6. Spines and identity bridging
 
@@ -1034,7 +1147,8 @@ This is what makes the world side one URL. Given `https://billing.example.com/em
 | metadata, `about` | the realm's `realm.yml` fields and brief |
 | `skills[]` | the realm's skills, without scripts |
 | `events[]` | world sources, delivered by poll or by push subscription |
-| `verbs[]` | gateway operations; `approval` becomes the verb's approval policy in the world |
+| `verbs[]` | gateway operations, and methods on their subject types (§9.1); `approval` becomes the verb's approval policy in the world |
+| `agents[]` | proposed agents, off duty, unsponsored and unsigned (§5.3) |
 
 4. Validate it like any other realm, install it, and report anything inert: a spine the world does
    not have, a reference with no lookup behind it.
@@ -1046,6 +1160,56 @@ rules, an app — writes an ordinary realm that depends on it.
 The `provider` producer kind is new. Its behaviour is the batch contract of §4.2, the query contract of §4.3 and
 the aggregate contract of §4.4, and nothing else; it takes no authored query and no configuration beyond what the
 manifest says.
+
+### 9.1 What scripts see
+
+A provider ships no code into the world, and it does not need to for code to reach it. The host
+generates the typed surface that scripts, routines and apps use from the manifest at install, and
+regenerates it whenever the manifest's `ETag` changes. It appears in the host's capability listing
+like any other realm's surface. The provider author never writes TypeScript, whatever language the
+provider is written in.
+
+```ts
+/** An invoice issued to a customer. */
+interface Invoice {
+  number: string;
+  customerId: string;
+  amount: Decimal;              // a branded string: exact, never a float
+  dueDate: string;              // ISO 8601 date
+  status: "draft" | "open" | "paid" | "void";
+  lines?: InvoiceLine[];        // a part list, present when asked for
+}
+
+declare namespace gateway.billing {
+  /**
+   * Refund part or all of a paid invoice to the customer's original payment method.
+   * Needs approval when amount > 500: "Refunds over 500 need a second person."
+   */
+  function issueRefund(input: IssueRefundInput, options?: { dryRun?: boolean }):
+      Promise<IssueRefundOutput | PendingApproval | DryRunResult>;
+}
+```
+
+| Manifest | Generated |
+|---|---|
+| a type | an interface, with each property's description as JSDoc |
+| `decimal`, `date`, `datetime` | branded strings, so exact values are never coerced to floats |
+| an `object` property | a nested interface |
+| a part list | an optional array of the part's interface |
+| a verb | a function in the realm's namespace, with input and output types generated from its JSON Schemas by a standard converter, and its description and approval rule as JSDoc |
+| a verb with a `subject` | also a **method on the subject type**, so code that has queried its way to an invoice calls `invoice.sendReminder({ note })` |
+| an event | the typed `signal.properties` of a routine that matches it |
+
+**Approval is in the return type.** A verb that can need approval returns
+`Output | PendingApproval`. A script cannot assume the refund happened. The compiler makes it handle
+the case where the call is waiting for a person, and `PendingApproval` carries the approval request's
+id to wait on or report. A verb with `dryRun` accepts `{ dryRun: true }` and then returns `DryRunResult`.
+
+**Reads are Cypher, not generated accessors.** The host generates no `billing.Invoice.byCustomerId(...)`.
+A script reads a provider's types the way it reads every type: through the host's Cypher query path,
+which pushes down into the provider (§4.1) and joins it to the rest of the world in the same query.
+The generated interfaces type the rows. A second, provider-only read path would join nothing and would
+duplicate a surface that already exists.
 
 ## 10. The Spring Boot provider (informative)
 
@@ -1075,6 +1239,7 @@ that runs against any provider URL and checks every MUST in this document:
 - every declared aggregate, against the same reduction over fetched rows;
 - cursor termination and truncation reporting;
 - idempotency keys, and approval enforcement with and without a valid token;
+- that a dry run has no effect: no changed record, change or event afterwards;
 - error codes.
 
 The kit reads the provider's own manifest and data, so it needs no fixtures. A provider in C#,
@@ -1133,9 +1298,9 @@ answer the manifest differently depending on who connects:
   still enforces visibility on every read, refusing a filter on a property the user cannot see,
   because a filter on a hidden value reveals it as surely as returning it.
 
-In the Spring provider this maps onto Jackson's `@JsonView`. A view type already annotated for
-different API audiences declares its role-scoped shapes with no new annotations, and a
-`RealmViewResolver` maps the acting user's authorities to a view.
+Most stacks already have a way to describe audience-specific shapes, so a provider rarely needs a
+new one. Examples are serializer views or contexts, GraphQL field authorization and OData
+`$select` restrictions. The Spring provider maps it onto Jackson's `@JsonView` (PROVIDER_SPRING.md).
 
 **Masking.** Some properties are useful in a form that does not disclose them: an IBAN shown as its
 last four digits, an email hashed so it still joins. A property could declare
@@ -1184,9 +1349,6 @@ credential. Each tenant's world sees only its own types, including tenant-specif
   `dueDate < today`, and afterwards `lastRemindedAt` is set. The Embabel framework's GOAP planner
   plans with exactly this shape, the `pre` and `post` of `@Action`. The world's agents could then
   chain a provider's verbs into plans, rather than calling them one at a time and hoping.
-- **Dry runs.** `POST /verbs/{name}?dryRun=true` returns what the call would do — the records it
-  would change, as a diff, and the money it would move — without doing it. The approver of a
-  refund (§5.2) sees the diff, not just the input. An agent checks a plan before asking anyone.
 - **Record proposals.** Instead of a verb per change, a world proposes record edits against a type:
   "set this invoice's due date". The provider validates the edit with its own rules, answers with
   the diff and the approval it requires, and applies it on approval. That is §13's open question
