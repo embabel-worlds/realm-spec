@@ -245,9 +245,9 @@ only the `records:` paths the join declared. An unmodelled node has no way in, s
 fail loud about; the risk `brings:` actually carries is the opposite one, a declared child arriving
 without its `id`, which is [reported, not swallowed](#9-caps-cost-and-diagnostics).
 
-And these run but are **capped** (never silently — see §9): a probe binding more than `maxAnchors`
-anchors is rejected before any call is made, and a materialization that would create more than
-`maxFanoutTotal` nodes is truncated at the cap, each with a diagnostic.
+And these run but are **capped** (never silently — see §9): a join that would ask its source for
+more than `maxAnchors` distinct keys is refused before any call is made, and a materialization that
+would create more than `maxFanoutTotal` nodes is truncated at the cap, each with a diagnostic.
 
 > **Design principle.** Every rejection has the same root: *the engine must always know the fetch
 > is bounded.* A bound anchor, a declared shape, and hard caps are what make "splice a live API
@@ -1291,6 +1291,14 @@ and it fetches ONCE for the batch (the producer's batch contract), not once per 
   evaluated before the fetch, exactly as `{key: expression}` is, and seeds what it evaluates to.
 - **Alternatives on one key enumerate their union.** `k IN ['a'] OR k = 'b'` seeds `'a'` and `'b'` —
   the same set written two ways.
+- **A list narrowed by a ranked `LIMIT` fetches for the anchors the `LIMIT` keeps.** In
+  `MATCH (s:Shop) WHERE s.code IN ['s1', …, 's6'] WITH s ORDER BY s.rank LIMIT 3 MATCH (s)-[:HAS_STOCK]->(x)`
+  the hop is asked for the three shops the ranking keeps, not the six the list names. That holds
+  when every listed value resolves to a stored node and the `LIMIT` is ranked by an `ORDER BY` over
+  this anchor. Where it does not — a value no stored node holds (a minted anchor has no sort key to
+  rank by), an unranked `LIMIT` (the k a probe keeps need not be the k the query keeps), or an
+  anchor label this query is itself fetching — every listed anchor is bound and fetched for, and the
+  graph narrows afterwards: a fuller fetch, never a wrong k.
 
 **A parameter list seeds exactly as the literal list does.** `WHERE q.abn IN $abns` with `abns`
 supplied answers the same rows as the same values written inline — supplied parameters are
@@ -1377,7 +1385,30 @@ A producer's `cache:` declares how CURRENT its answers are:
   query re-reads. A query may force one live re-read of a TTL source with `{ai: {fresh: true}}` on
   the virtual edge; the fresh result then serves subsequent queries within a new window.
 
-**What the cache is keyed on.** A cached fetch is keyed per anchor key AND per the set of predicates the engine attached to the target node for that query (§7.6.1 lists the shapes; a `WITH` does not end attachment) AND the `LIMIT` of a terminal query. Two queries over the same door with different attached sets or limits are two fetches, each with its own TTL. A family of views that should share one read filters on **projected variables** (`WITH n, n.created_at AS createdAt WHERE createdAt >= $since`), limits terminal results by list slice, and keeps a `WITH … LIMIT` only directly before a hop, where it bounds the hop's anchors without entering the key (README, "Predicate pushdown"). Measured on a `periods:` door (§5.17): a dozen calls for the first view of a repository, 0 calls and 150–600 ms for every other view over any window.
+**What the cache is keyed on, and what a cached entry may answer.** A cached fetch is keyed per
+anchor key AND per the set of predicates the engine attached to the target node for that query
+(§7.6.1 lists the shapes; a `WITH` does not end attachment) AND the `LIMIT` of a terminal query.
+The exact key is the first question the cache is asked, not the last: when it misses, a live,
+complete entry for the same anchor key that answers a **broader** question than the one asked
+serves it, with no call. A complete read under the same filter serves any shorter `LIMIT` and an
+existence test; a complete read with no filter serves a question with a pushed filter, since what
+the source would have returned is a subset of what it already did (a capped unfiltered prefix does
+not, since the filtered records may lie past its cap); a cached `LIMIT 50` prefix serves
+`LIMIT 10` in the same declared order — sound only because an early stop is licensed only in the
+source's declared order, so a different `ORDER BY` or a longer `LIMIT` is a fresh fetch. Whatever
+served it, the graph applies the query's own filter and `LIMIT` to the records exactly as it does
+to a fresh fetch, and the result reports the entry as `cached`, observed when the broad read was.
+The converse never holds: a narrower entry never serves a broader question; a truncated or partial
+entry, and a one-record-per-key existence entry, serve nothing but themselves; and only producers
+whose source returns a fixed collection narrowed by a pushed filter and a cap take part — a result
+a demand or a model shapes (generative, aggregate, extraction) is keyed exactly, as is each window
+of a `periods:` door. Within one TTL window the calls a family of views makes therefore depend on
+the order it runs in: the broadest read first, and the rest are served. A family that must share
+one read whatever the order filters on **projected variables** (`WITH n, n.created_at AS createdAt
+WHERE createdAt >= $since`), limits terminal results by list slice, and keeps a `WITH … LIMIT` only
+directly before a hop, where it bounds the hop's anchors without entering the key (README,
+"Predicate pushdown"). Measured on a `periods:` door (§5.17): a dozen calls for the first view of a
+repository, 0 calls and 150–600 ms for every other view over any window.
 
 **The `freshness` block.** Whenever a query touched an external source, its result envelope carries
 a `freshness` array alongside `rows` and `warnings`: one entry per source read,
@@ -2932,7 +2963,7 @@ dataset revision. Caching is governed by the §9 diagnostics:
 
 - **Positive result** — a genuine, successful fetch (**including a real "no records"**) is cacheable with a
   per-producer `ttl` (or `immutable` for stable reference data). A repeat query for the same key reads the
-  cache; no producer call fires.
+  cache, and so does a narrower question over the same key where §5.13 allows it; no producer call fires.
 - **Negative (entity) result** — a *known miss* for an ENTITY (this login / email / domain resolves to
   nothing) is cached too, so a fan-out doesn't re-probe a dead key every query. This is a store with a
   TTL and **invalidate-on-reconnect**: reconnecting an integration re-attempts every key previously
@@ -2989,13 +3020,17 @@ a bound that bites is **always surfaced**, never silent.
 
 **Caps (per join):**
 
-- **`maxAnchors`** (default 200) — reject if the probe binds more anchors than this (a fan-out
-  guard; pin/filter the anchor).
+- **`maxAnchors`** (default 200) — refuse, before any call is made, a join that would ask its
+  source for more distinct keys than this (a fan-out guard; pin/filter the anchor).
 
-  The cap counts **anchors, not records**, and that distinction decides what helps. Pushing a
-  predicate on the TARGET makes each call cheaper and leaves the NUMBER of calls exactly as it was;
-  only narrowing the anchor set — or reaching the target through a different door — changes whether
-  the query is refused.
+  The cap is spent in **distinct keys, not records — and not anchor rows either**. A per-key source
+  is asked once per distinct key however many anchors share it, and the cap exists to bound those
+  calls, so a thousand stored anchors in three categories cost three against it and every anchor
+  keeps its records, while a thousand anchors with a thousand keys are refused, by the keys counted.
+  The refusal says what it counted: the join *would ask the source for N distinct keys, exceeding
+  `maxAnchors`*. That distinction decides what helps. Pushing a predicate on the TARGET makes each
+  call cheaper and leaves the NUMBER of calls exactly as it was; only narrowing the anchor set — or
+  reaching the target through a different door — changes whether the query is refused.
 
   **Declare a second door where your source offers one.** A join is one call per anchor, so a realm
   that also declares the same target keyed on something else gives a query a way in that does not
@@ -3114,11 +3149,43 @@ space-separated search qualifier does not, since `status:open status:pending` me
 API and matches nothing. Where a rule cannot express the set, it renders nothing and the predicate
 stays a graph-side filter.
 
+An `OR` of equalities on ONE property of ONE fetched variable (`c.status = 'open' OR c.status =
+'closed'`) is the same set spelled differently, and is pushed exactly as the `IN` it spells: the same
+rule, the same OR group in the qualifier, the same residual, with a bound parameter among the arms
+read as its value. An `OR` that mixes properties, variables or non-equalities — `c.status = 'open'
+OR c.priority = 'high'`, `c.status = 'open' OR NOT c.closed`, an arm on another node — pushes
+nothing and stays with the graph, since no fetch narrowed on one property's values returns every
+row such a disjunction admits. The two spellings are also declined together: a rule declaring only
+`EQUALS` absorbs neither, because the engine never splits a set into one call per value.
+
 **What "absorbed" means, and why it is load-bearing.** A rule that renders nothing is reported as
 having absorbed nothing, and the engine plans accordingly. This is not bookkeeping: the residual —
 what the source did *not* take — is what decides whether a `LIMIT` may be pushed and whether a count
 may be asked of the source instead of fetched. A rule that claimed a filter it did not send would
 license the engine to read one page and call it the whole answer.
+
+**A pushed `LIMIT` is a count of records that suffice, and a `SKIP` adds to it.** When every
+predicate on the target is absorbed, a terminal `LIMIT n` bounds the fetch at `n` records and the
+page walk stops at the page that holds them. `SKIP s LIMIT n` bounds it at `s + n`: the skipped rows
+must be read to be skipped, and the number that suffices is written in the query, so the bound
+widens rather than lapsing. `ORDER BY r.v SKIP 1000 LIMIT 10` over an offset-paged source that
+declares and honours `orderedBy: v asc` reads the pages holding the first 1,010 records, not every
+page. The store still applies `SKIP` and `LIMIT` to the rows. What the fetch can count is a `SKIP`
+written as a literal in the top-level `RETURN`, or a parameter the caller supplied (substituted before
+the query is read). A `SKIP` it cannot count — an expression (`SKIP 999 + 1`), a `SKIP` in a `WITH`,
+a subquery or one arm of a `UNION`, a `RETURN SKIP` beside a `LIMIT` written in an earlier `WITH`,
+or a sum too large to hold — never under-counts: it releases the bound, and the fetch reads the
+source whole and still answers right.
+
+**An existence test is capped at one record per key, and asked per key only where a page walk
+could starve a key.** `EXISTS { (a)-[:R]->(:T) }` needs one record per anchor key to answer, so the
+fetch behind it is capped at one. Where the source **pages**, the keys are asked one per call: a
+batched page walk would stop at page one and declare the keys not on that page empty. Where the
+source does not page — one call returns everything it holds for the keys asked — a batch under the
+cap is complete per key, so the keys are asked in batches of `maxKeysPerCall`: three hundred
+anchors on such a source are six calls of fifty, each anchor in exactly one, not three hundred. A
+source declaring `batchSafe: false` is asked one key per call whether it pages or not, since that
+declaration says a batched answer is not complete per key.
 
 **Asking the source for a number instead of the records:** a producer may declare what it can
 aggregate, so a query that only counts costs one call rather than one call per anchor.
@@ -3927,5 +3994,7 @@ on, and it is the claim worth testing.
 
 Within a scope, a fetch is keyed by everything that changes the result set — the producer, the
 resolved key, the pushed-down filter, any steer or tuning, and the limit and demand in force. A read
-taken under a cap therefore never serves one taken without. This is what lets a warm-up in one
+taken under a cap therefore never serves one taken without. The other direction is allowed, on the
+conditions §5.13 states: a complete read taken without a cap or filter may serve the same key's
+question under one, because the narrower answer is inside it. This is what lets a warm-up in one
 request populate the cache for another without a truncated answer being served as a complete one.

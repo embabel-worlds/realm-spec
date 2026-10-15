@@ -415,8 +415,9 @@ verses say otherwise.
 
 ### Cost declarations: `maxAnchors` is about the SOURCE, not the number
 
-`maxAnchors` bounds how many nodes may drive one fetch. Its default assumes a **per-anchor**
-source, where every anchor is another API call. A source that answers the whole key set in one
+`maxAnchors` bounds how many distinct keys one fetch may ask its source for — a thousand anchors
+sharing three keys spend three. Its default assumes a **per-key** source, where every key is
+another API call. A source that answers the whole key set in one
 statement (a database, a triplestore, a file) is nearly free per anchor, and the host now defaults
 those far higher — so declare `maxAnchors` only when you know something the kind does not imply: a
 metered API to protect (go lower), or a batch op behind a `remote` producer (go higher).
