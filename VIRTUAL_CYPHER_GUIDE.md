@@ -193,6 +193,15 @@ fetched are n rows answered), and a `count()` can be asked of the source instead
 call for the whole question rather than one per anchor. Neither is safe while the graph still has
 filtering left to do, so an undeclared filter costs more than its own page.
 
+**When there is nothing to declare, say so: `pushdown: []`.** A thread endpoint that returns the
+whole conversation, a list keyed by status and nothing else — some sources apply no filter at all,
+and every `WHERE` on their target is the graph's by construction. An absent `pushdown:` key cannot
+express that; it reads as "not declared yet", so the realm is warned at load and every read past a
+handful of records carries advice to declare a rule that cannot exist. A declared empty list is the
+author's statement that the source filters nothing: the load warning goes, the read's cost note
+says the source applies no filters, and `EXPLAIN` names the residual without telling you to declare
+it. The note itself stays, because it is what marks the read as complete and its empty as exact.
+
 ---
 
 ### 3.5 Pagination, batching, and the starvation trap (`batchSafe`)

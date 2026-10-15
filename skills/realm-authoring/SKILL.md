@@ -457,6 +457,15 @@ Three things help you do that and check it:
   `applied by the graph after fetching: status`. A residual there is the predicate to go and
   declare next — it is costing you on a query someone actually runs.
 
+**If the source applies no filters, write `pushdown: []` and say why in a comment.** A thread
+endpoint that returns the whole conversation, a list keyed by status that takes nothing else: there
+is no rule to declare, and leaving the key out does not say so — an absent key is read as "not yet
+declared", and the realm is warned at load and advised on every sizeable read to declare a rule it
+cannot have. The empty list clears the load warning, turns the read's cost note into a statement
+that the source applies no filters, and takes the instruction off `EXPLAIN`'s residual line. Do not
+reach for it to silence a warning on a source that does filter: a rule it would have applied is then
+never written, and the engine cannot tell.
+
 A captured realm's handler-backed producer follows the same rule through `pushdown` rules — see
 "Cover EVERY filter" under [Captured realms](#captured-realms-producers-graph-reads-apps-and-proposals).
 

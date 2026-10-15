@@ -3033,6 +3033,15 @@ still applied to the materialized graph, so the same query returns the same rows
 pushed or not; only the number of records fetched differs. A value that does not fit the rule's
 declared shape is left to the graph rather than embedded in a source query it would corrupt.
 
+**A producer whose source applies no filters declares `pushdown: []`.** The empty list is a
+statement and an absent key is not: without the key the engine treats every residual as a rule not
+yet written — a load warning, a cost note with advice on each read of 25 records or more, and an
+instruction on `EXPLAIN`'s residual line. With it, the engine accepts that every predicate on the
+target is applied in the graph by construction, and says so without advising anything. The cost
+note is still recorded on such a read, since it is the evidence that the read was complete and the
+graph did the filtering, which is what makes an empty result an exact one. The declaration cannot
+conflict with rules: it is the `pushdown:` key itself, holding either rules or nothing.
+
 **Two ways to write a rule.** A rule renders either **text** or a **structured clause**, and it
 declares exactly one of them.
 
