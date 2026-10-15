@@ -3184,6 +3184,32 @@ detail view says to ask it about named accounts rather than the whole book.
 The planner budgets producer calls against it and, when a query can't fit, emits `EXPLAIN`-style
 **advice** (push a predicate, add a `LIMIT`, narrow the anchor) rather than silently over-calling.
 
+**Bounds (per statement):** the caps above are declared per join and bound what a query asks of a
+SOURCE. Two further bounds belong to the statement itself and bound what it may spend in the engine.
+Neither is declared in a realm, neither can be raised from a query, and either one stopping a
+statement is reported as a refusal of kind `BUDGET_EXCEEDED` carrying the limit it exceeded and the
+unit that limit is in:
+
+- a **work** bound, counted in match steps — the candidate space a pattern walks. A statement that
+  exceeds it returns nothing and is told which of the two causes is its own: a pattern with nothing
+  to anchor it, or too many node sets matched at once, where the candidate space is the product of
+  them even though each set is labelled.
+- a **time** bound, counted in milliseconds, off unless the host sets one. It is a **backstop**, not
+  a second way to say the same thing: work is counted in match steps, and a statement whose cost
+  lies somewhere those are not charged — a filter evaluated per candidate over a wide match is the
+  shape to know — can run a long time while the work bound barely moves. The work bound is the one a
+  query should ever meet, because it can say what to do about it; a statement that reaches the time
+  bound is told what is usually true of one that does, which is that it is unbounded in a shape the
+  other bound cannot see.
+
+A host that sets no time bound has only the work bound, which is the behaviour every deployment had
+before the time bound existed. Where a host does set one, it is a property of the deployment and not
+of the query: the same statement may be answered on one appliance and declined on another, and a
+realm cannot tell which from its own files. **So a realm must not rely on either bound as control
+flow.** They exist to make a runaway statement fail loudly and diagnosably instead of spinning; a
+query whose correctness depends on being stopped is a query to rewrite, by narrowing the match
+before filtering it — anchoring it, or staging the joins with `WITH` and aggregating as you go.
+
 **A rate limit is never an empty answer.** When a source's rate bucket cannot fit every lookup a
 query needs now, the lookups that fit are made and the rest are deferred. The answer is flagged
 partial and says how many were looked up and how many are pending; asking again fills in more.
