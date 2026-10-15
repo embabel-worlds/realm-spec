@@ -189,9 +189,18 @@ Appending is what keeps an existing `keyArg: "domain.0.2"` pointing at the tripl
 
 **Why it is worth declaring, beyond saving a page.** What the source absorbs decides what else the
 engine may do. With every predicate on the target absorbed, a `LIMIT` can stop the page walk (n rows
-fetched are n rows answered), and a `count()` can be asked of the source instead of fetched — one
-call for the whole question rather than one per anchor. Neither is safe while the graph still has
-filtering left to do, so an undeclared filter costs more than its own page.
+fetched are n rows answered; `SKIP s LIMIT n` stops it at s + n, since the skipped rows must be read
+to be skipped), and a `count()` can be asked of the source instead of fetched — one call for the
+whole question rather than one per anchor. Neither is safe while the graph still has filtering left
+to do, so an undeclared filter costs more than its own page.
+
+**A read is reused for the narrower questions inside it.** Within a producer's cache window, the
+engine does not re-read the source for a question that a cached complete read for the same key
+already contains: the unfiltered read of an account's cases serves `WHERE c.status = 'open'` over
+the same account, and a `LIMIT 50` read serves `LIMIT 10` in the same declared order, each with no
+call and reported as cached. It never works the other way — the filtered read does not serve the
+unfiltered one, and a truncated read serves nothing but itself — so in a family of views, run the
+broadest first (VIRTUAL_CYPHER §5.13).
 
 **When there is nothing to declare, say so: `pushdown: []`.** A thread endpoint that returns the
 whole conversation, a list keyed by status and nothing else — some sources apply no filter at all,
@@ -314,6 +323,12 @@ RETURN p.name
   targets *are* materialized so the existence test can be evaluated.)
 - After materialization, `EXISTS { … }` is a normal Cypher test: keep only people who got **both**
   a `GitHubIdentity` and a `HubSpotContact` materialized.
+- **What it costs.** An existence test needs one record per key, so the fetch behind it is capped
+  at one. Whether that is one call per key depends on the source: one that **pages** is asked one
+  key at a time, because a batched page walk would stop at page one and read the keys not on it as
+  empty; one that does not page answers a batch completely under the cap, so its keys go in batches
+  of `maxKeysPerCall` (three hundred anchors, six calls of fifty). `batchSafe: false` keeps one key
+  per call either way (§3.5).
 
 The same mechanism powers `NOT EXISTS` ("in HubSpot but **not** on GitHub"), `OR` ("on GitHub **or**
 in HubSpot"), and `COUNT { … }`. Express existence with `EXISTS { }`, not an `OPTIONAL MATCH … WHERE
@@ -452,6 +467,13 @@ Note the direction of the membership test. `'OLDER_ADULT' IN t.ageGroups` asks w
 list contains a value; `t.overallStatus IN ['RECRUITING', 'COMPLETED']` asks whether the record's
 value is in a list *you* wrote. They are different questions, and only the first describes a
 list-valued property.
+
+The second question has two spellings, and they push alike. `t.overallStatus = 'RECRUITING' OR
+t.overallStatus = 'COMPLETED'` is the set `IN ['RECRUITING', 'COMPLETED']` written out, and it
+reaches a producer declaring an `IN` rule exactly as the list does. An `OR` that mixes properties
+(`t.overallStatus = 'RECRUITING' OR t.phase = 'PHASE3'`), reaches across variables, or has a
+non-equality arm pushes nothing and is applied in the graph: the rows are the same, the fetch is
+broad.
 
 ---
 
