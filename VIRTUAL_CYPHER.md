@@ -246,8 +246,8 @@ fail loud about; the risk `brings:` actually carries is the opposite one, a decl
 without its `id`, which is [reported, not swallowed](#9-caps-cost-and-diagnostics).
 
 And these run but are **capped** (never silently — see §9): a probe binding more than `maxAnchors`
-anchors, or a materialization exceeding `maxFanoutTotal` nodes, is rejected or truncated with a
-diagnostic.
+anchors is rejected before any call is made, and a materialization that would create more than
+`maxFanoutTotal` nodes is truncated at the cap, each with a diagnostic.
 
 > **Design principle.** Every rejection has the same root: *the engine must always know the fetch
 > is bounded.* A bound anchor, a declared shape, and hard caps are what make "splice a live API
@@ -3020,8 +3020,23 @@ a bound that bites is **always surfaced**, never silent.
 
   So the second door is worth declaring whether or not the rewriter is on: it is what the author
   pins today, and the search space the engine gets tomorrow.
-- **`maxFanoutTotal`** (default 5 000) — reject if materialization would create more nodes than
-  this (primary + brought).
+- **`maxFanoutTotal`** (default 5 000) — the most nodes one materialization of this join may create,
+  counting each fetched record and every child its `brings:` would make a node of (primary +
+  brought). A fetch that would create more is **truncated at the cap, never refused and never
+  silent**: the records are materialized in anchor-key order until the next would pass the cap, the
+  rest are held out of the graph, and the result carries `PARTIAL_RESULT` (`TRUNCATED`) naming the
+  cap, how many records the source answered, how many were kept, and the join. A count over the
+  target is then a lower bound, and an aggregate over it is gated as any truncated read is (§9,
+  diagnostics). A fetch exactly at the cap is complete and carries no flag. An anchor the query
+  pinned by literal whose records were held out gets no row rather than a row of zero, since its
+  answer was not "none".
+
+  The cap counts **nodes, not calls**, which decides what it can and cannot do. How many records an
+  anchor answers is unknown until the source answers, so the engine cannot refuse this cap before
+  spending the way it refuses `maxAnchors`; the calls are bounded by `maxAnchors`, and this bounds
+  what they are allowed to put in the graph. Narrowing the anchor set is what lowers both. A
+  variable-length traversal (§5.12) spends the same cap cumulatively across its hops, and a single
+  hop that is itself too wide is truncated here as well.
 
 **Predicate pushdown, and what it does *not* change:** a producer may declare rules mapping query
 predicates on its target to the source's own query language, so a `WHERE` scopes the fetch at the
@@ -3241,7 +3256,7 @@ is classified and surfaced as a warning on the result:
 | `PRODUCER_ERROR` (`FETCH_FAILURE`) | a timeout, a missing gateway tool, a non-auth error | the source could **not** be reached — *not* "no data". Fix the integration. |
 | `PRODUCER_ERROR` (`RATE_LIMITED`) | the source throttled the call (an HTTP 429) | the source is up and the credentials are fine — the result is **unanswered, not empty**. Ask again shortly, or pin a specific entity so fewer calls are needed. Never "reconnect". |
 | `PRODUCER_ERROR` (`AUTH_EXPIRED`) | a 401 / "token expired" / `EXPIRED_AUTHENTICATION` | the OAuth token has **expired** — reconnect to refresh. The empty result is because the source rejected the call. |
-| `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page; a call budget ran out mid-fan-out; a declared floor or gate dropped records | the fetch **succeeded but is incomplete** — the source has more. *Not* a failure. The detail says which cause, because the fixes differ: raise the cap, or simply ask again (a budgeted run keeps its completed work and resumes rather than restarting). |
+| `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page; a call budget ran out mid-fan-out; a join's `maxFanoutTotal` held part of what a fetch answered out of the graph; a declared floor or gate dropped records | the fetch **succeeded but is incomplete** — the source has more. *Not* a failure. The detail says which cause, because the fixes differ: raise the cap, narrow the anchor set, or simply ask again (a budgeted run keeps its completed work and resumes rather than restarting). |
 | `PARTIAL_RESULT` (`NOT_FOUND`) | the source answered a definitive 404 for one key of a fan-out | that key **does not exist** — as opposed to "we could not find out", which is `FETCH_FAILURE`. The answer is short by exactly the named keys; the source is not down, and the other keys' rows are good. |
 | `PARTIAL_RESULT` (`DERIVED_LOWER_BOUND`) | a DERIVE rule set concluded while the facts its rules read were themselves incomplete (another diagnostic fired, or a demand went unmet) | membership and any aggregate over it are a **lower bound, not a total**. The fixpoint is correct over what was materialized and says nothing about what was not — a rule body cannot fetch (§13.6). Not a failure, and not "nothing was derived". |
 | `INCOMPLETE_TRAVERSAL` | a variable-length traversal (§5.12) stopped short of its declared depth | the warning names the hop reached and the bound hit (`maxFanoutTotal`, frontier width, or the unbounded-`*` cap). Rows cover only the hops walked; any subtree total is a **lower bound**. |
