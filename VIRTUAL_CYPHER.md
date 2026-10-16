@@ -3129,6 +3129,19 @@ still applied to the materialized graph, so the same query returns the same rows
 pushed or not; only the number of records fetched differs. A value that does not fit the rule's
 declared shape is left to the graph rather than embedded in a source query it would corrupt.
 
+**And the spelling does not change the fetch either.** A predicate written over a name a `WITH`
+introduced — a renamed node (`WITH t AS u WHERE u.status = 'open'`) or a projected property
+(`WITH t, t.status AS st WHERE st = 'open'`) — is the predicate on the property it names, and is
+pushed exactly as `WHERE t.status = 'open'` is. Splitting a query into a pipeline for legibility
+therefore costs what the one-line spelling costs.
+
+A projection that **computes** holds a different value from the property, so it is not pushed:
+`toLower(t.status) AS st`, an arithmetic, an aggregate, a `coalesce`. Pushing such a comparison as
+the property's would drop rows the query keeps, which is a wrong answer and not a cheaper fetch. It
+is applied to the materialized graph instead, and SAID so — on `EXPLAIN`'s residual line and in the
+cost note of a read that filtered after fetching — because a filter applied after a wide fetch that
+no surface reports is the one cost a realm author cannot find.
+
 **A producer whose source applies no filters declares `pushdown: []`.** The empty list is a
 statement and an absent key is not: without the key the engine treats every residual as a rule not
 yet written — a load warning, a cost note with advice on each read of 25 records or more, and an
