@@ -371,6 +371,18 @@ seconds, with an opt-in `negativeTtlSeconds` for misses), `immutable` (reference
 the process is restarted or maintenance clears it), and `graph` for aggregates and extraction
 (§5.5/§5.6, where the committed graph itself is the cache tier).
 
+**`negativeTtlSeconds` is opt-in because an empty is not always durable.** Under `ttl` alone only
+RECORDS are kept: a key that answered empty is asked again on the next query, for ever. That is the
+right default for a source over data the owner is still filling, where empty means "nothing **yet**"
+and keeping it would hide everything they add until the window closed. It is the wrong default for a
+published register, where a point with no value does not acquire one this afternoon — so declaring
+`negativeTtlSeconds` says "an empty answer from this source is a real, durable answer", and the
+empties are kept for that window, on their own clock rather than the record window's. The engine
+**says when the declaration is missing and the re-buy is real**: a fetch whose keys mostly answered
+empty carries an `EMPTY_NOT_KEPT` note naming the count and printing the declaration. It is a note
+about COST and never about the rows, and it is not raised after a fetch that was capped, refused or
+throttled — an empty there may be a key the source never reached, which no window should pin.
+
 > `kind: session` parses and is reported by the catalog, but the per-`AgentProcess` lifetime it
 > names is **not wired** — it behaves as `none`, and validating a realm that declares it raises a
 > warning saying so. Use `ttl` for a window you can state, or `immutable` for data that does not
@@ -3395,9 +3407,11 @@ is classified and surfaced as a warning on the result:
 | `COMPUTE_FAILED` | a producer's `compute:` expression raised on some records | the rows are complete and the source is fine; **one property is absent** on the records named. Absent rather than null or zero, because either would read as an answer. |
 | `MATERIALIZATION_FAILED` | the source returned data the graph could not store | the records **exist** but are missing from the result, so an answer of "none" is definitely wrong. The fix is the engine's, not the caller's. |
 | `REDUCTION_FAILED` | an `aggregate` reduction or an `extract` call failed | the anchor's reduced or extracted records are **absent**, not empty. Retried on the next traversal. |
+| `EMPTY_NOT_KEPT` | keys of a `ttl`-cached fetch answered **empty**, and the policy declares no `negativeTtlSeconds` | a **cost note over a correct answer**, not a data warning: the empty is the real answer for those keys, and the only thing it costs is the NEXT run's call. The note names how many of how many keys, and prints the declaration that would keep them. Nothing about the rows is in doubt, so an answer carrying it is never caveated. |
 
 A failed fetch is **never cached** as an empty result (so a later call with a refreshed token finds
-the data); only a genuine, successful "no records" is cacheable.
+the data); only a genuine, successful "no records" is cacheable — and only when the policy says it
+may be, which is what `negativeTtlSeconds` is for.
 
 **A short fetch never answers a ranking.** A short *list* is honest under its warning: every row
 is right, some are missing. A short *ranking* is not, because the records left out may be the ones
