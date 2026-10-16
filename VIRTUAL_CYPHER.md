@@ -3432,7 +3432,7 @@ an open catalog sweep. A **fill** drives one durably, slowly, and idempotently:
 
 ```
 POST /api/v1/admin/kg/fills        { "cypher": "...", "budgetPerTick": 60, "label": "crime history" }
-GET  /api/v1/admin/kg/fills        → [{ id, state, ticks, liveCallsTotal, lastError, ... }]
+GET  /api/v1/admin/kg/fills        → [{ id, state, ticks, liveCallsTotal, lastError, warning, ... }]
 DELETE /api/v1/admin/kg/fills/{id} → cancelled (completed work stays cached; nothing rolls back)
 ```
 
@@ -3454,6 +3454,35 @@ ground. A pass that completes with ZERO live calls is the finish line: the fill 
 - **A budget-exhausted ordinary query says so.** Outside fills, the same budgeted stop surfaces
   as a warning naming what was not fetched — a partial result is announced, never passed off as
   complete.
+
+**A fill reaches `DONE` only if its producers keep what they fetch**
+
+`DONE` is a pass that makes no live call at all, and work already done is skipped on the next
+pass only while it is still fresh. So a producer whose records expire between passes is re-read
+every pass: the fill keeps working, it never runs out of live calls to make, and it never turns
+`DONE`. Nothing is broken — it has simply become a slow permanent poller. Whether a fill can
+terminate is decided entirely by its producers' `cache:` declarations, and by nothing about the
+query, the budget or the schedule.
+
+That is a division of labour, not a limitation:
+
+- A **fill** converges a COLD materialization of something that does not change once mined: a
+  closed month of history, a catalog, a backfill of records that are what they are. Declare those
+  producers so their records outlive the whole sweep — `cache: { kind: immutable }` for reference
+  data, or a `ttl` in days — and the fill climbs to `DONE` and stops. `periods:` already does this
+  for you: a closed period is held effectively forever whatever the producer's own `ttl` says,
+  which is why a 12-month history fill finishes. Only the open period rides the ordinary TTL — and
+  it is also the reason a `periods:` fill over a producer with a short TTL does not terminate
+  either, since the open period expires under the sweep while the sweep is still running.
+- Re-assessing something that keeps changing — a live queue, prices, today's state — is **scheduled
+  work**, not a fill: a Realm Function on a `schedule`, or a routine bound to a signal. Those are
+  built to re-run for ever and have no finish line to miss. A fill aimed at a live source only
+  imitates one, at a fill's pacing and without a schedule's triggers.
+
+A fill started over producers that cannot outlive a sweep is accepted and **carries a warning**
+naming them, visible on the fill in the listing above. It is a warning rather than a refusal
+because a slow permanent poll is sometimes exactly what someone wants; it should be chosen, not
+stumbled into.
 
 
 ## 10. Steering the generator — type-level `examples:`
