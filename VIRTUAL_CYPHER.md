@@ -3018,6 +3018,40 @@ producing wrong Cypher.
 Because a Virtual Cypher query reaches into live external systems, it is bounded on every axis, and
 a bound that bites is **always surfaced**, never silent.
 
+**What a refusal carries.** A refusal is read as often by a model about to rewrite the statement as
+by a person reading a message, and a caller that regenerates has nothing to work from but the
+refusal itself. So three things hold of every refusal this document names, whatever its kind
+(`BUDGET_EXCEEDED`, `TOO_EXPENSIVE`, `INVALID_QUERY`, `SOURCE_UNAVAILABLE`), and each can be
+observed by issuing a query and reading what comes back:
+
+- **A refusal names its measure, its size and its limit, and it carries a lever.** The measure is
+  what was counted — distinct keys, records, rows, match steps, model calls, pairs, rounds,
+  characters — and it is named, because one statement can pass several different bounds and each has
+  a different fix: `maxAnchors` counts distinct keys and not records, and its refusal says so. The
+  size is what the statement would have spent against that measure; the limit is the bound it
+  passed. The lever is what to change, given as a spelling, a clause or a declaration rather than as
+  a category of them: a predicate to push, a `LIMIT` to add, a `MATCH` to narrow, an aggregate to
+  move earlier, a second declared door to pin with `{via:'…'}`, a cap to raise deliberately. A lever
+  applies to the statement it was given for — taking it and re-issuing is how a refusal is answered,
+  so a lever that leaves the same statement refused the same way is a defect in the refusal rather
+  than a matter of wording. It is also a lever the recipient can take: a source that applies no
+  filters declares `pushdown: []` and is then advised nothing, because advice to write a rule the
+  source cannot apply is advice no author can act on.
+- **The same statement is refused the same way.** A refused statement, re-issued unchanged against
+  unchanged declarations, is refused again with the same kind, the same measure and limit, and the
+  same text. A refusal is a property of the statement and of what the realms declare, not of the
+  attempt, so two identical attempts never disagree about what was wrong, and a caller that rewrites
+  against a refusal is never sent after a bound it has already cleared. Where the outcome genuinely
+  depends on what a source or a deployment did — a throttled call, a source that is down, a time
+  bound one host sets and another does not — the result says which of those it was, and says it as
+  something other than a fault in the statement.
+- **A bound is labelled as a bound.** Where a figure a refusal or a warning carries is a floor and
+  not a total, it says so in its own words — "at least 50001 row(s)", "of the records the source
+  answered" — and never as a plain number. A count stopped one row past its budget (§13.7), an
+  aggregate over a truncated read, a membership derived from incomplete facts: each is a floor, and
+  a floor read as a total is a caller re-planning against a price nobody quoted it. The converse is
+  the same guarantee: a figure given plainly is exact.
+
 **Caps (per join):**
 
 - **`maxAnchors`** (default 200) — refuse, before any call is made, a join that would ask its
@@ -3561,6 +3595,10 @@ schema-level engineering could not touch.
 - **Idempotent re-runs.** A re-run re-fetches; caching (`ttl`/`immutable`) and `temperature: 0` for
   any LLM-derived value make repeated runs of the same query agree — repeatability is a correctness
   property, not just a speed one.
+- **A refusal is stable, and it is actionable.** A refused statement, re-issued unchanged, is
+  refused again with the same text; every refusal names what was counted, the size and the limit it
+  passed, and a lever that changes the outcome; and a figure that is only a floor says so. §9
+  states the contract in full, because a caller rewriting a query has nothing else to go on.
 
 ---
 
