@@ -3318,6 +3318,10 @@ duties:                               # forward-looking: declared and shown, not
     text: No review request waits more than a working day
     holds: StaleReviewRequest         # a view, lens or DERIVE label that should stay empty
     every: "0 0 * * * *"
+sweeps:                               # cold materializations it keeps filled — see below
+  - name: review-history
+    view: stale-review-sweep          # a view of this realm's, taking no arguments
+    budgetPerTick: 60
 ```
 
 | Field | Required | Meaning |
@@ -3329,6 +3333,7 @@ duties:                               # forward-looking: declared and shown, not
 | `conversation` | no | How the agent is talked to: the realms it reaches, the host tools it keeps, the skills it brings in by name, its model role and the sampling a caller may ask for. See [Talking to an agent](#talking-to-an-agent). |
 | `routines[]` | no | The work it does without being asked. Fields below. |
 | `duties[]` | no | Conditions it keeps true, each naming the view, lens or DERIVE label that should hold. _Forward-looking._ |
+| `sweeps[]` | no | Cold materializations it keeps filled, each naming a view of this realm's. See [Sweeps](#sweeps--the-cold-materializations-an-agent-keeps-filled). |
 | `state` | no | Only `retired`, to withdraw an agent the realm used to ship. Any other value is ignored. |
 
 **What a realm does not declare.** `sponsor`, `owners`, `operators`, the agent's stage, and a
@@ -3347,6 +3352,60 @@ A routine may declare `match` (signal-triggered), `schedule` (cron-triggered), o
 | `schedule` | no | 6-field cron expression, registered on the host's normal cron path. |
 | `spec.kind` | yes | `typescript`, or `function` to target a manifest-declared Realm Function (below). |
 | `spec.source` / `spec.module` | for `typescript` | Inline TS, or a sibling file inlined at load. |
+
+### Sweeps — the cold materializations an agent keeps filled
+
+Some materializations are too big for one query's patience: a twelve-month history over many
+anchors, an open catalog. The realm that declares such a producer is the one component that knows
+what needs sweeping, so it ships the sweep with the producer instead of leaving an operator to work
+out the query and start it by hand:
+
+```yaml
+# agents/surveyor.yml
+name: surveyor
+job: Keep the crime history mined, so a question about a street answers from the graph.
+sweeps:
+  - name: crime-history            # stable within the agent; the fill is found by it
+    view: street-crime-sweep       # a view of this realm's, taking no arguments
+    budgetPerTick: 60              # optional; the paid calls one pass may make
+```
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | yes | Stable id within the agent. Asking for the same sweep twice is one fill, not two. |
+| `view` | yes | A saved view this world has, declaring no `params`. Its body is the query each pass runs. |
+| `budgetPerTick` | no | Producer calls, or inline-judgement groups, one pass may buy. Omitted takes the host's default. |
+
+The host runs it as a **fill** ([Virtual Cypher §9.1](VIRTUAL_CYPHER.md)): the view's query re-run on
+a schedule, each pass bounded by `budgetPerTick` and paced by every producer's own `cost.rate`,
+finished when a pass buys nothing. It is declared on the AGENT, and that is where its authority
+comes from:
+
+- **Installing the realm starts nothing.** A realm agent arrives off duty, unsponsored and unsigned,
+  so there is no sweep to run. The declaration is visible on the agent's card and nothing is bought
+  until somebody sponsors the agent, signs it and puts it on duty — the same three acts every realm
+  agent already needs. A sweep adds no consent step of its own, and the install is not one.
+- **It spends the agent's budget and reaches only what the agent may reach**, as its sponsor signed
+  them — never the installing operator's own allowance. A pass whose producers would call an API
+  outside the agent's `authority.reach` is refused before it begins, so nothing is called.
+- **Anybody who can stop the agent stops the sweep.** Standing it down, retiring it, or the world's
+  kill switch; so does removing the realm, which cancels the fill rather than leaving one retrying a
+  query whose realm is gone. Completed work stays cached, so putting the agent back on duty resumes.
+- **A realm update cannot change what an adopted sweep asks.** The view's text is part of what was
+  signed, so rewriting it shows as an unsigned change and the signed text keeps running until
+  somebody signs again — exactly as a routine's body does. Adding a sweep is such a change too.
+- **A sweep an observing agent holds still runs**, because a sweep reads and judges and changes
+  nothing; `observing` suppresses effects, and a fill takes none.
+
+A sweep whose view this world does not have, or whose view takes arguments, is a **need on the
+agent**: it cannot be put on duty until the declaration is fixed, so a broken sweep is reported
+before anything runs rather than failing one pass at a time. A sweep with no `name`, or none naming
+a `view`, is reported at load and not read.
+
+A sweep is not a schedule. It converges a cold materialization and stops; re-assessing something
+that keeps changing is a routine with a `schedule`. Whether a sweep can ever finish is decided by
+its producers' `cache:` declarations, and nothing else — [§9.1](VIRTUAL_CYPHER.md) is explicit about
+that, and a sweep that cannot converge carries a warning saying which producers keep it polling.
 
 ### What an agent may ask for — _forward-looking_
 
