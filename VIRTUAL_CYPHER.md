@@ -2228,11 +2228,11 @@ subgraph.
 ### 6.7 What a relevance join costs — `semanticCalls`
 
 A result's `cost` block reports **three** kinds of call, and each counts one kind of purchase and no
-other — the exception, which is counted by none of them, is named at the end of this section:
+other:
 
 | counter | what it counts |
 |---|---|
-| `apiCalls` | producer fetches — a call to a source outside this world |
+| `apiCalls` | producer fetches — a call to a source outside this world, including a relevance search sent to a store outside it (`remote-search`, `elasticsearch`) |
 | `llmCalls` | reasoning: the reductions of §7, a generative producer's rounds, and (on `ask`) the one call that wrote the Cypher |
 | `semanticCalls` | **relevance searches**: one per anchor, per materialization |
 
@@ -2260,10 +2260,17 @@ reads `at least ~n` like the other two.
 > relevance search was counted by neither of the others, so a Concept-anchored fetch reported two
 > zeroes for seconds of real work, and `EXPLAIN` priced it at nothing.)
 
-**The exception.** A `remote-search` or `elasticsearch` relevance producer (§5.16) is
-relevance-shaped but asks a store outside this world rather than searching an index the world
-holds, and its calls appear on **none** of the three counters. Read `ms` for those, and bound them
-the way you would a fetch — with `maxAnchors`, a narrower anchor set, and a `cache:` TTL.
+**A relevance search sent outside the world is an `apiCalls`.** A `remote-search` or
+`elasticsearch` relevance producer (§5.16) is relevance-shaped — the anchor's text is the query —
+but each search is a request to a store somebody else runs, which is the purchase `apiCalls` names.
+So it is counted there, one per distinct anchor key, and never on `semanticCalls`: every relevance
+producer lands on exactly one of the two. A request is counted when it is sent, so a search the store
+refuses or times out on is still a call. `EXPLAIN` prices it before the query runs, as
+`~n API call(s)`, on the same terms as a `semanticCalls` figure — exact for a first-stage anchor set,
+the pinned `(c:Concept {value: '…'})` shape included. The one exception is a `remote-search`
+declared `agentic: true` (concept mode), which searches once per probe term chosen while the query
+runs: its figure is the first search per anchor and reads `at least ~n API call(s)`. Bound these the
+way you would a fetch — with `maxAnchors`, a narrower anchor set, and a `cache:` TTL.
 
 ---
 
