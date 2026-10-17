@@ -4017,7 +4017,8 @@ schema-level engineering could not touch.
   data; between two worlds of one principal the boundary is focus rather than confidentiality
   (§15). Deployment-approved, revisioned `Public`/reference datasets are the explicit exception. An
   unparseable or unscopable query is rejected, not run — and what the ENGINE writes is never the
-  reason it is: a probe binds only positions it can scope, and drops the rest (§2).
+  reason it is: a probe binds only positions it can scope, and drops the rest (§2). Which positions
+  a statement must label for it to be scopable is §15.5, the same in either spelling of a subquery.
 - **Bounded.** Every fetch is bounded by a bound anchor, `maxAnchors`/`maxFanoutTotal`, `paging`
   caps, `k`, and rate budgets. Truncation is reported.
 - **One answer whichever engine holds the graph.** A deployment may keep the graph in Neo4j or in
@@ -4552,3 +4553,30 @@ CREDENTIALS. If your producer authenticates as the acting user and you point it 
 deployment declares shared, you are declaring that its records are that label's — one row per
 identity, the same for everybody — and they will be kept that way. Fill a label of your own
 instead.
+
+### 15.5 Which positions you must label, and what holds the rest
+
+A node is held to you by the labels it names, so **a node YOU bind must name a label**: a bare
+`MATCH (n)` or `MATCH (b:Bill)-[:ABOUT]->()` is refused, naming the node as you wrote it and
+offering both halves it needs — a name and a label. That node is part of your answer: it decides
+which rows exist and how many, and nothing can be said about which node it is.
+
+**A position only a predicate reaches is yours to leave unlabelled.** The far end of a pattern
+predicate, and the far end of a hop inside an `EXISTS`, `NOT EXISTS`, `COUNT` or `COLLECT`
+subquery, produce no row and no column of your query. Each is held to you there by its own
+condition — the labels the STORED node carries decide it: a node carrying a declared non-private
+label is reference or shared data and answers; any other node must be yours. A relationship from
+your own node proves nothing about the node at its other end, so this is a condition on the node
+itself, never on how it is reached.
+
+**A subquery answers the same question in either spelling.** `EXISTS { (s)-[:SUPPLIES]->() }` and
+`EXISTS { MATCH (s)-[:SUPPLIES]->() }` are one construct written two ways, and so are the `COUNT`
+forms; a position they both reach is held by the same condition, and neither spelling is refused
+where the other answers. The same holds for a far end you name without a label (`(x)`), for an
+undirected or variable-length hop, and for a subquery nested in another. A `COLLECT` body has only
+the one spelling, and is held the same way.
+
+Two limits stay, and they are the same in both spellings: the subquery's pattern must start from a
+node bound OUTSIDE it, and a position no relationship reaches
+(`EXISTS { MATCH (s)-[:R]->(:T) MATCH (y) }`) must name a label. Each of those is a scan of the
+whole graph rather than a constraint, and holding one position states no scope over a scan.
