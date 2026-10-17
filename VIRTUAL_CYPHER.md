@@ -3450,7 +3450,7 @@ is classified and surfaced as a warning on the result:
 | `REDUCTION_FAILED` | an `aggregate` reduction or an `extract` call failed | the anchor's reduced or extracted records are **absent**, not empty. Retried on the next traversal. |
 | `EMPTY_NOT_KEPT` | keys of a `ttl`-cached fetch answered **empty**, and the policy declares no `negativeTtlSeconds` | a **cost note over a correct answer**, not a data warning: the empty is the real answer for those keys, and the only thing it costs is the NEXT run's call. The note names how many of how many keys, and prints the declaration that would keep them. Nothing about the rows is in doubt, so an answer carrying it is never caveated. |
 
-A failed fetch is **never cached** as an empty result (so a later call with a refreshed token finds
+A failed read is **never cached** as an empty result (so a later call with a refreshed token finds
 the data); only a genuine, successful "no records" is cacheable — and only when the policy says it
 may be, which is what `negativeTtlSeconds` is for.
 
@@ -3501,6 +3501,20 @@ The fourth is judged strictly, and deliberately so: anything the query reads off
 door — a predicate, a pin, or merely a projection — leaves the proof unavailable and the hop
 flagged. The cost of that strictness is a caveat on an answer that happens to be whole, which is
 the one direction this can safely be wrong in.
+**A failure costs the keys of the request it failed, and no others.** A fan-out over many keys is
+many requests — one per key for a source that answers per key, one per `maxKeysPerCall` batch for a
+source that answers in batches — and the request is the unit of the answer, so it is the unit of the
+caching decision too. A request that came back is cached for every key it carried, however its
+siblings fared; a request that failed leaves every key it carried **unresolved**, so the next query
+asks for exactly those again and nothing else. Three dead keys of two hundred therefore cost three
+re-reads on a per-key source, not two hundred.
+
+The split is by request and not by key, because a source that rejects a batch rarely says which of
+its ids it choked on: a batch of fifty that answers `500` leaves all fifty unresolved. So a producer
+the engine calls a key at a time — one the realm declared `batchSafe: false`, or whose source is
+structurally single-key — has its failures priced per key as a consequence of how it is called,
+never as something to declare for. Either shape is flagged the same way: the `warnings` are what say
+the answer is short, whatever was cached.
 
 **A short fetch never answers a ranking.** A short *list* is honest under its warning: every row
 is right, some are missing. A short *ranking* is not, because the records left out may be the ones
