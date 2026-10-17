@@ -1398,8 +1398,13 @@ A producer's `cache:` declares how CURRENT its answers are:
   the virtual edge; the fresh result then serves subsequent queries within a new window.
 
 **What the cache is keyed on, and what a cached entry may answer.** A cached fetch is keyed per
-anchor key AND per the set of predicates the engine attached to the target node for that query
-(§7.6.1 lists the shapes; a `WITH` does not end attachment) AND the `LIMIT` of a terminal query.
+anchor key AND per **what the fetch asked its source for**: the filter the producer's `pushdown:`
+rules absorbed and rendered into the request, and the `LIMIT` the planner could push into the page
+walk. Which predicates are considered at all is the attachment question (§7.6.1 lists the shapes; a
+`WITH` does not end attachment); which of them reach the key is this one, and the two sets differ by
+exactly the rules the door declares. A predicate no rule absorbs — a comparison through `toLower`, a
+property with no rule — and a `LIMIT` the planner could not push leave the fetch byte-identical, so
+they are no part of the key and the graph applies them to cached records exactly as to fresh ones.
 The exact key is the first question the cache is asked, not the last: when it misses, a live,
 complete entry for the same anchor key that answers a **broader** question than the one asked
 serves it, with no call. A complete read under the same filter serves any shorter `LIMIT` and an
@@ -1414,13 +1419,34 @@ The converse never holds: a narrower entry never serves a broader question; a tr
 entry, and a one-record-per-key existence entry, serve nothing but themselves; and only producers
 whose source returns a fixed collection narrowed by a pushed filter and a cap take part — a result
 a demand or a model shapes (generative, aggregate, extraction) is keyed exactly, as is each window
-of a `periods:` door. Within one TTL window the calls a family of views makes therefore depend on
-the order it runs in: the broadest read first, and the rest are served. A family that must share
-one read whatever the order filters on **projected variables** (`WITH n, n.created_at AS createdAt
-WHERE createdAt >= $since`), limits terminal results by list slice, and keeps a `WITH … LIMIT` only
-directly before a hop, where it bounds the hop's anchors without entering the key (README,
-"Predicate pushdown"). Measured on a `periods:` door (§5.17): a dozen calls for the first view of a
-repository, 0 calls and 150–600 ms for every other view over any window.
+of a `periods:` door.
+
+**What a family of views over one door costs, and how to make it share a read.** Within one TTL
+window the calls a family makes depend on the order it runs in: the broadest read first, and the
+rest are served. No SPELLING changes that — a predicate written over a name a `WITH` introduced is
+the predicate on the property it names and is pushed exactly as that property's is (§9) — so views
+over different windows of one door pay one read per window however they are written. Three things a
+family can do instead, each measured on the shipping engine (2026-10-17):
+
+- **Let the broad view read first.** A complete unfiltered entry holds every record a pushed window
+  would return, so every window after it is served with no call, in any order among them: one read
+  for the whole family. The converse costs what it always did — a window read first serves neither
+  the broad question nor a wider window, and each pays its own call.
+- **Shape a terminal result with a list slice** (`ORDER BY … WITH collect(row) AS rows UNWIND
+  rows[0..$limit] AS row`) rather than a `LIMIT` the planner can push, which leaves a prefix and not
+  the collection; and keep a `WITH … LIMIT` for the place it earns its key, directly before a hop,
+  where it bounds the hop's anchors (README, "Predicate pushdown").
+- **Read it through a door that asks for nothing.** Sharing is a property of the request, so a door
+  with no `pushdown:` rule the family's filter can use is read once per key and serves every view of
+  it in ANY order, narrowest first included. That is why a `periods:` door's history (§5.17) is free
+  after the first read: its window is a key, not a narrowing. The price is the honest one — the whole
+  collection crosses the wire once, and each read says the graph applied the filter.
+
+There is no order-independent sharing for a family whose reads the source narrows, and no way to ask
+for one: a door either absorbs a filter or it does not, and the declaration that would let one door
+do both is not written yet. A door whose source really applies no filters says so
+with `pushdown: []` (§9); saying it of a source that can filter buys the sharing and makes the read's
+own cost note untrue.
 
 **The `freshness` block.** Whenever a query touched an external source, its result envelope carries
 a `freshness` array alongside `rows` and `warnings`: one entry per source read,
@@ -1962,8 +1988,9 @@ two doors to one collection (realm-github-actions, 2026-09-23):
 
 `unit: month` sends `created=2026-09`. Two months always cover at least the last 31 days.
 Measured: a cold read of one busy repository is one page per hundred runs in the two months
-(13 calls, ~25 s); every later read of any window up to 31 days is 0 calls and 150–600 ms,
-provided the views share the one fetch (§5.13). `unit: day` was tried first: 31 calls cold
+(13 calls, ~25 s); every later read of any window up to 31 days is 0 calls and 150–600 ms, because
+the history door declares no rule a window could be pushed into, so every view's read of a period is
+the same read whatever window the view asks for (§5.13). `unit: day` was tried first: 31 calls cold
 for the same coverage, and a bigger refresh surface. "Right now" questions can stay on the live
 door. State the edge in the realm's README: a record still changing when its period closed
 (a run in progress when the month turned, a run re-run in a later month) keeps in history the
