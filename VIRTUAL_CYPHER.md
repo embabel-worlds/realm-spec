@@ -1542,8 +1542,9 @@ SELECT query ONCE; consumers only ever see the virtual join, and no query author
   does not select is reported as a warning (the join would otherwise silently never form).
 - **Honesty.** A failed fetch (network, HTTP error, unparseable response) is a `warnings` entry
   plus an empty result — never a silent 0. Exceeding `fetch.maxRows` truncates and reports a
-  TRUNCATED warning. When the endpoint answers 429/503 with `Retry-After`, the fetch waits once,
-  bounded, and retries before giving up.
+  TRUNCATED warning. A retryable refusal — a throttle, a gateway failure, a timeout — is attempted
+  once more, honouring the endpoint's `Retry-After` where it sends one: the same law every producer
+  kind gets (§9, *what a flaky source costs*), not a `sparql` speciality.
 - **Credentials stay out of YAML.** An authenticated endpoint names an environment variable
   (`fetch.bearerTokenEnv`); public endpoints need nothing.
 
@@ -3591,6 +3592,7 @@ The fourth is judged strictly, and deliberately so: anything the query reads off
 door — a predicate, a pin, or merely a projection — leaves the proof unavailable and the hop
 flagged. The cost of that strictness is a caveat on an answer that happens to be whole, which is
 the one direction this can safely be wrong in.
+
 **A failure costs the keys of the request it failed, and no others.** A fan-out over many keys is
 many requests — one per key for a source that answers per key, one per `maxKeysPerCall` batch for a
 source that answers in batches — and the request is the unit of the answer, so it is the unit of the
@@ -3605,6 +3607,44 @@ the engine calls a key at a time — one the realm declared `batchSafe: false`, 
 structurally single-key — has its failures priced per key as a consequence of how it is called,
 never as something to declare for. Either shape is flagged the same way: the `warnings` are what say
 the answer is short, whatever was cached.
+
+**What a flaky source costs, and it is the same whichever producer kind reached it.** A failure is
+retried for what it MEANS, never for how the producer was declared: `remote`/`api`, `graphql`,
+`sparql`, `publisher` and the captured-handler kinds all answer to one table.
+
+| the source said | retried | why |
+|---|---|---|
+| 429 Too Many Requests | once | it asked us to wait, and waiting is the whole of what it asked for |
+| 502, 503, 504 | once | the upstream's own infrastructure, not the request |
+| 408, a read timeout, a dropped or refused connection | once | it never answered; the next call may |
+| 400, 422 | no | the source understood the request and refused what it ASKED. Retrying repeats it |
+| 401, 403 | no | the credential is not working. The fix is to reconnect, not to ask again |
+| 404 | no | the source looked. The answer is short by that key, and is reported as `PARTIAL_RESULT`, not an outage |
+| 500 | no | the source answered about this request, and will answer the same way |
+
+The bound is **two attempts per key** — one try and one retry — and it is **per key, never shared
+across a fan-out**: ten failing keys cost twenty attempts, not two, and emphatically not two to the
+tenth. A retried call is a request that left the machine, so both attempts are **billed and
+reported** in `apiCalls`; a cost quote prices the happy path, and the gap between the quote and the
+meter is the flakiness, readable rather than hidden.
+
+**A wait the source asked for outranks ours, inside a window.** A `Retry-After` in delta-seconds is
+honoured once, floored at one second (a source asking for "now" is still asking us to wait) and
+capped at ten (a source asking for a quarter of an hour cannot hang a query someone is waiting on).
+A `Retry-After` given as an HTTP date is read as no specific ask. With no readable header a throttle
+waits about two seconds and the other retryable classes a fraction of one.
+
+**Where a `Retry-After` cannot be read, the retry still happens.** A producer reached through a
+gateway operation gets the header from the HTTP failure the operation reports, which is also where
+its status comes from — so a source that answers over HTTP is honoured exactly. A producer whose
+operation failed some other way (a realm handler that threw, a dispatch that was not there) reports
+no HTTP response at all, so there is neither a status nor a header: the failure is classified from
+its message, and a retry it earns waits the engine's own bounded wait rather than going unmade. The
+degradation is the WAIT, never the attempt.
+
+**A declared `cost: rate:` changes the wait, not the law.** A throttled call on a paced bucket slows
+every sibling waiting on that bucket and then retries on a fresh slot, which is a better wait than
+any single call could compute — and it is still one retry, so the two attempts per key hold.
 
 **A short fetch never answers a ranking.** A short *list* is honest under its warning: every row
 is right, some are missing. A short *ranking* is not, because the records left out may be the ones
