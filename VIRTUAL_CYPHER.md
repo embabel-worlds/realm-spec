@@ -3337,17 +3337,67 @@ Every field is required for a reason:
 a source reporting only an average cannot be trusted to have averaged everything. Declare `sum` and
 `count` instead.
 
-Declared rather than assumed. A database can always `GROUP BY`, but an arbitrary REST endpoint
-cannot be presumed to count, and a producer that guessed would return a confident number from
-whatever the endpoint happened to send back.
+**Which kinds may declare `aggregates:`.** The capability is source-agnostic; the ABILITY to honour
+it is not.
+
+| kind | may declare | why |
+|---|---|---|
+| `remote` (`api`) | **yes** | the capability declares the source's own aggregate endpoint and where the number sits in its response |
+| `sql` | **yes**, on a KEYED table read | the statement is generated, so `count` compiles to `SELECT COUNT(*) … GROUP BY <keyColumn>` with the same keys, the same governance `where:` and the same pushed filters |
+| `cypher`, `sparql`, `graphql` | **no, not yet** | each could answer one — `count(o)`, `COUNT(DISTINCT ?x)`, a Relay `totalCount` — but its query is AUTHORED, and nothing in the declaration says which second query returns the number. Refused rather than guessed |
+| `generative`, `compute`, `extract`, `aggregate` | **no** | there are no source rows to count: the records are produced here, so counting them means producing them |
+| `tabular`, `files`, `feed`, `vector`, `keyword`, `elasticsearch`, `publisher`, … | **no** | the unit of cost is the whole download or the whole retrieval, which has to happen before anything can be counted |
+
+A `sql` producer's declaration is lighter, because the engine writes the statement: `measure` — and
+`of`, the column, for `sum`/`min`/`max` — is the whole of it.
+
+```yaml
+- name: linesByOrder
+  kind: sql
+  datasource: warehouse
+  table: order_lines
+  keyColumn: order_id
+  aggregates:
+    - measure: count
+      valueField: n          # any name for the number; the statement aliases it
+    - measure: sum
+      of: amount_cents
+      valueField: total
+```
+
+`keyField` defaults to the producer's own `keyColumn`, since that is what the statement groups by.
+`valueField` still has to be named — it is the alias the number comes back under — and must not be
+the key column, which the same row already carries.
+
+Four `sql` shapes are REFUSED when they declare an aggregate, each for its own reason: a `scan:` is
+already a bounded TOP N (counting its rows answers a question about the bound, not about the table);
+a `procedure:` returns whatever it returns, with no `SELECT` list to replace; `keyMatch: ci` answers
+one key per statement and a row may satisfy several keys at once, so a `GROUP BY` over it would
+attribute one key's number to another; and a key column under an identity `dialect:` comes back in
+the source's own spelling, which links to no anchor. Under `mode: governed`, a `sum`/`min`/`max` over
+a column that `expose` does not list is refused too — a total over a column the caller cannot read
+is an oracle over hidden values — and so is one over a masked column, since a number computed in the
+database arrives past the mask.
+
+**A declaration on a kind that cannot honour it is an ERROR, not a dropped line.** `realm_validate`
+names the kind, says it has no way to answer a number without returning its records, and lists the
+kinds that can. That is deliberate: silently dropping it would leave a realm that reads as though
+its source counts for itself, and the only symptom would be a query that stays exactly as slow as it
+was.
+
+Declared rather than assumed, for every kind including the relational one. "A database can always
+`GROUP BY`" is a fact about databases, not about this table under this governance — and an arbitrary
+REST endpoint cannot be presumed to count at all, so a producer that guessed would return a
+confident number from whatever the endpoint happened to send back.
 
 The engine pushes an aggregate only when it is **safe as well as declared**: the target must be
 projected nowhere else (`RETURN c.subject, count(c)` needs the rows whatever else it asks), every
 aggregate over it must be pushable (one `collect` means the records are needed anyway), `count(*)`
-never pushes because it folds rows of the whole pattern, and any predicate on the target must be one
-the source absorbs — a source can only count what it can also filter. Today `count` is executed;
-`sum`/`min`/`max` are recognised and left unpushed, and the engine pushes only when EVERY measure in
-the query is deliverable.
+never pushes because it folds rows of the whole pattern, `count(c.property)` never pushes because it
+counts VALUES rather than nodes, and any predicate on the target must be one the source absorbs — a
+source can only count what it can also filter. All four measures execute; the engine pushes only
+when EVERY measure in the query is deliverable, and two measures over one property refuse because
+they would want the same slot.
 
 **This makes the SHAPE of a view a cost decision.** `collect(c.subject)` needs the records whatever
 else the query asks, so a view that both counts and collects always pays the collecting price —
