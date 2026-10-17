@@ -344,6 +344,46 @@ not ask" must not become "asked, nothing there" and then stay that way past a fi
 negative cache is recorded on the bridge store, so it rides `writeThrough`: a join that declares
 `writeThrough: false` has nowhere to record a miss and re-asks every query.
 
+### 5.2.1 What a join may make DURABLE, and what it may not
+
+A read query writes nothing durable except an identity bridge. That is the whole of the list, and
+these are the two declarations an author reaches for when they want more.
+
+**`persist: true` — eager enrichment, and NOT "this fetch, kept."** It is the older form of a
+bridge. A join declaring it is run over **every** anchor of its anchor label on a schedule, and its
+target and edge are **committed**. What follows is the part that surprises people: the join is
+removed from the query path. The traversal that declares it is then answered from **stored data
+alone** and never asks the producer — so before enrichment has run, the same query that answers five
+rows without the flag answers none with it, and asks nothing. The schema marks such an edge
+`STORED ONLY` for exactly this reason.
+
+That is the right behaviour for a bridge, whose point is to become a real node other joins anchor
+on. It is never the right behaviour for a plain data join, so a `persist: true` join with no
+`resolve:` chain and **no join anchoring on its target** is **refused at validate/install**, naming
+the traversal it would not answer. Three things answer instead, and the refusal names all three:
+drop `persist:` and keep a query-time data join (records are fetched when a query traverses the
+edge, materialized for the run, swept after); declare a `population:` on the target to POLL and KEEP
+records; or declare a `resolve:` chain with `writeThrough: true` for an identity bridge, which
+resolves per traversed anchor and self-heals. Prefer the last — `persist:` is kept for realms
+written against it.
+
+**A minted anchor is transient, and nothing keeps one.** When a back-hop's anchor is reached ONLY
+through already-materialized targets — the "who raised the most issues in this repo" shape, with no
+person or user binding the anchor — the engine mints one anchor per distinct `materializedKeyField`
+value on those targets, so the answer includes identities **not in your graph**. That is what
+`materializedKeyField` buys, and it needs no further declaration. The minted node lives for the
+query: it is swept with the run, and the next such query mints again (a graph write off records
+already fetched, not another source call).
+
+There is no flag that keeps it, and a realm should not want one. A minted anchor's only edges point
+at the run's own fetched targets, so keeping the node alone would leave a node joined to nothing —
+one that anchors no later query and warms no fetch, since the mint reads the materialized records
+and never a stored anchor. To keep a discovered identity, make the join a **bridge**: `resolve:` +
+`writeThrough: true` writes it through off the anchor it resolved from, edge included, and the next
+query reuses it. A realm declaring `persistMinted` is **refused at validate/install** — it never
+persisted anything, and a declaration that reads as durability and delivers none is worse than its
+absence.
+
 ### 5.3 Producer kinds
 
 | kind | fetch | keyed by |
