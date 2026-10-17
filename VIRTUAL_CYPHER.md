@@ -2036,7 +2036,9 @@ ORDER BY changePct DESC
 
 Cost every consumer should know: the fan-out multiplies the anchor set by `count`. Bound the
 anchors as usual (`maxAnchors` declares the join's appetite), and for a deep window over many
-anchors, drive the cold fill with a **fill** (§9.1) instead of one long query.
+anchors, drive the cold fill with a **fill** (§9.1) instead of one long query. A realm ships that
+sweep WITH the producer rather than leaving it to be discovered: declare it as a `sweeps:` entry on
+one of the realm's own agents (README, `agents/`), naming a view of yours that takes no arguments.
 
 **A worked example: immutable records behind a date-filterable list.** GitHub's workflow-runs
 endpoint is not date-addressable by design, but its `created` filter takes a month (`2026-09`)
@@ -3836,6 +3838,57 @@ A fill started over producers that cannot outlive a sweep is accepted and **carr
 naming them, visible on the fill in the listing above. It is a warning rather than a refusal
 because a slow permanent poll is sometimes exactly what someone wants; it should be chosen, not
 stumbled into.
+
+**A realm ships the sweep its own producer needs**
+
+The calls above are the operator's door. A realm that declares an expensive producer should not have
+to hope somebody finds out that fills exist, works out the right query and POSTs it: it declares the
+sweep as a `sweeps:` entry on one of its own agents (README, [`agents/`](README.md#agents--agents-and-their-routines)),
+each naming a view of the realm's that takes no arguments. The host then runs it as a fill with
+everything above true of it — budgeted, paced, resumable, cancellable, warned about where it cannot
+converge.
+
+What a realm gets by declaring one, and what it does not:
+
+- **Installing the realm starts nothing.** A realm agent arrives off duty with no sponsor and no
+  signature, so there is no sweep to run. The declaration is visible on the agent's card — the sweep,
+  the view it fills, the budget it asks for — and nothing is bought until somebody sponsors the agent,
+  signs it and puts it on duty. Those are the same three acts every realm agent already needs; a
+  sweep adds no consent step of its own, and the install is not one of them.
+- **It spends the AGENT'S budget and reaches only what the AGENT may reach** — the `budget` and
+  `authority.reach` its sponsor signed, never the installing operator's own allowance. An agent
+  whose reach does not name the API behind a producer the sweep plans calls nothing: the pass is
+  refused before it begins.
+- **Anybody who can stop the agent stops the sweep.** Standing the agent down, retiring it or
+  throwing the world's kill switch stops it; so does removing the realm, which cancels the fill
+  rather than leaving one retrying a query whose realm is gone. Completed work stays cached, so
+  putting the agent back on duty resumes rather than restarts.
+- **A realm update cannot change what an adopted sweep asks.** The view's text is part of what the
+  sponsor signed, so rewriting it shows as an unsigned change and the signed text keeps running
+  until somebody signs again — as a routine's body does.
+- **It is not a schedule.** A sweep converges a cold materialization and stops, under exactly the
+  rules above; re-assessing something that keeps changing is a routine on a `schedule`.
+
+```yaml
+# agents/surveyor.yml
+name: surveyor
+job: Keep the crime history mined, so a question about a street answers from the graph.
+sweeps:
+  - name: crime-history            # stable within the agent; the fill is found by it
+    view: street-crime-sweep       # a view of this realm's, taking no arguments
+    budgetPerTick: 60              # optional; the paid calls one pass may make
+```
+
+| Sweep field | Required | Meaning |
+|---|---|---|
+| `name` | yes | Stable id within the agent. Asking for the same sweep twice is one fill, not two. |
+| `view` | yes | A saved view this world has, declaring no `params`. Its body is the query each pass runs. |
+| `budgetPerTick` | no | Producer calls, or inline-judgement groups, one pass may buy. Omitted takes the host's default. |
+
+A sweep whose view the world does not have, or whose view takes arguments, is a **need on the agent**:
+the agent cannot be put on duty until it is fixed, so the declaration is reported before anything runs
+rather than failing a pass at a time. A host may cap `budgetPerTick`, and the number of fills it
+advances per tick is the host's, so several sweeps in one world each advance more slowly.
 
 
 ## 10. Steering the generator — type-level `examples:`
