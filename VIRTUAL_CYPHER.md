@@ -1525,17 +1525,19 @@ family can do instead, each measured on the shipping engine (2026-10-17):
   rows[0..$limit] AS row`) rather than a `LIMIT` the planner can push, which leaves a prefix and not
   the collection; and keep a `WITH … LIMIT` for the place it earns its key, directly before a hop,
   where it bounds the hop's anchors (README, "Predicate pushdown").
-- **Read it through a door that asks for nothing.** Sharing is a property of the request, so a door
-  with no `pushdown:` rule the family's filter can use is read once per key and serves every view of
-  it in ANY order, narrowest first included. That is why a `periods:` door's history (§5.17) is free
-  after the first read: its window is a key, not a narrowing. The price is the honest one — the whole
-  collection crosses the wire once, and each read says the graph applied the filter.
+- **Read it through a door declared `readWhole: true`.** Sharing is a property of the request, so a
+  door that sends no filter is read once per key and serves every view of it in ANY order, narrowest
+  first included. `readWhole: true` is how a door says so while keeping its `pushdown:` rules declared:
+  every read asks the source for the key's whole collection, the rules are not sent, and the graph
+  applies every filter (§9). That is also why a `periods:` door's history (§5.17) is free after the
+  first read: its window is a key, not a narrowing. The price is the honest one — the whole collection
+  crosses the wire once, and each read says the graph applied the filter.
 
-There is no order-independent sharing for a family whose reads the source narrows, and no way to ask
-for one: a door either absorbs a filter or it does not, and the declaration that would let one door
-do both is not written yet. A door whose source really applies no filters says so
-with `pushdown: []` (§9); saying it of a source that can filter buys the sharing and makes the read's
-own cost note untrue.
+A family whose reads the source narrows has no order-independent sharing: each read is keyed by the
+filter it sent. Declaring the door `readWhole: true` is the way to ask for it, and it only pays with a
+`ttl` or `immutable` cache to hold the read for the next view. Keep the rules on the read-whole door so
+that a second, narrow door over the same operation can send them. `pushdown: []` reads the same way but
+states that the source cannot filter; on a source that can, it makes every read's cost note untrue.
 
 **The `freshness` block.** Whenever a query touched an external source, its result envelope carries
 a `freshness` array alongside `rows` and `warnings`: one entry per source read,
@@ -3216,8 +3218,9 @@ observed by issuing a query and reading what comes back:
   applies to the statement it was given for — taking it and re-issuing is how a refusal is answered,
   so a lever that leaves the same statement refused the same way is a defect in the refusal rather
   than a matter of wording. It is also a lever the recipient can take: a source that applies no
-  filters declares `pushdown: []` and is then advised nothing, because advice to write a rule the
-  source cannot apply is advice no author can act on.
+  filters declares `pushdown: []`, and a door read whole declares `readWhole: true`, and each is then
+  advised nothing, because advice to write a rule the source cannot apply, or one the door already
+  declares, is advice no author can act on.
 - **The same statement is refused the same way.** A refused statement, re-issued unchanged against
   unchanged declarations, is refused again with the same kind, the same measure and limit, and the
   same text. A refusal is a property of the statement and of what the realms declare, not of the
@@ -3319,6 +3322,29 @@ target is applied in the graph by construction, and says so without advising any
 note is still recorded on such a read, since it is the evidence that the read was complete and the
 graph did the filtering, which is what makes an empty result an exact one. The declaration cannot
 conflict with rules: it is the `pushdown:` key itself, holding either rules or nothing.
+
+**A door that should be read whole declares `readWhole: true`.** A field on the producer, beside
+`pushdown:` — not inside `cache:`, because it changes what the source is asked — on every kind that
+declares `pushdown:` rules. Default false. Every read of the door asks the source for the key's whole
+collection; the door's rules stay declared and none is sent; the graph applies every filter. What a
+caller sees:
+
+- every read of the door is keyed the same, so with a `ttl` or `immutable` cache one read serves every
+  view of it in any order — a family of windowed views costs one read, not one per window;
+- the request carries no filter from the rules, whatever the query's `WHERE`;
+- the quote and `EXPLAIN` show the filters on the line for what the graph applies, none on the line
+  for what the source applies, and name the declaration instead of advising a rule;
+- the read keeps its cost note, which says the door is declared `readWhole: true` and advises nothing;
+  as with `pushdown: []`, the note is the evidence that the read was complete, so an empty answer is
+  exact;
+- a filtered count over the door is counted in the graph from the whole read, because the source is
+  not asked to filter what it would count.
+
+Loading reports two things about it: `readWhole: true` without a `ttl` or `immutable` cache is a
+warning — nothing keeps the read for the next view, so the door only fetches more — and with
+`requiresFilter: true` it is refused, since the door would refuse every read. A read-whole door is not
+warned for declaring no rules or for leaving source filters unused. The config catalog's
+producer rows and `realm_status`'s surface name the doors that declare it.
 
 **Two ways to write a rule.** A rule renders either **text** or a **structured clause**, and it
 declares exactly one of them.
