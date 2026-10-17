@@ -91,6 +91,19 @@ outlives the run**:
    selects only the anchors that will survive your filter. It collects each anchor's identity and
    its **key field** (the value a producer fetches by, e.g. an email address).
 
+   **The probe binds what it can name, and a position it cannot name only widens it.** The probe
+   binds the anchors it must project and the labelled nodes that constrain them. A position whose
+   label it cannot name — the endpoint of a pattern predicate you left unnamed,
+   `WHERE (s)-[:SUPPLIES]->()`, in any direction, negated, pinned by a property, or over a
+   variable-length hop — is
+   dropped from the prefix, with its relationship and any condition on it, exactly as a position
+   only an `OPTIONAL MATCH` or a `NOT EXISTS` reaches is: a label-free `MATCH (x)` is a scan of the
+   whole graph, and a scan is not a constraint. So such a filter lowers no fetch's cost — every
+   anchor the rest of the query binds is fetched for — and your own `WHERE` still decides the
+   answer, which is the same answer as over the same records stored. **A query is never refused
+   over a position the probe chose to bind.** A node YOU bind with no label is unscopable (§11),
+   as it always was; a node only a pattern predicate reaches is yours to leave unnamed.
+
 2. **Fetch.** For each virtual join the engine calls its **producer** *once* with the **union of
    all anchor keys** — never one call per anchor (no N+1). The producer is the source-specific
    fetcher (a REST op, a SQL query, a vector search, an in-process computation).
@@ -3963,7 +3976,8 @@ schema-level engineering could not touch.
   never read another context without an explicit authorized bridge, and never another PRINCIPAL's
   data; between two worlds of one principal the boundary is focus rather than confidentiality
   (§15). Deployment-approved, revisioned `Public`/reference datasets are the explicit exception. An
-  unparseable or unscopable query is rejected, not run.
+  unparseable or unscopable query is rejected, not run — and what the ENGINE writes is never the
+  reason it is: a probe binds only positions it can scope, and drops the rest (§2).
 - **Bounded.** Every fetch is bounded by a bound anchor, `maxAnchors`/`maxFanoutTotal`, `paging`
   caps, `k`, and rate budgets. Truncation is reported.
 - **One answer whichever engine holds the graph.** A deployment may keep the graph in Neo4j or in
