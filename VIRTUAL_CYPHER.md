@@ -3637,7 +3637,9 @@ is classified and surfaced as a warning on the result:
 
 A failed read is **never cached** as an empty result (so a later call with a refreshed token finds
 the data); only a genuine, successful "no records" is cacheable — and only when the policy says it
-may be, which is what `negativeTtlSeconds` is for.
+may be, which is what `negativeTtlSeconds` is for. A diagnostic that leaves a key's records
+unsettled also stops a NEGATION answering over it — see "A short fetch never answers a negation"
+below, which lists exactly which of them do.
 
 **A hop onto a fetched label with no door reads a lower bound.** A declared join is a door in one
 direction: it says how to fetch the TARGET given the ANCHOR. Walking that edge the other way —
@@ -3764,6 +3766,44 @@ and the levers (raise the cap, narrow the query, or drop the ranking). Two cases
 
 A whole key that failed to fetch under a top-k still answers with its `PRODUCER_ERROR` warning; the
 ranking gate does not yet decide that case.
+
+**A short fetch never answers a negation.** A negation is the one read whose answer GROWS when the
+fetch comes up short: a key the source did not answer for holds no records as far as the query can
+see, and "no records" is exactly what the test asks for. So its rows are a **superset** of the
+answer and a count over them an **upper** bound — the opposite of every warning above, each of
+which says rows may be missing and a count is a floor. A caller acting on the warning as written
+would under-report.
+
+So a negation over a fetch that **did not settle** for every key it drove is refused as
+`INVALID_QUERY` (reason `UNPROVEN_ABSENCE`) rather than answered. It is refused, not flagged,
+because no flag can carry it: a reader who takes "may be incomplete" to mean "there may be more"
+reads a longer answer as a shorter one, which is worse than no answer at all. This is the same
+decision `maxAnchors` makes one step earlier — a fetch too wide to afford is refused rather than
+answered from the keys it could pay for.
+
+- **Every spelling of the question is treated alike**, because they ask the same thing:
+  `NOT EXISTS { (a)-[:R]->(:T) }`, a negated pattern predicate `NOT (a)-[:R]->(:T)`, and the
+  outer-join form — `OPTIONAL MATCH (a)-[:R]->(n) … WHERE n IS NULL` — which carries no `NOT` at
+  all. A test on a *property* (`WHERE n.status IS NULL`) is not one of them: a property may be null
+  on a record that did arrive, which says nothing about whether the record arrived.
+- **"Did not settle" means absence is unproven for some key**: a fetch that failed or was refused
+  (`FETCH_FAILURE`, `AUTH_EXPIRED`, `RATE_LIMITED`, `FILTER_REJECTED`), a read cut short
+  (`TRUNCATED`, `INCOMPLETE_TRAVERSAL`), a key never asked (`NEEDS_FILTER`, `UNPUSHED_FILTER`, a
+  request the engine declined to send, a case-folded spelling never covered), records fetched but
+  not stored (`MATERIALIZATION_FAILED`), a node reached only backwards along a join, or a brought
+  child the source gave no identity.
+  Two diagnostics are deliberately NOT in that list, because under them "none" is exact rather than
+  unknown: a definitive `NOT_FOUND` (the source says the key does not exist) and `FILTER_STARVED`
+  (the source answered, and the query's own narrowing rejected every candidate). A `STALE_COPY` is
+  not in it either — a copy is the whole file as the publisher last served it, so an absence in it
+  is exact as of that date.
+- **A complete fetch answers the negation as it always did**, including a paged one that read every
+  page and a cap that was declared but never reached. The refusal is about the fetch, not the shape.
+- **The levers, and each one answers:** narrow the query so the fetch settles for every key it
+  drives (pin fewer keys, or add a filter the source applies); lift whatever stopped the fetch,
+  which the refusal quotes in the producer's own words; or ask the same thing without the negation —
+  the refusal prints the pattern as a plain `MATCH`, whose rows are the anchors that DO match, and
+  which a short fetch leaves short rather than wrong, under the warning that says so.
 
 **A name that exists nowhere is refused, not answered empty.** A query that reads a label or
 relationship type that no declared type, virtual join, rule set or stored node in the caller's
