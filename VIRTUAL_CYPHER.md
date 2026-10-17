@@ -2106,6 +2106,46 @@ Cost guidance: an agentic edge spends several LLM calls **per anchor**. Select i
 queried repeatedly — the loop then runs on the view's refresh schedule and queries read the cached
 subgraph.
 
+### 6.7 What a relevance join costs — `semanticCalls`
+
+A result's `cost` block reports **three** kinds of call, and each counts one kind of purchase and no
+other — the exception, which is counted by none of them, is named at the end of this section:
+
+| counter | what it counts |
+|---|---|
+| `apiCalls` | producer fetches — a call to a source outside this world |
+| `llmCalls` | reasoning: the reductions of §7, a generative producer's rounds, and (on `ask`) the one call that wrote the Cypher |
+| `semanticCalls` | **relevance searches**: one per anchor, per materialization |
+
+One `semanticCalls` is **one search of the index**, which for the `vector` mode is one embedding of
+the anchor's text plus one similarity scan, for `keyword` one fulltext scan, and for `agentic-rag`
+one retrieval — whose judging loop ALSO spends `llmCalls`, so an agentic edge shows on both. The
+three are kept apart because a reader budgets them differently: a fetch is somebody else's rate
+limit, a reduction is reasoning spend, and a search is retrieval. Adding them together would make
+every one of the three numbers worth less.
+
+**It is one search per distinct anchor key, not per anchor row.** Two anchors carrying the same
+phrase embed it once in a query; a different phrase is its own search. A producer with a `cache:`
+TTL searches nothing at all inside its window, which is the lever: a repeated question over a
+cached relevance producer costs zero searches, and the counter is how you see that it worked.
+
+**`EXPLAIN` prices it before the query runs**, as `~n semantic search(es)` on the group, the stage
+and the total. For a first-stage anchor set the figure is **exact** — the anchor's own text is the
+key, so the count is the number of anchors and nothing has to be guessed — including for the
+pinned shape `(c:Concept {value: '…'})`, where the anchor exists only because the query named it.
+Only a LATER hop, whose anchors are the first fetch's records, makes the total a floor, and it then
+reads `at least ~n` like the other two.
+
+> A semantic query that reports `apiCalls: 0, llmCalls: 0` is **not** free — it is a query whose
+> whole cost was retrieval. Read `semanticCalls`. (This counter is new: before it existed a
+> relevance search was counted by neither of the others, so a Concept-anchored fetch reported two
+> zeroes for seconds of real work, and `EXPLAIN` priced it at nothing.)
+
+**The exception.** A `remote-search` or `elasticsearch` relevance producer (§5.16) is
+relevance-shaped but asks a store outside this world rather than searching an index the world
+holds, and its calls appear on **none** of the three counters. Read `ms` for those, and bound them
+the way you would a fetch — with `maxAnchors`, a narrower anchor set, and a `cache:` TTL.
+
 ---
 
 ## 7. LLM query primitives — filter, rerank, and steer with the `ai` namespace
@@ -3029,6 +3069,9 @@ producing wrong Cypher.
 
 Because a Virtual Cypher query reaches into live external systems, it is bounded on every axis, and
 a bound that bites is **always surfaced**, never silent.
+
+What a finished query reports it cost — `apiCalls`, `llmCalls` and `semanticCalls`, and which calls
+land on which — is §6.7.
 
 **What a refusal carries.** A refusal is read as often by a model about to rewrite the statement as
 by a person reading a message, and a caller that regenerates has nothing to work from but the
