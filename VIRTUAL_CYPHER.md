@@ -1397,6 +1397,33 @@ A producer's `cache:` declares how CURRENT its answers are:
   query re-reads. A query may force one live re-read of a TTL source with `{ai: {fresh: true}}` on
   the virtual edge; the fresh result then serves subsequent queries within a new window.
 
+**One read is shared, not repeated — including by queries running at the same instant.** A cold
+lookup under `ttl` or `immutable` is read ONCE however many queries want it: the first to arrive
+reads the source, and every query that wants the same lookup while that read is outstanding is
+served its records rather than making a read of its own. This is the shape of every cold start and
+every expiry under load — a view refreshed on a schedule, a dashboard opened by a team at once, a
+handler fanning out — and for a source with a hard quota it is the difference between one call and
+one call per asker. What each query says it spent stays honest: the query that read the source
+bills the call, the queries served by it bill none and report the lookup as `cached`, observed when
+that read happened — so `cached` can mean "read a moment ago, by someone else" and never means only
+"old". Three bounds on the sharing, each of which a realm can rely on:
+
+- **A failed read is never shared.** "Could not ask" is one query's verdict on one attempt, so a
+  query whose share did not arrive asks the source for itself rather than inheriting a refusal it
+  never made — and nothing is remembered either way.
+- **Nothing is shared across owners.** A lookup is shared only between queries that would have been
+  served the same cached entry: the same source, the same declaration, the same key, the same
+  caller scope. One owner's outstanding read never answers another's question, exactly as one
+  owner's cached entry never does.
+- **`{ai: {fresh: true}}` and a live-only read share in neither direction.** A query that asked to
+  read the source NOW is not served somebody else's read of a moment ago, and its own read is not
+  offered to anyone else as a share.
+
+`cache: {kind: none}` (the default) shares nothing between queries, by declaration; within one
+query it is already read once (above). A **date-addressable** source (`periods:`) caches per
+`(key, period)` as always, but concurrent queries may each read a period that is still open — the
+period fan-out is not covered by the sharing above.
+
 **What the cache is keyed on, and what a cached entry may answer.** A cached fetch is keyed per
 anchor key AND per **what the fetch asked its source for**: the filter the producer's `pushdown:`
 rules absorbed and rendered into the request, and the `LIMIT` the planner could push into the page
