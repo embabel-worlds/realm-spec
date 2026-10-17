@@ -265,6 +265,35 @@ answers, and the next call gets a fresh one. Withdrawing the grant refuses the c
 and everything after it, while unpairing a sender lets the turn in flight finish and stops the
 next one. What a sender wrote never reaches a log line, a meter or a span.
 
+## The model call
+
+A Realm that declares the `model` capability asks, at admission, to put questions to the
+owner's model. The owner grants or withholds it on its own, like any other approval, and can
+withdraw it from the same surface. A Realm without the declaration has no model call, and a
+handler that asks anyway is refused. The grant unlocks nothing else: no API, no graph read, no
+credential.
+
+The handler names a role, never a model or a provider: `cheap`, `workhorse` or `best`, or none
+for the owner's default. The host chooses the model behind each role, holds the credential and
+pays the call against the owner's budgets; the guest never sees a model name, a key or a
+provider reply beyond the text. The request carries the prompt, the role, up to eight skill
+names and an output token cap, and nothing else; any other field refuses the call. A skill is
+named, never sent: it is one of the Realm's own under `skills/`, bare or as
+`<realm>-<skill>`, or one the owner's World already has, and the host supplies its text. The
+reply is the model's text and whether the host cut it.
+
+Every refusal is a code, never prose: `MODEL_NOT_GRANTED`, `MODEL_SKILL_UNKNOWN`,
+`MODEL_CALL_BUDGET`, `MODEL_DAILY_BUDGET` and `MODEL_PROMPT_TOO_LARGE`. A request the host
+cannot read is refused with no code. The call is bounded three ways: by calls per dispatch, by
+prompt bytes and output tokens, and by time, since it runs inside the dispatch's own deadline.
+The reference host allows two calls per dispatch, 64 KiB of prompt and 4,096 output tokens
+across them, and a daily budget the operator sets. The prompt and the reply are the Realm's own
+words and reach no log line, meter or span, as [observability](#observability) requires.
+
+This is the only model surface a captured handler has. The `gateway.ai.*` calls in the main
+specification belong to the conventional code-mode sandbox, lenses and routines; a captured
+handler does not see them.
+
 ## Pairing
 
 The owner mints a pairing code for a granted consumer; it has the pairing shape and is never
@@ -430,7 +459,11 @@ host will not read a credential under is refused.
 
 A private SQLite dependency serves the Realm's own computation or persistence. Its database,
 WAL, snapshots and recovery overhead must fit that Realm's finite budget. It grants no access
-to an external datasource. The host channel journal is a separate delivery facility.
+to an external datasource. The host channel journal is a separate delivery facility. Its one
+method is `exec(sql, params)`: a host that mounts the dependency either binds `params` or
+refuses a call that carries them, and never runs the statement with the values dropped or
+spliced into the text. Which it does is part of the profile the host publishes; see
+[dependencies](TYPESCRIPT_REALMS.md#dependencies) for what a Realm can rely on.
 
 ## Captured API operations
 
@@ -480,7 +513,7 @@ The reference profile supports:
 | Validation | Types, required fields, enum and string-length limits; numeric ranges and regex annotations remain provider validation. |
 | Authentication | API key in a query parameter or header, HTTP bearer token, or `auth: none` for a public read API; optional fixed `X-` headers. The host sends its own `User-Agent`, naming the host and the calling Realm, unless the operation's key travels in that header. |
 | Transport | The assembled request URI is bounded; a non-2xx provider status, unsupported content encoding, or a response exceeding the transport's own deadline all refuse the call — a small valid JSON payload alone does not guarantee acceptance. |
-| Response | At most 1 MiB of strict UTF-8 JSON; common credential echoes and diagnostic exception text are refused. |
+| Response | At most 1 MiB of strict UTF-8 JSON; common credential echoes and diagnostic exception text are refused. An operation declared with an `ndjson` response in `apis/apis.yml` (`responses: {<operationId>: application/x-ndjson}`) is read as newline-delimited JSON to the same byte limit and handed to the guest as `{records, truncated}`: every complete line, and `truncated` true when the host dropped an incomplete last line or stopped at the limit. The host sends the declared type as `Accept` and refuses a reply whose `Content-Type` does not match it. No other response type is in this profile. |
 
 The initial implementation rejects unsupported auth schemes, parameter references, alternative
 servers, a read operation carrying a mutation, and credential injection into HTTP
@@ -600,9 +633,23 @@ imports from other modules already included in the same bounded capture.
 
 No download, installation or registry resolution occurs. Libraries compiled into a Wasm
 program remain part of that artifact; the reference Wasm backend supplies no host packages.
-Other ecosystems, runtime provisioning and private database persistence remain open.
-Unsupported storage requirements must be rejected before handler execution. No VFS syntax
-is introduced here.
+
+`dependencies/manifest.json` carries one of two forms, and a backend reads the one it
+supports. The Docker form above lists packages under `dependencies`. The Wasm form lists
+registry modules under `entries`, each with `module`, `version`, `sha256` and, for a stateful
+module, `persistent`, `init` and `migrations`; it is what synth writes for a
+[TypeScript realm's dependencies](TYPESCRIPT_REALMS.md#dependencies). A file in the form the
+selected backend does not support is refused before any handler runs, with every handler in the
+Realm, so a Realm is never half loaded.
+
+A persistent private database is implemented on the Wasm backend for the `sqlite3-wasi`
+module: one database for each World, Realm installation and dependency key, restored before a
+dispatch and saved only when the dispatch succeeds, as the
+[dependencies contract](TYPESCRIPT_REALMS.md#dependencies) states, with its init script and
+migrations recorded by hash beside it. The Docker backend offers no private persistence: a
+Docker handler keeps durable state in the graph. Other ecosystems and runtime provisioning
+remain open. Unsupported storage requirements must be rejected before handler execution. No
+VFS syntax is introduced here.
 
 ## Reference implementation
 
@@ -625,11 +672,40 @@ in the main specification:
 | Captured Virtual Cypher | Implemented owned reads and same-installation captured producers/collections with retained resource grants and rollback materialization. |
 | Owner database target approval | Adoption, upgrade, revocation and read-only production SQL use through the owner connection facade are implemented. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
-| Additional dependency ecosystems, private Realm database persistence and VFS | Not implemented on this path. |
+| Persistent private SQLite dependency | Implemented on the Wasm backend for `sqlite3-wasi`: one database per World, installation and dependency key, restored before a dispatch, saved on success, init script and migrations recorded by hash. Not available on the Docker backend. |
+| The model call | Implemented for a Realm that declares the `model` capability, under its own grant and the budgets in [the model call](#the-model-call). |
+| Additional dependency ecosystems and VFS | Not implemented on this path. |
 | Firecracker, generalized remote backends and resumable arbitrary computation | Not implemented. |
 
 Hosts must state which profile and capabilities they support. Generated types describe an
 operation's contract; they do not grant permission or prove receiver availability.
+
+## Unattended operation
+
+A Realm runs whether or not anyone is looking at it. Once the owner's World is loaded, the
+host runs, with no client attached and no owner session open:
+
+- scheduled handlers, on their declared cron, and scheduled API-to-channel pollers;
+- channel transports: a socket stays connected and reconnects, a polled endpoint keeps
+  polling, an inbound webhook keeps being served, and each frame is dispatched;
+- journal replay to every approved consumer, including triggers, and the retries an
+  at-least-once delivery owes, resuming after a restart once the World loads;
+- watches, on their schedule;
+- the assistant call a granted consumer makes from a dispatch.
+
+A handler is told nothing about whether a client is attached and cannot ask. What waits for
+someone is only what needs a person: a browser app runs in a page the owner opens, a lens is
+produced when the owner opens it, and a write proposal or an approval sits until the owner
+decides. With no network, a channel or API call refuses as its transport rules say, and
+everything that does not leave the host, a schedule, a private database, the journal, still
+runs.
+
+Every owner approval in this contract is a route under `/api/v1`, listed step by step in
+[owner approval](TYPESCRIPT_REALMS.md#owner-approval-step-by-step). Nothing grants from inside
+a Realm, over a channel or from a configuration file. A host with no console therefore needs
+an owner path of its own to those routes, and until something grants, an installed Realm is
+loaded and inert. The shape of that path is the host's; this contract says only that it
+exists and that it grants exactly what the routes grant.
 
 ## Me captured GraphQL operation profile
 

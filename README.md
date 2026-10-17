@@ -201,6 +201,7 @@ tags:
 | `tags` | No | Free-text keywords, for finding the realm. They are not its category. |
 | `maturity` | No | The author's own readiness claim: `experimental`, `beta`, `stable` or `deprecated`. Absent means the realm makes no claim — which is **not** a claim of being finished. See [Maturity](#maturity). |
 | `host` | No | Execution host for the Realm's Functions: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
+| `capabilities` | No | Captured realms only. What the realm asks the owner to grant at admission beyond its handlers and resources. The one value is `model`, which asks for [the model call](HOSTED_EXECUTION.md#the-model-call). The owner may grant none of them. |
 
 ### Icons
 
@@ -1156,7 +1157,7 @@ for (const p of busy) {
 }
 ```
 
-`params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below. Virtual Cypher calls are available to a captured handler once the owner separately approves `cypher_query`, following [the captured graph-query profile](HOSTED_EXECUTION.md#me-captured-graph-query-profile).
+`params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below. Virtual Cypher calls are available to a captured handler once the owner separately approves `cypher_query`, following [the captured graph-query profile](HOSTED_EXECUTION.md#me-captured-graph-query-profile). A captured handler has no `gateway.ai`: it reaches a model only through the `model` capability, described in [the model call](HOSTED_EXECUTION.md#the-model-call).
 
 ## `views/` — saved queries, and the two shapes they come in
 
@@ -2554,7 +2555,7 @@ infrastructure, or mutable runtime shared with another realm.
 Two consequences are normative:
 
 - **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world, context, principal, or execution. Realms deliberately share declared types inside a world; graph data is readable only through the current context/access policy or an explicit policy-authorized bridge. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world-, context-, and where principal-dependent, principal-scoped.
-- **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
+- **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next: no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway, or in a [persistent dependency](TYPESCRIPT_REALMS.md#dependencies) on a host that offers one. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself. What the two hosts promise differs, and a realm may lean only on the weaker promise. On `wasm`, every dispatch is a fresh instance and nothing in the module survives. On `docker`, dispatches of one realm installation in one world may share a process, so a module-level value may still be there on the next dispatch, or may not: the host may reuse the process, restart it, or run two side by side, and says nothing to the handler about which. A process is never shared across realms, worlds or installations. A realm may treat what survives on `docker` as a warm cache, such as an engine loaded once and reused while the process lasts, and must be correct when it finds the cache empty; it may never treat it as state, a counter, a queue or a session.
 - **A binding the runner was not given is NOT DECLARED.** Referencing it throws a `ReferenceError`
   rather than yielding `undefined`, so `if (violation)` does not guard it and neither does
   `violation ?? null`. Only `typeof` does, and it holds whether the identifier was never declared or
@@ -2688,7 +2689,7 @@ The name a form contributes is the export identifier, the property key, or the `
 | `ctx.log(message)` | Guest logging, surfaced in the host's logs against the dispatch. |
 | `ctx.reply({ text, idempotencyKey })` | Dispatch-scoped reply to the triggering channel thread ([routines that call a Realm Function](#routines-that-call-a-realm-function-and-dispatch-scoped-replies--forward-looking)). Returns `{ status }` (one of the reply results listed there). Always present; on a dispatch with no live route it returns `{ status: "NOT_REPLYABLE" }` rather than being absent. |
 
-**Statelessness applies to every form.** Every dispatch runs in a fresh instance, so nothing in the file survives between dispatches — a module-level variable and a value closed over by a default-export object both reset each dispatch. Durable state lives in the graph, through the gateway. `wasm/handlers.js` is compiled as a module; `defineHandler` is a host-provided global available both in that module and in a file with no `export` syntax — reach for it when generating a file that cannot use export syntax.
+**Statelessness applies to every form on the wasm host.** Every dispatch runs in a fresh instance, so nothing in the file survives between dispatches: a module-level variable and a value closed over by a default-export object both reset each dispatch (the docker host's weaker promise is under [execution hosts](#execution-hosts)). Durable state lives in the graph, through the gateway. `wasm/handlers.js` is compiled as a module; `defineHandler` is a host-provided global available both in that module and in a file with no `export` syntax. Reach for it when generating a file that cannot use export syntax.
 
 A realistic Realm Function — an activity digest over signals the realm's own event source ingests:
 
