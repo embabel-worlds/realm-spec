@@ -2233,7 +2233,7 @@ other:
 | counter | what it counts |
 |---|---|
 | `apiCalls` | producer fetches — a call to a source outside this world, including a relevance search sent to a store outside it (`remote-search`, `elasticsearch`) |
-| `llmCalls` | reasoning: the reductions of §7, a generative producer's rounds, and (on `ask`) the one call that wrote the Cypher |
+| `llmCalls` | reasoning: the reductions of §7, a generative producer's rounds, a concept-mode search's expansion of each anchor into probe terms, and (on `ask`) the one call that wrote the Cypher |
 | `semanticCalls` | **relevance searches**: one per anchor, per materialization |
 
 One `semanticCalls` is **one search of the index**, which for the `vector` mode is one embedding of
@@ -2271,6 +2271,15 @@ the pinned `(c:Concept {value: '…'})` shape included. The one exception is a `
 declared `agentic: true` (concept mode), which searches once per probe term chosen while the query
 runs: its figure is the first search per anchor and reads `at least ~n API call(s)`. Bound these the
 way you would a fetch — with `maxAnchors`, a narrower anchor set, and a `cache:` TTL.
+
+**Concept mode also spends `llmCalls`.** The probe terms a concept-mode search runs are chosen by a
+model before the first search: one model call per distinct anchor, counted on `llmCalls` when it is
+asked — so a call that fails is still counted — and listed in the call log by its purpose, never by
+the anchor's text. `EXPLAIN` prices it as one model call per distinct anchor, an exact figure for a
+first-stage anchor set, and the group line says how many of its model calls are expansions. Because
+the cost gate reads the model-call total, a concept-mode search over many anchors can be refused
+as `TOO_EXPENSIVE` like any other model spend — narrow the anchor set, or opt in with
+`{ai: {materialize: true}}`.
 
 ---
 
