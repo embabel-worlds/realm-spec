@@ -3742,6 +3742,30 @@ degradation is the WAIT, never the attempt.
 every sibling waiting on that bucket and then retries on a fresh slot, which is a better wait than
 any single call could compute — and it is still one retry, so the two attempts per key hold.
 
+**A statement with a mistake in its own text costs your source nothing to be told so.** A Virtual
+Cypher statement runs only *after* its fetches, so the cost of a refusal depends on when the mistake
+can be known. Two kinds, and which one a mistake falls into decides the bill:
+
+- **Settled by reading the statement, under a rule of Cypher itself** — a variable the statement
+  binds nowhere (`RETURN q.id` with no `q` in any clause), two result columns under one name
+  (`RETURN p.id AS id, p.ms AS id`), a `SKIP` or `LIMIT` that is not a row count (`LIMIT -1`), an
+  aggregate in a `WHERE`, an implicit grouping, a label or relationship type no vocabulary knows.
+  Refused as `INVALID_QUERY` with **no producer call, no model call and nothing cached** — the
+  anchor's data is as cold afterwards as it was before, so the next, correct query pays the honest
+  cold price rather than reading a remembered answer. A typo over a two-hundred-anchor hop costs
+  your rate budget nothing.
+
+- **Settled only once a row reaches it** — a division by zero, an integer overflow, a value of the
+  wrong type, a regex or a date built from fetched data. Whether these raise at all depends on the
+  rows, and the rows are what the fetch produces, so the refusal arrives after the hop has been
+  fetched and the records ARE cached (they are the source's own answer; only the fetch behind them
+  was avoidable). Guard the value in the statement — `CASE WHEN d = 0 THEN null ELSE n / d END`,
+  `n / toFloat(d)` — and the question costs one fetch instead of two.
+
+An **unknown function name** is refused with the function named, but after the fetch: which
+functions exist belongs to the store and the libraries it loads, and refusing up front on a list
+that might be one version behind would refuse queries that work. The message names it either way.
+
 **A short fetch never answers a ranking.** A short *list* is honest under its warning: every row
 is right, some are missing. A short *ranking* is not, because the records left out may be the ones
 that belong at the top. So a top-k — `ORDER BY … LIMIT k`, in a `RETURN` or a `WITH` — over a
