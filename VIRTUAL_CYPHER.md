@@ -3411,6 +3411,7 @@ is classified and surfaced as a warning on the result:
 | `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page; a call budget ran out mid-fan-out; a join's `maxFanoutTotal` held part of what a fetch answered out of the graph; a declared floor or gate dropped records | the fetch **succeeded but is incomplete** — the source has more. *Not* a failure. The detail says which cause, because the fixes differ: raise the cap, narrow the anchor set, or simply ask again (a budgeted run keeps its completed work and resumes rather than restarting). |
 | `PARTIAL_RESULT` (`NOT_FOUND`) | the source answered a definitive 404 for one key of a fan-out | that key **does not exist** — as opposed to "we could not find out", which is `FETCH_FAILURE`. The answer is short by exactly the named keys; the source is not down, and the other keys' rows are good. |
 | `PARTIAL_RESULT` (`DERIVED_LOWER_BOUND`) | a DERIVE rule set concluded while the facts its rules read were themselves incomplete (another diagnostic fired, or a demand went unmet) | membership and any aggregate over it are a **lower bound, not a total**. The fixpoint is correct over what was materialized and says nothing about what was not — a rule body cannot fetch (§13.6). Not a failure, and not "nothing was derived". |
+| `PARTIAL_RESULT` (`UNREACHED_BACK_HOP`) | a hop reached a fetched label from a node that has **no declared door onto it**, so the label could only match records the query had already fetched some other way | membership, and any count or list over it, is a **lower bound**; a total, average, minimum or maximum over it describes only the records it read and may be off in **either** direction. Every row returned is true — what is withdrawn is only the claim of completeness. The warning quotes the hop as the query wrote it and names the doors that would give the node rows of its own. Not a fetch failure, and not "no more data". |
 | `INCOMPLETE_TRAVERSAL` | a variable-length traversal (§5.12) stopped short of its declared depth | the warning names the hop reached and the bound hit (`maxFanoutTotal`, frontier width, or the unbounded-`*` cap). Rows cover only the hops walked; any subtree total is a **lower bound**. |
 | `UNKNOWN_VIA` | an edge pinned `{via:'…'}` that no declared join offers | the rows are **real but came from a different join** than the one named. The query still answers — a via that does not exist must not cost a good answer — and the warning lists the vias that do exist so it can be re-issued. Matters most where several joins converge on one label, since the substitution is otherwise invisible. |
 | `AMBIGUOUS_LABEL` | the query named a parent label that more than one installed type answers to through the same edge | **nothing was fetched**, so the empty result is not "no data". The engine will not choose between a customer's two helpdesks on the caller's behalf; the detail names the types, so the query can be re-issued naming one. |
@@ -3425,6 +3426,54 @@ is classified and surfaced as a warning on the result:
 A failed fetch is **never cached** as an empty result (so a later call with a refreshed token finds
 the data); only a genuine, successful "no records" is cacheable — and only when the policy says it
 may be, which is what `negativeTtlSeconds` is for.
+
+**A hop onto a fetched label with no door reads a lower bound.** A declared join is a door in one
+direction: it says how to fetch the TARGET given the ANCHOR. Walking that edge the other way —
+holding the target and asking for the anchor's own records — asks a question no source was given.
+
+```cypher
+MATCH (s:Shop {code: 'north'})-[:HAS_ORDER]->(o:Order)
+MATCH (o)-[:FOR_CUSTOMER]->(c:Customer)<-[:FOR_CUSTOMER]-(o2:Order)
+RETURN count(DISTINCT o2) AS n
+```
+
+`FOR_CUSTOMER` is declared on `Customer` anchored on `Order`: an order names its customer, and
+nothing is ever asked which orders name a given customer. So `o2` has no rows of its own. It
+matches whichever `Order` records the query fetched some other way — north's, through
+`(:Shop)-[:HAS_ORDER]->` — and every other shop's orders for that customer are simply absent.
+Nothing failed, so nothing else would report it, and `n` comes back looking like a total. The
+arrow as written is not what decides it: the same hop spelled forwards, `MATCH
+(o2:Order)-[:FOR_CUSTOMER]->(c)` with `c` already bound, asks the same unanswerable question and is
+flagged the same way.
+
+The query is **answered rather than refused**, because every row it yields is a true row. The
+warning withdraws exactly the claim of completeness, quotes the hop as the query wrote it, and
+prints the doors that would give the node rows of its own — here `(:Shop)-[:HAS_ORDER]->(o2)`. A
+caller reporting a figure from such a hop must say the answer may be incomplete.
+
+Only **fetched** labels are in question: a hop among persisted nodes is ordinary Cypher, complete
+and unflagged. The flag is decided from the query's shape alone, before anything is fetched, and is
+withheld in five cases — each a structural proof that the node's records are all there:
+
+1. **the node has a door of its own in this query** — it is the target of a join the query walks,
+   so its rows are fetched for it, not inherited;
+2. **it is bound before anything is fetched** — pinned to a literal, or matched among persisted
+   nodes;
+3. **the join declares how an already-materialized target answers for its anchor**
+   (`materializedKeyField`, `ridesHub`) — the author's own contract that riding those records IS
+   the whole edge;
+4. **every door into the label was walked here over the whole of its anchor's population** —
+   nothing pinned or filtered on either end and no `LIMIT` that could cap the read, so the records
+   materialized are every record there is;
+5. **the hop is off an alias that only rebinds nodes another alias bound** — `WITH collect(o) AS
+   os` then `UNWIND os AS o2` introduces no node, so `o2` ranges over exactly the records fetched
+   for `o`, and a rebinding is not a match. A hop reached BEYOND such a rebinding is matched afresh
+   against the graph and is flagged as before.
+
+The fourth is judged strictly, and deliberately so: anything the query reads off either end of a
+door — a predicate, a pin, or merely a projection — leaves the proof unavailable and the hop
+flagged. The cost of that strictness is a caveat on an answer that happens to be whole, which is
+the one direction this can safely be wrong in.
 
 **A short fetch never answers a ranking.** A short *list* is honest under its warning: every row
 is right, some are missing. A short *ranking* is not, because the records left out may be the ones
