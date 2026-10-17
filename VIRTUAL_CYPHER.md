@@ -369,7 +369,9 @@ All producers honour the **batch contract** (all keys at once, never N+1) and an
 `cache:` policy: `none` (alias `fresh`, the default — read live every query), `ttl` (a window in
 seconds, with an opt-in `negativeTtlSeconds` for misses), `immutable` (reference data, held until
 the process is restarted or maintenance clears it), and `graph` for aggregates and extraction
-(§5.5/§5.6, where the committed graph itself is the cache tier).
+(§5.5/§5.6, where the committed graph itself is the cache tier). WHO a kept record is kept for — the
+principal, the deployment, or the deployment's organisation, according to the label the fetch targets
+— is §15.4, and it is what decides whether a second asker pays.
 
 **`negativeTtlSeconds` is opt-in because an empty is not always durable.** Under `ttl` alone only
 RECORDS are kept: a key that answered empty is asked again on the next query, for ever. That is the
@@ -4104,9 +4106,11 @@ on, and it is the claim worth testing.
 - **Designing a realm:** a world is a capability surface. If two worlds should see different DATA of
   one owner, that difference has to come from what each realm exposes, not from a hope that the
   world boundary will filter it.
-- **Reading a cache:** fetched records are reused per principal, which is consistent with the above
-  — the same principal asking the same source the same question. It is not a leak across a
-  confidentiality boundary, because between worlds of one principal there is no such boundary.
+- **Reading a cache:** a fetched record is reused for whoever the data it was fetched INTO belongs
+  to, which is the principal for their own data and WIDER for data the deployment declares shared —
+  see §15.4. It is not a leak across a confidentiality boundary, because between worlds of one
+  principal there is no such boundary, and because a declaration that rows are the same for
+  everybody is a declaration that no principal owns them.
 - **Making a deployment claim:** "isolated per user" is supported. "Worlds are mutually
   confidential" is not, and is not intended to be.
 
@@ -4118,3 +4122,29 @@ taken under a cap therefore never serves one taken without. The other direction 
 conditions §5.13 states: a complete read taken without a cap or filter may serve the same key's
 question under one, because the narrower answer is inside it. This is what lets a warm-up in one
 request populate the cache for another without a truncated answer being served as a complete one.
+
+### 15.4 Which scope a cached record is kept for
+
+The scope a `ttl` or `immutable` entry is filed under is the scope the FETCHED data belongs to, not
+the scope of whoever asked for it first. There are three, and the difference is a cost difference
+and never a visibility one — no record is ever served to a principal who could not have fetched it
+themselves:
+
+| the label a fetch targets | kept for | what a second asker pays |
+|---|---|---|
+| the principal's own data — your realm's types, and anything the deployment has not declared otherwise | that principal | the full cold price, per principal |
+| **reference** data the deployment declares (its own taxonomies and catalogues) | the deployment | nothing: one entry, whoever asks |
+| **shared** data the deployment declares (its canonical people, organisations, addresses, documents) | the deployment's **organisation** | nothing within that organisation; the full price in another |
+
+So a realm whose producer fills a label of its OWN pays per principal, and should budget for it. A
+realm joining onto a label the deployment declares reference or shared pays once for the whole
+deployment — which is also why a realm may not widen a label into either class: declaring
+`visibility: public` over a label the deployment already declares shared is refused, and a realm's
+own public register stays per principal in the cache, because its rows are its world's and not the
+organisation's.
+
+What stays per principal whatever the label says: nothing is inferred from a producer's
+CREDENTIALS. If your producer authenticates as the acting user and you point it at a label the
+deployment declares shared, you are declaring that its records are that label's — one row per
+identity, the same for everybody — and they will be kept that way. Fill a label of your own
+instead.
