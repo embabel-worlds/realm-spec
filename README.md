@@ -86,7 +86,8 @@ realm-name/
 ├── channels/             # Realm-shipped provider connector drafts (YAML)
 │   └── my-channel.yml
 ├── agents/               # Agents — named colleagues whose routines react to signals/cron, adopted by the world
-│   └── my-handler.yml
+│   ├── my-handler.yml
+│   └── my-handler.md     # optional; the agent's prompt for a conversation
 ├── decorations/          # Scheduled KG node-decoration manifests
 │   └── my-decoration.yml
 ├── apps/                 # Bundled HTML apps served at /apps/{name}
@@ -3324,10 +3325,12 @@ duties:                               # forward-looking: declared and shown, not
 | Field | Required | Meaning |
 |---|---|---|
 | `name` | yes | Stable id. A world agent of the same name shadows the realm's. |
-| `job` | yes | One sentence, in the words of the person who will answer for it. |
+| `job` | yes | One sentence, in the words of the person who will answer for it. It is the one-line description a host shows beside the agent in a pick list. |
 | `routing` | no | What to ask this agent about, for a host that routes questions to colleagues. |
 | `persona` | no | A personality the host already has, or one this realm ships under `personalities/`, named `<realm>/<slug>` to say which realm's (`realm-bible/jonathon`). A persona confers no authority, but it is part of what the sponsor signs: for an agent people talk to it is the behaviour, guardrails included (see [Signed versions](#signed-versions)). |
 | `conversation` | no | How the agent is talked to: the realms it reaches, the host tools it keeps, the skills it brings in by name, its model role and the sampling a caller may ask for. See [Talking to an agent](#talking-to-an-agent). |
+| `prompt` | no | A markdown file beside the agent file under `agents/`, named by its plain file name (`coder.md`). Its text is the agent's instructions for a conversation. A host that runs a conversation through an outside coding agent gives it these instructions at the start of the session. The path may not leave `agents/`; a missing or unreadable file means the agent has no prompt. |
+| `asks` | no | Suggested first questions, a list of short strings a host may offer as one-click asks. |
 | `routines[]` | no | The work it does without being asked. Fields below. |
 | `duties[]` | no | Conditions it keeps true, each naming the view, lens or DERIVE label that should hold. _Forward-looking._ |
 | `state` | no | Only `retired`, to withdraw an agent the realm used to ship. Any other value is ignored. |
@@ -3417,6 +3420,23 @@ authority:
 | `llm` | The [LLM role](#llm-roles) the conversation runs on. A realm never names a model, and a caller cannot choose one. |
 | `sampling.temperature` | The range a caller's `temperature` is clamped to. |
 | `sampling.maxTokens` | The most a caller's `max_tokens` may ask for. |
+
+**A prompt and suggested asks.** An agent people talk to may also carry a `prompt` and a list of
+`asks`. Here `coder.md` sits beside `coder.yml` under `agents/` and holds the agent's instructions
+for a conversation:
+
+```yaml
+# agents/coder.yml
+name: coder
+job: Answers questions about this repository's code from the realm's index.
+prompt: coder.md
+asks:
+  - Where is the Router type defined, and which modules use it?
+  - What would a change to the Router type touch?
+```
+
+A host lists every agent a loaded realm ships, qualified by realm (`code.coder`), and a realm with
+no agents is absent from that list.
 
 #### Scope it to the job
 
