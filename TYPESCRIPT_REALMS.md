@@ -986,6 +986,18 @@ export const addExpense: AddExpenseHandler = async (input, ctx) => {
   grants is refused the same way, with `SIGNATURE_MISMATCH`, so a wrong allowlist entry shows at
   load and not at the first call. A module whose dispatch answers any method by name (a reactor)
   is narrowed by its declared methods, and their types are not compared.
+- Proposed: `string` is a fifth method type, for modules that take or answer text, such as a
+  chess engine that takes a position and answers its analysis. Only a module the operator allows
+  as a string-method module may have methods with `string` in them, and such a module exports
+  `embabel_alloc(len: i32) -> i32` and `embabel_free(ptr: i32, len: i32)` beside its methods. The
+  host writes each string argument as UTF-8 into memory `embabel_alloc` hands back and passes it
+  as a pointer and a length (an empty string as two zeros); a string result comes back as one
+  `i64` with the pointer in the high 32 bits and the length in the low 32. The host hands every
+  buffer back through `embabel_free` once it has read it. A result longer than the host's payload
+  budget, outside the module's memory, or not valid UTF-8 fails the call. A string argument is a
+  JavaScript string and a string result a JavaScript string; neither is parsed. Such a module gets
+  WASI and no other host function. Declaring a `string` method on any other module refuses the
+  dependency at load as a declared type the allowlist does not grant.
 - Without `persistent`, state lives for one dispatch and starts empty each time.
 - With `persistent: true`, the host keeps one database for each world, realm and dependency. It
   restores the database at the start of a dispatch and saves it only when the dispatch succeeds

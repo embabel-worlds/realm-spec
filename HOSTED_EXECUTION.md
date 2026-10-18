@@ -760,6 +760,28 @@ is refused as any other.
 path bytes, one fixed timestamp, no comment or extra fields. Two writers can still compress
 differently, so `contentDigest` is the identity a host and an author compare.
 
+**Module sources.** Proposed. A realm may carry its own modules lock at
+`dependencies/modules.lock.yml`, so an author can say where the bytes of each module the realm
+declares come from. It is a `modules` list whose entries hold `module`, `version`, `sha256` and
+`license`, and one source: `file:`, a path relative to the realm with no leading `/`, no `.` or
+`..` component, no backslash and no whitespace, naming a regular file inside the realm that is not
+a symbolic link; or `url:`, an https URL. An entry may instead be `pending: true` while its bytes
+have no published home, and may still name the URL they will be published at. A host does not
+read the lock when it loads a realm and grants nothing because of it: the tools that gather module
+bytes read it, a bundle writer takes a module from a `file:` path when the realm's `modules/`
+does not already hold it under its digest, and every byte found either way is kept only when it
+hashes to the digest the dependencies declare. A file the lock names that sits under `modules/`
+under any other name is not copied into the bundle as itself. A lock not in this form refuses the
+bundle.
+
+The source convention for published module bytes is one URL per digest:
+`https://<host>/<path>/<sha256 hex>.wasm`, whose last path segment is the module's own sha256 in
+lowercase hex followed by `.wasm`. A lock entry whose URL ends any other way is refused. A fetcher
+follows at most three redirects, each to https, and keeps the bytes only when they hash to the
+name; a redirect to any other scheme fails the fetch. Because the name is the digest, a mirror is
+any host that serves the same file under the same name, and no source is trusted for more than
+bytes that hash to it.
+
 ## Reference implementation
 
 This governed implementation's current support is narrower than some trusted-host examples
