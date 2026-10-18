@@ -123,7 +123,9 @@ delivered to, spelled as a namespaced verb, and that handler must be one the Rea
 inventory declares. It names a credential the Realm also declares and never says where the
 secret lives. Host-owned fields are refused in a declaration, as are unknown keys and keys
 belonging to another transport. An outbound channel declares a reachable provider origin;
-loopback and bare addresses refuse, only the scheme that transport speaks is accepted, and the
+loopback and bare addresses refuse, as does a name that resolves to one when the host connects
+(see [Egress destinations](#egress-destinations-and-what-an-approval-covers-proposed)), only the
+scheme that transport speaks is accepted, the channel needs the owner's approval, and the
 url may carry one credential placeholder in its path or query and nothing else in braces. One
 file declares one channel name, the file is at most 64 KiB, and a symlink is refused however
 good the file it points at.
@@ -501,6 +503,50 @@ to another operation. Provider responses and errors must not expose the injected
 The provider itself is trusted with that credential: rejecting common echoes cannot prove
 that a malicious provider has not transformed it into other response data. Revocation cannot
 undo a request already accepted by the provider.
+
+### Egress destinations and what an approval covers (proposed)
+
+These rules hold for every outbound request a Realm causes: an API operation and an outbound
+channel alike.
+
+- **Names.** A destination is a DNS name of at least two labels. An address literal, a single
+  label, and a name under a special-use suffix (`localhost`, `localdomain`, `local`,
+  `internal`, `intranet`, `private`, `corp`, `home`, `lan`, `home.arpa`, `arpa`, `test`,
+  `invalid`, `example`, `onion`, `alt`) refuse without any lookup.
+- **Addresses, at connect time.** The host resolves the name when it connects and refuses the
+  request unless every address the name resolves to is public. Refused for IPv4: this network
+  (`0.0.0.0/8`), private (`10/8`, `172.16/12`, `192.168/16`), shared address space
+  (`100.64/10`), loopback (`127/8`), link-local (`169.254/16`), the IETF protocol and
+  documentation blocks (`192.0.0/24`, `192.0.2/24`, `198.51.100/24`, `203.0.113/24`), the 6to4
+  relay (`192.88.99/24`), benchmarking (`198.18/15`), multicast (`224/4`) and reserved
+  (`240/4`). For IPv6 only global unicast (`2000::/3`) is allowed, and within it the IETF
+  protocol block (`2001::/23`, which holds Teredo and ORCHID), documentation (`2001:db8::/32`
+  and `3fff::/20`) and 6to4 (`2002::/16`) refuse. One refused address refuses the name, even when
+  others are public.
+- **Pinning.** The connection goes to an address that was checked; the host does not resolve the
+  name a second time, so a name cannot be repointed between the check and the connection. TLS
+  still verifies the declared host name.
+- **What a refusal says.** A refused name or address refuses the API call as a refused origin,
+  with a fixed reason that never names the host. A name that does not resolve is a network
+  failure. A channel whose declared name is refused stops; a channel whose name resolves to a
+  refused address backs off and tries again, since DNS can change.
+- **What an approval covers.** An operation's approval covers the Realm installation's captured
+  content, the API, the operation's origin (scheme, host, port and base path) and, for an
+  operation with a credential, the bound value. A changed capture, an origin that moves, even
+  only its base path, or a changed value each refuses the call as not approved for the current
+  value until the owner approves again. An operation declared `auth: none` is covered the same
+  way without the value.
+- **Channels need approval.** An outbound channel fetches nothing until the owner approves it.
+  The approval covers the captured content, the channel, its URL as declared, with the
+  credential placeholder unexpanded, and the bound value. A change to any of them pauses the
+  channel until the owner approves again. A channel whose URL would place the credential in the
+  scheme or the host never starts.
+- **Fixed headers.** An API entry's fixed `X-...` headers go out on every call as declared, under
+  the rules in [TypeScript Realms](TYPESCRIPT_REALMS.md); a set that breaks them refuses the call
+  before anything is sent. The host sets its own `User-Agent` and does not send a fixed header
+  under any other name.
+- **Logs and errors.** The key never appears in a log line, an error or a refusal: not under its
+  parameter name as written or URL-encoded, and not as its value as written or encoded.
 
 The reference profile supports:
 
