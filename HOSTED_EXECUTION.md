@@ -651,6 +651,58 @@ Docker handler keeps durable state in the graph. Other ecosystems and runtime pr
 remain open. Unsupported storage requirements must be rejected before handler execution. No
 VFS syntax is introduced here.
 
+## Realm bundles
+
+Status: proposed. A realm bundle is one zip that carries a realm and the module bytes its
+dependencies name, so a host can load it with no clone, build or fetch step.
+
+**What the zip holds.** The entries sit directly under the zip's root, with no wrapping folder:
+
+| Entry | Holds |
+| --- | --- |
+| the realm's files | what a host captures from the realm directory: `realm.yml` or `realm.ts`, the handler sources or `dist/`, `dependencies/manifest.json`, `producers/` and the rest |
+| `modules/<sha256 hex>.wasm` | one file for each module digest the dependencies declare, its bytes hashing to its name |
+| `bundle.json` | optional; the descriptor below |
+
+A host reads a zip as it reads the same files in a directory, and leaves out the same names:
+`.git/` and `.claude/` anywhere, and `node_modules/` and `target/` at the root. `dist/node_modules/`
+is part of a realm and stays.
+
+**What refuses the zip.** A zip holds regular files and directories only. An entry that is a
+symbolic link or another special file, an absolute path, a path with a `..` or empty name, a name
+that repeats, a file where another entry needs a directory, or a size past the host's capture
+ceilings refuses the zip as a whole: the realm loads nothing from it, and the host names the
+reason.
+
+**The descriptor.** `bundle.json` is one JSON object with exactly these fields:
+
+```json
+{"bundleFormat":1,"name":"places","version":"0.2.0","sourceCommit":"0123456789abcdef0123456789abcdef01234567","contentDigest":"sha256:<64 hex>"}
+```
+
+- `bundleFormat` is the number 1. `name` is the realm's kebab-case name and `version` a semantic
+  version. `sourceCommit` is the 40 lowercase hex digit commit the files were taken from; forty
+  zeros means they were taken from a working tree.
+- `contentDigest` is `sha256:` and the sha256 of the text made of one line `<sha256 hex>  <path>`
+  for each regular file the host captures from the bundle, except the `bundle.json` at the root,
+  sorted by the path's UTF-8 bytes, each line ending in a newline. It covers what the files hold
+  and where they sit, never the zip's compression, timestamps or entry order.
+- A descriptor that is not that object, or whose `contentDigest` differs from the files, refuses
+  the realm as a whole. A `name` or `version` that differs from the realm's own metadata is
+  reported, and the metadata wins. A bundle with no `bundle.json` is not checked.
+
+**Module files.** A host offers a file under `modules/` to its module store only when a
+dependency declares that digest and the bytes hash to the file's name. A file no dependency
+names is reported and left alone. A file whose bytes do not match is reported and not stored;
+the realm still loads, and a call that needs the module is refused as a missing module. Carrying
+a module admits nothing: the operator's allowlist decides which modules a realm may use, as
+[dependencies](TYPESCRIPT_REALMS.md#dependencies) states, and a bundled module the allowlist lacks
+is refused as any other.
+
+**Writing one.** A bundle writer should give the same zip for the same input: entries sorted by
+path bytes, one fixed timestamp, no comment or extra fields. Two writers can still compress
+differently, so `contentDigest` is the identity a host and an author compare.
+
 ## Reference implementation
 
 This governed implementation's current support is narrower than some trusted-host examples
@@ -672,6 +724,7 @@ in the main specification:
 | Captured Virtual Cypher | Implemented owned reads and same-installation captured producers/collections with retained resource grants and rollback materialization. |
 | Owner database target approval | Adoption, upgrade, revocation and read-only production SQL use through the owner connection facade are implemented. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
+| [Realm bundles](#realm-bundles) | Proposed. A reference host that loads them reads a zip wherever it reads a realm directory. |
 | Persistent private SQLite dependency | Implemented on the Wasm backend for `sqlite3-wasi`: one database per World, installation and dependency key, restored before a dispatch, saved on success, init script and migrations recorded by hash. Not available on the Docker backend. |
 | The model call | Implemented for a Realm that declares the `model` capability, under its own grant and the budgets in [the model call](#the-model-call). |
 | Additional dependency ecosystems and VFS | Not implemented on this path. |

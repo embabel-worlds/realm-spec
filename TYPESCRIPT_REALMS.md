@@ -1001,6 +1001,8 @@ export const addExpense: AddExpenseHandler = async (input, ctx) => {
   neither wipes nor repairs it. So settle `init` before the first install that persists, put
   every later change in a new file at the end of `migrations`, and ship a schema that cannot be
   reached by appending under a new dependency key.
+- A realm can travel as one zip with its module bytes under `modules/`; see
+  [realm bundles](HOSTED_EXECUTION.md#realm-bundles), which is proposed.
 - `layers` takes `name@version` references (a registry id and one to three dot-separated
   numbers), which synth checks and writes, sorted, to `dependencies/manifest.json`. The reference
   host refuses a realm that declares them, so leave them out. `--profile reference-wasm` and
