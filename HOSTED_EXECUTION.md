@@ -680,6 +680,17 @@ imports from other modules already included in the same bounded capture.
 No download, installation or registry resolution occurs. Libraries compiled into a Wasm
 program remain part of that artifact; the reference Wasm backend supplies no host packages.
 
+Proposed: a host checks the requirements once it has chosen the backend and before any handler
+runs. On a Wasm backend any requirement refuses the Realm's handlers. On a backend that runs
+bundled npm code, each requirement is checked against `dist/node_modules/<name>/package.json` as
+above: the name must be one npm allows (a scoped name is looked up under its scope), and a missing
+file, metadata over 64 KiB or not one JSON object, another name or version, an `exports` map,
+`"type": "module"`, `gypfile: true`, or an entry point (`main`, default `index`, as a file, with
+`.js` or `.json`, or as a directory's `index.js` or `index.json`) that is not inside the package
+refuses it. A requirement in any ecosystem but npm is refused on every backend. Each refused
+requirement is reported as `DEPENDENCY_PACKAGE_REFUSED` at its place in the manifest, and any of
+them takes every handler in the Realm dark while its declarative content stays.
+
 `dependencies/manifest.json` carries one of two forms, and a backend reads the one it
 supports. The Docker form above lists packages under `dependencies`. The Wasm form lists
 registry modules under `entries`, each with `module`, `version`, `sha256` and, for a stateful

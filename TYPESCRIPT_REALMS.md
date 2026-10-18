@@ -973,6 +973,19 @@ export const addExpense: AddExpenseHandler = async (input, ctx) => {
   JavaScript number. A module with no declared methods is typed `unknown`. The operator's
   allowlist decides what a module may really do; a declared method the operator has not allowed
   refuses at call time.
+- Proposed: the host keeps a dependency's declared `methods` and enforces them. At most 64
+  methods, each named as a JavaScript identifier of at most 64 characters with exactly `args`
+  (at most 16 types) and `returns`; any other form makes the dependency entry unreadable. When a
+  dependency declares methods, a call to any other method is refused with `METHOD_NOT_DECLARED`
+  before the module runs, even when the operator's allowlist allows that method. A dependency
+  that declares none can call whatever the allowlist allows. At load, a declared method the
+  allowlist does not name, or names with other argument or result types, refuses that
+  dependency: the load reports `DEPENDENCY_METHOD_REFUSED` on it, and every call to it is
+  refused with `METHOD_UNKNOWN` or `SIGNATURE_MISMATCH`, while the realm's other dependencies
+  and handlers stay available. A module whose own exports do not have the types the allowlist
+  grants is refused the same way, with `SIGNATURE_MISMATCH`, so a wrong allowlist entry shows at
+  load and not at the first call. A module whose dispatch answers any method by name (a reactor)
+  is narrowed by its declared methods, and their types are not compared.
 - Without `persistent`, state lives for one dispatch and starts empty each time.
 - With `persistent: true`, the host keeps one database for each world, realm and dependency. It
   restores the database at the start of a dispatch and saves it only when the dispatch succeeds
