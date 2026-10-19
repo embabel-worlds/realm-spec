@@ -9,6 +9,8 @@ guest to bypass those checks.
 
 > **Status: living draft.** Sections marked _forward-looking_ describe shape that is settled but may still be in implementation across hosts. Other sections describe portable declarations and trusted-host formats; capability support differs by host profile. Where this document cites concrete defaults or behaviour of "the reference host", it means the host implementation this spec is developed against; those values are informative, not part of the contract.
 
+**Licence.** The specification text in this repository — this document, [Virtual Cypher](VIRTUAL_CYPHER.md) and their companions — is [CC BY-ND 4.0](LICENSE); the embedded code, YAML and Cypher samples are [Apache 2.0](LICENSE-SAMPLES-APACHE-2.0). Authoring realms and building software that uses them is free and unconditional; implementing these specifications in another engine or platform requires a written agreement. [NOTICE.md](NOTICE.md) states the rights in full, and [License](#license) summarizes them.
+
 **Writing a captured realm in TypeScript?** [TypeScript realms](TYPESCRIPT_REALMS.md) walks through
 `defineRealm` from end to end: handlers and their context, credentials, APIs, channels, sources and
 consumers, dependencies, producers, graph queries, goals, lenses, watches, apps, write proposals,
