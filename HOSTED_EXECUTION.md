@@ -115,6 +115,34 @@ invocation; the owner-authenticated and delegated-bearer ingress routes below ap
 same journal through their own authenticated identity instead, with no captured guest
 invocation in the loop. There is no generic HTTP publication tool.
 
+## Reading back a realm's own records (proposed)
+
+A handler reads the records its own Realm published to one of its sources with
+`gateway.channel.read`; Wasm handlers use `ctx.gateway.channel.read`:
+
+```typescript
+const { entries, next, last } = await gateway.channel.read({ source: "changes", after: 0, limit: 50 });
+```
+
+`source` names a source the Realm declares, `after` is an offset (0 when omitted) and `limit`
+is a whole number from 1 to 100. The answer lists the records with offsets above `after`,
+oldest first, at most `limit` of them, each as `{offset, gap, record}`: `record` holds the
+`eventId`, `streamId`, `type`, `occurredAt` and `payload` as published, and `gap` is true where
+earlier records are no longer held. `next` is the offset to pass as `after` to read on, equal to
+`after` when nothing was returned, and `last` is the source's newest offset, 0 when it holds
+nothing. To get the newest `n` records, read once to learn `last`, then read after
+`last - n`.
+
+A read answers only the calling Realm's own records of that source in the World the invocation
+runs for. It never returns another Realm's records, even of a source with the same name, nor
+another World's or installation's, and a request cannot select any of them. The record does not
+say who published it. An undeclared source, or a call from anything that is not a Realm
+handler, is refused as not granted; a `limit` or `after` out of range is refused as invalid.
+The answer holds only as many records as fit the invocation's payload budget, so it may hold
+fewer than `limit`; a single record larger than that budget is refused as too large rather than
+skipped. Each read counts as one host call against the invocation's budget and is recorded like
+any other host call.
+
 ## Channels
 
 A channel declaration names exactly one transport — a live socket, a polled endpoint, or an

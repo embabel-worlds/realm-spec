@@ -927,12 +927,32 @@ export const record: RecordHandler = async (_input, ctx) => {
 | `publish({source, eventId, streamId, occurredAt, payload})` | `ChannelPublishReceipt`: `{receiptId, offset, replayed}` |
 | `publishBatch({source, batchId, expectedPosition, nextPosition, events})` | `ChannelBatchReceipt`: `{receiptId, offsets, replayed}`, one offset per event in order |
 | `position({source})` | `{position}`, a string, or `null` before the first batch |
+| `read({source, after, limit})` (proposed) | `{entries, next, last}`: the Realm's own records of the source after `after`, oldest first, `limit` 1 to 100 |
 
 A poller commits a page and its cursor together with `position` and `publishBatch`; each event in
 `events` is `{eventId, streamId, occurredAt, payload}`. The receipt from `ctx.gateway.channel`
 names its id `receiptId`, and the `ctx.publish` shortcut names it `id`. The limits and retry
 windows are under [publication](HOSTED_EXECUTION.md#publication) and
 [polling positions](HOSTED_EXECUTION.md#polling-positions).
+
+Proposed: a handler reads back what its own Realm published with `read`, described under
+[reading back a realm's own records](HOSTED_EXECUTION.md#reading-back-a-realms-own-records-proposed).
+A handler that answers the newest signals it recorded, newest first, reads once to learn the
+last offset and once below it:
+
+```typescript
+import type { RecentHandler } from "../.embabel/realm.d.ts";
+
+export const recent: RecentHandler = async (input, ctx) => {
+  const n = input.limit ?? 20; // 1 to 100
+  const { last } = await ctx.gateway.channel.read({ source: "pulse", limit: 1 });
+  const { entries } = await ctx.gateway.channel.read({ source: "pulse", after: Math.max(0, last - n), limit: n });
+  return { signals: entries.reverse().map(({ offset, record }) => ({ offset, ...record.payload })) };
+};
+```
+
+Called with `{limit: 2}` after three records, it answers the records at offsets 3 and 2, in that
+order. A read never returns another Realm's records, so the handler needs no filter for them.
 
 ## Dependencies
 
