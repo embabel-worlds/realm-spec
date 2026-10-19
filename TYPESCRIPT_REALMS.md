@@ -1003,12 +1003,13 @@ export const addExpense: AddExpenseHandler = async (input, ctx) => {
   dependency declares methods, a call to any other method is refused with `METHOD_NOT_DECLARED`
   before the module runs, even when the operator's allowlist allows that method. A dependency
   that declares none can call whatever the allowlist allows. At load, a declared method the
-  allowlist does not name, or names with other argument or result types, refuses that
-  dependency: the load reports `DEPENDENCY_METHOD_REFUSED` on it, and every call to it is
-  refused with `METHOD_UNKNOWN` or `SIGNATURE_MISMATCH`, while the realm's other dependencies
-  and handlers stay available. A module whose own exports do not have the types the allowlist
-  grants is refused the same way, with `SIGNATURE_MISMATCH`, so a wrong allowlist entry shows at
-  load and not at the first call. A module whose dispatch answers any method by name (a reactor)
+  allowlist does not name, or names with other argument or result types, refuses that method
+  only: the load reports a `DEPENDENCY_METHOD_REFUSED` warning naming the method, a call to it
+  is refused with `METHOD_UNKNOWN` or `SIGNATURE_MISMATCH` before the module runs, and the
+  dependency's other declared methods, the realm's other dependencies and its handlers stay
+  available. A module whose own exports do not have the types the allowlist grants refuses the
+  whole dependency, with `SIGNATURE_MISMATCH` on every call and `DEPENDENCY_METHOD_REFUSED` at
+  load, so a wrong allowlist entry shows at load and not at the first call. A module whose dispatch answers any method by name (a reactor)
   is narrowed by its declared methods, and their types are not compared.
 - Proposed: `string` is a fifth method type, for modules that take or answer text, such as a
   chess engine that takes a position and answers its analysis. Only a module the operator allows

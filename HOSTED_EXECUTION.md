@@ -681,15 +681,18 @@ No download, installation or registry resolution occurs. Libraries compiled into
 program remain part of that artifact; the reference Wasm backend supplies no host packages.
 
 Proposed: a host checks the requirements once it has chosen the backend and before any handler
-runs. On a Wasm backend any requirement refuses the Realm's handlers. On a backend that runs
+runs. A Wasm backend supplies no packages, so on it each requirement is reported as a
+`DEPENDENCY_PACKAGE_REFUSED` warning at its place in the manifest and the Realm's handlers stay:
+a handler runs only what its module carries, and one that reaches for a package the module does
+not carry fails in its own code. On a backend that runs
 bundled npm code, each requirement is checked against `dist/node_modules/<name>/package.json` as
 above: the name must be one npm allows (a scoped name is looked up under its scope), and a missing
 file, metadata over 64 KiB or not one JSON object, another name or version, an `exports` map,
 `"type": "module"`, `gypfile: true`, or an entry point (`main`, default `index`, as a file, with
 `.js` or `.json`, or as a directory's `index.js` or `index.json`) that is not inside the package
-refuses it. A requirement in any ecosystem but npm is refused on every backend. Each refused
-requirement is reported as `DEPENDENCY_PACKAGE_REFUSED` at its place in the manifest, and any of
-them takes every handler in the Realm dark while its declarative content stays.
+refuses it, as does a requirement in any ecosystem but npm. Each refused requirement is reported
+as `DEPENDENCY_PACKAGE_REFUSED` at its place in the manifest, and any of them takes every handler
+in the Realm dark while its declarative content stays.
 
 `dependencies/manifest.json` carries one of two forms, and a backend reads the one it
 supports. The Docker form above lists packages under `dependencies`. The Wasm form lists
