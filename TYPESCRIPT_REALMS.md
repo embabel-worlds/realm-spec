@@ -970,6 +970,18 @@ export const addExpense: AddExpenseHandler = async (input, ctx) => {
   whose bytes do not hash to `sha256`. Either refusal takes every handler in the realm dark,
   including the ones that never touch the dependency. The reference host allows `sqlite3-wasi`
   and `h3-wasi`, at most eight dependencies, and modules up to 32 MiB.
+- Proposed: a refused dependency refuses only itself. A module the operator has not allowed, one
+  the host's module store does not hold, one over the size limit, one whose bytes do not hash to
+  `sha256`, and a stateful option (`persistent` or `init`) on a module that keeps no state each
+  refuse that dependency alone. The load report names it at its place in the dependencies, with
+  the key, the module id and the digest, and a fix; every call to it is refused with a code, which
+  a handler can catch, and which fails the dispatch when it does not. The realm stays loaded: its
+  other dependencies are mounted, and a handler that never calls the refused one runs as before.
+  An operator's refusal is reported ahead of a missing module, so the host never looks for the
+  bytes of a module it would not allow. What concerns the realm as a whole still refuses every
+  handler: more than eight dependencies, or a dependencies file the host cannot read. A bundle
+  that carries a module's bytes admits nothing by carrying them; a bundled module the allowlist
+  lacks is refused as above.
 - SQLite has one method, `exec(sql, params)`, which resolves to rows as plain objects. `params`
   is optional: a list of strings, numbers and nulls bound, in order, to the `?` placeholders in
   `sql`. A host that mounts the dependency either binds them or refuses a call that carries them
