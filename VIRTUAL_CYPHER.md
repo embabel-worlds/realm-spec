@@ -104,6 +104,14 @@ outlives the run**:
    over a position the probe chose to bind.** A node YOU bind with no label is unscopable (§11),
    as it always was; a node only a pattern predicate reaches is yours to leave unnamed.
 
+   **An equality on a number or a boolean keeps every anchor it matches, whatever spelling holds
+   the value.** `n.rating = 10` keeps a node that stores the number 10 and one that stores the text
+   `'10'`; `f.isStatic = true` keeps a node that stores the boolean `true` and one that stores the
+   text `'true'`. This holds for an anchor an earlier hop of the same query fetched as much as for a
+   stored one, so a filter on a fetched node never empties the hop that follows it. The probe can
+   only widen here, never drop: your own `WHERE` still decides the answer. Only the exact words
+   `true` and `false` are read as booleans; `'True'` or `'yes'` stays text.
+
 2. **Fetch.** For each virtual join the engine calls its **producer** *once* with the **union of
    all anchor keys** — never one call per anchor (no N+1). The producer is the source-specific
    fetcher (a REST op, a SQL query, a vector search, an in-process computation).
@@ -422,6 +430,7 @@ absence.
 | `feed` | an RSS/Atom **search feed** — one search per anchor key, each item a record; optionally FOLLOWING each item's page for phrase-anchored excerpts (§5.10) | the anchor key, substituted into the feed URL |
 | `sparql` | a **SPARQL 1.1 endpoint** (Wikidata, UniProt, an enterprise triplestore) queried with an authored SELECT template; the whole key batch lands in one `VALUES` clause (§5.14) | the anchor key, serialized into the query's `{{keys}}` token; rows echo it under `keyVar` |
 | `cypher` | a **remote openCypher graph** (Neo4j, Memgraph, Neptune — any engine speaking Bolt or openCypher-over-HTTP) queried with an authored read query; structurally read-only, governed by the shared `governance:` grammar (§5.15) | the anchor key batch, bound to `$keys`; rows echo it via the query's own RETURN |
+| `jar` | a **Java jar's classes**, read from the jar when a query reaches it — packages, types, fields, methods, field accesses and calls, with source lines; nothing ingested or stored (§5.18) | a jar path, or `<jar path>!<value>` for a property the producer selects `by` |
 | `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
 | *captured handler* (no `kind`) | an approved handler in the realm's own captured installation, declared as a version-1 `producers/` file. It may walk its own cursor (`page:`) and receive `=`/`IN` filters as list arguments (`pushdown:`). No cache ([captured handler producers](README.md#captured-handler-producers)) | the anchor key batch, as a list under `keyArgument`; each record carries its key under `recordKeyField` |
 
@@ -2091,6 +2100,68 @@ door. State the edge in the realm's README: a record still changing when its per
 state it had when that period was last read.
 
 
+### 5.18 `jar` — a Java jar's classes as a keyed source
+
+A `jar` producer reads the bytecode of a Java jar when a query reaches it, and returns what the jar
+declares: its packages and types, their fields and methods, which methods read and write which
+fields, and which methods call which — into the jar, the JDK or any other library — with source
+lines from the jar's debug information. Nothing is ingested, indexed in advance or stored: the rows
+are transient for the query, like any fetch. No source code is needed or read.
+
+```yaml
+- { name: javaJarTypes,        kind: jar, emit: types }                 # key: a jar path
+- { name: javaFieldsOfType,    kind: jar, emit: fields,   by: owner }   # key: <jar path>!<owner>
+- { name: javaAccessesOfField, kind: jar, emit: accesses, by: field }   # key: <jar path>!<field>
+```
+
+```cypher
+MATCH (j:Jar {path: 'data/jars/app.jar'})-[:HAS_TYPE]->(t:JavaType {name: 'com.example.Cache'})
+      -[:DECLARES_FIELD]->(f:JavaField)-[:ACCESSED_BY]->(a:FieldAccess)
+RETURN f.name, a.method, a.access, a.lines
+```
+
+**The contract:**
+
+- **`emit` is the collection, `by` is the selector.** `emit` is one of `artifact`, `packages`,
+  `types`, `fields`, `methods`, `accesses`, `calls`. With `by` absent (or `jarPath`) the key is a jar
+  path and every row of that collection is returned. With any other `by` the key is
+  `<jar path>!<value>`, and the rows are those whose `by` property equals `value`, or — for a list
+  property such as a type's `interfaces` — contains it. A `by` that is not a property of the
+  collection, or an unknown `emit`, is refused when the realm loads.
+- **Every row carries the key the next hop needs.** `id` is `<jar path>!<member>`, `jarPath` is the
+  jar path as the key gave it, and every property naming another member has an `…Id` twin
+  (`ownerId`, `methodId`, `fieldId`, `callerId`, `calleeId`, `superclassId`). A row also carries
+  `anchorKey`, the key it was fetched for: that is the `recordKeyField` a join declares. So a hop
+  from a type to its fields keys on the type's `id` with `by: owner`, and a hop from an access to its
+  method keys on `methodId` with `by: key`.
+- **Names are the JVM's.** A type is named by its binary name, `pkg.Outer$Inner`, as stack traces
+  and heap dumps print it; an array type is written `T[]`. A method's `key` is
+  `Owner.name(parameter types)`, constructors are `<init>` and a static initializer `<clinit>`.
+- **Only the jar's own classes are rows.** A supertype, field or callee outside the jar (the JDK,
+  another library) is a name on the row that refers to it — `superclass`, `fieldOwner`,
+  `calleeOwner` — never a row of its own; `internal: false` marks those references. A field's
+  `container` (`map`, `collection`, `array`, `threadlocal`, `reference`, `none`) is decided by its
+  declared type and, for a type in the jar, that type's own supertypes down to the JDK.
+- **An access or a call is grouped by its target.** A method that reads a field on six lines is one
+  `READ` row with six `lines`; a `WRITE` is an assignment. Adding to a collection held in a field is
+  a `READ` of the field plus a call (`put`, `add`) in the same method.
+- **Where a jar may be.** A relative path resolves against the world's `data/` tree, then against
+  the declaring realm's own directory — so a realm can ship an example jar — and an absolute path
+  must lie under a root the operator trusts. A key that names no readable jar there yields no rows
+  and a `PRODUCER_ERROR` naming the key; a jar larger than `maxJarMb` (default 128) is refused the
+  same way, never half read.
+- **Filters in the MATCH narrow the read.** An equality, `IN`, `CONTAINS` or list membership on a
+  property of the emitted collection is applied before rows reach the graph:
+  `(j:Jar {path: $jar})-[:HAS_CALL]->(c:MethodCall {calleeOwner: 'java.lang.System'})` does not
+  materialize every call in the jar. The graph re-applies every filter, so the answer never depends
+  on it.
+
+Cost: a jar is read once and kept for later hops of the same and subsequent queries until it
+changes on disk, so the first query against a jar pays for reading it and the rest are lookups. A
+whole-jar hop over a large jar is still many rows — tens of thousands of calls in a mid-sized
+library — and is subject to `maxFanoutTotal` like any other; reach those rows through a keyed hop, or
+narrow them in the MATCH.
+
 ## 6. Vector edges — semantic joins in depth
 
 A `vector` producer is fundamentally different from the keyed kinds, and the difference is worth
@@ -3483,7 +3554,7 @@ it is not.
 | `sql` | **yes**, on a KEYED table read | the statement is generated, so `count` compiles to `SELECT COUNT(*) … GROUP BY <keyColumn>` with the same keys, the same governance `where:` and the same pushed filters |
 | `cypher`, `sparql`, `graphql` | **no, not yet** | each could answer one — `count(o)`, `COUNT(DISTINCT ?x)`, a Relay `totalCount` — but its query is AUTHORED, and nothing in the declaration says which second query returns the number. Refused rather than guessed |
 | `generative`, `compute`, `extract`, `aggregate` | **no** | there are no source rows to count: the records are produced here, so counting them means producing them |
-| `tabular`, `files`, `feed`, `vector`, `keyword`, `elasticsearch`, `publisher`, … | **no** | the unit of cost is the whole download or the whole retrieval, which has to happen before anything can be counted |
+| `tabular`, `files`, `jar`, `feed`, `vector`, `keyword`, `elasticsearch`, `publisher`, … | **no** | the unit of cost is the whole download or the whole retrieval, which has to happen before anything can be counted |
 
 A `sql` producer's declaration is lighter, because the engine writes the statement: `measure` — and
 `of`, the column, for `sum`/`min`/`max` — is the whole of it.
