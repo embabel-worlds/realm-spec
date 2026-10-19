@@ -750,6 +750,7 @@ Producer `kind`s:
 | `vector` | top-k **semantic similarity** to the anchor | for joins with no key — similarity *is* the join (related docs/chunks); rides the host embedder |
 | `generative` | **GENERATES** the edge (resumably) rather than reading it — an LLM's world knowledge (`SIMILAR_TO`, `IN_INDUSTRY`) or a code function | pluggable generator (`llm` \| `function`); keeps generating; resolves each answer onto the type spine; provenance-stamped |
 | `aggregate` | **REDUCES** an anchor's connected neighborhood to ONE node (fan-IN) — e.g. a per-principal or per-organization summary distilled from many rows | gathers via a scoped graph read; delegates the reduction to an existing LLM aggregation (`synthesize`/`summarize`/…); TTL-cache = periodic refresh |
+| `jar` | a **Java jar's classes**, read from the jar when a query reaches it — types, fields, methods, field accesses, calls | `emit:` the collection, `by:` the row property the key selects on; no ingestion, nothing stored — see [Virtual Cypher §5.18](./VIRTUAL_CYPHER.md#518-jar--a-java-jars-classes-as-a-keyed-source) |
 
 > **Naming:** `kind: remote` is the current spelling for an externally-backed repository; `kind: api` is accepted as a back-compat alias and still works in existing realms.
 
