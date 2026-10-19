@@ -5,12 +5,22 @@ the handler code it runs. `defineRealm` from
 [`@embabel/realm-types`](https://github.com/embabel-worlds/embabel-ts) checks the object while you
 write it, and `realm-synth` from the same repository turns it into the files this specification
 describes: `realm.yml`, `dist/manifest.json`, `producers/`, `channels/`, `apps/` and the rest.
-It also writes the TypeScript types the handlers import. The host never reads `realm.ts`. It reads
-what synth wrote.
+It also writes the TypeScript types the handlers import. A host reads what synth wrote.
+
+Proposed: a host may also read `realm.ts` directly. It then reads the file as text, removes the
+types, evaluates the module with no host calls, no network, no filesystem, no clock and no
+randomness, and takes the default export as the realm's definition. Both ways give the same realm:
+the metadata, functions and dependencies a host reads from `realm.ts` are the ones it would read
+from what synth writes for the same file. Such a host takes the realm as a bundle: `realm.ts`, the
+handler sources it names and every file it declares (dependency init scripts and migrations
+among them), as a directory or a zip of the same tree (see
+[realm bundles](HOSTED_EXECUTION.md#realm-bundles)). A realm with a `realm.yml` and no `realm.ts`
+is read as before. When a realm ships both, a host that reads `realm.ts` reads it and reports each
+generated file beside it as ignored.
 
 This document covers realms written with `execution: "captured"`. A captured realm runs from a
 verified copy the owner has admitted, and every capability it reaches is approved by the owner on
-its own. For each part of a realm it shows what you write, what synth accepts and refuses, and
+its own. Proposed: when a host reads `realm.ts`, the verified copy includes it. For each part of a realm it shows what you write, what synth accepts and refuses, and
 what the host does with it. The host-side detail lives in
 [hosted execution](HOSTED_EXECUTION.md), and each section here links to its part of it.
 
@@ -90,7 +100,9 @@ bun packages/realm-synth/src/cli.ts my-realm/realm.ts --out my-realm/dist \
   profile does not load, go to standard error and do not stop the build.
 
 Synth clears the output directory and writes it again on every run, so keep nothing by hand in
-it. It sorts every key, so the same `realm.ts` always gives the same bytes. It refuses a value
+it. It sorts every key, so the same `realm.ts` always gives the same bytes. Proposed: a host that
+reads `realm.ts` directly gives the realm synth would write from the same file, so the same
+`realm.ts` means the same realm whichever way a host reads it. It refuses a value
 with no file form: a function, a symbol, a `Date`, a `BigInt`, a `Map` or `Set`, a non-finite
 number, a circular reference, or `undefined` in an array. An object key whose value is
 `undefined` is left out. The text fields of goals, triggers, producers, lenses, watches, data
