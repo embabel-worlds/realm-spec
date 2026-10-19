@@ -1050,6 +1050,15 @@ export const addExpense: AddExpenseHandler = async (input, ctx) => {
   neither wipes nor repairs it. So settle `init` before the first install that persists, put
   every later change in a new file at the end of `migrations`, and ship a schema that cannot be
   reached by appending under a new dependency key.
+- Proposed: `migrations` is a field of the dependency in `realm.ts`, typed as a list of strings
+  beside `init`, so `defineRealm` checks it and a host that reads `realm.ts` takes the list as
+  written. A list that is not a list of strings, that names more than 64 files or one file twice,
+  that names a path that is not a `.sql` file inside the realm (a leading `/`, a `\` or a `..`),
+  or that sits on a module other than `sqlite3-wasi` or on an entry with no `init`, makes the
+  dependency entry unreadable, as a malformed `methods` does. A migration that fails refuses the
+  dispatch with a reason that names its place in the list and never its text, since the text may
+  hold data. A stored database whose applied migrations are not the start of the declared list is
+  refused with a reason that names the first place they differ, as `migrations[<n>]`.
 - A realm can travel as one zip with its module bytes under `modules/`; see
   [realm bundles](HOSTED_EXECUTION.md#realm-bundles), which is proposed.
 - `layers` takes `name@version` references (a registry id and one to three dot-separated
