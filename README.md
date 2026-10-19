@@ -715,7 +715,7 @@ Producers are the source-specific fetchers a `virtualJoins.producer` references 
 - name: contactsByEmail
   kind: remote                    # a RemoteRepository — gateway op (realm handler or learned API)
   operation: objectsSearch
-  queryArgs: { segment: string }    # optional typed request input from an edge's realm map
+  queryArgs: { segment: string }    # typed request input from an edge's realm map
   sourceFilters: [segment]         # source capability; does not itself narrow a request
   records: "$.results[*].properties"
   keyArg: "filterGroups.0.filters.0.values"   # where the key LIST is injected (list mode)
@@ -742,9 +742,10 @@ Producers are the source-specific fetchers a `virtualJoins.producer` references 
   query: "SELECT id, customer_email, total FROM orders WHERE customer_email IN (:keys)"
 ```
 
-For `kind: remote`, `queryArgs` declares optional scalar request inputs (`string`, `integer`,
-`number`, `boolean`), supplied as `realm` values on the edge. Undeclared, ambiguous or invalid
-inputs are rejected, not silently dropped. `sourceFilters` lists filter-capable source fields;
+For `kind: remote`, `queryArgs` declares scalar request inputs (`string`, `integer`,
+`number`, `boolean`), supplied as `realm` values on the edge. They are optional unless named in
+`requiredQueryArgs`, which must list only declared `queryArgs`; a read missing a required input is
+refused, never sent bare. Undeclared, ambiguous or invalid inputs are rejected, not silently dropped. `sourceFilters` lists filter-capable source fields;
 listing one does not send it. An unsent condition on a declared filter can yield
 `UNPUSHED_FILTER` when a bounded read cannot establish a match (see Virtual Cypher §7.2.2).
 
@@ -1058,7 +1059,8 @@ page the source chooses, often its default first page. Declare `singlePage: true
 (a learned OpenAPI listing does this automatically). Every non-empty read then reports
 `PARTIAL_RESULT` (`TRUNCATED`), and nothing counted or summed through it is presented as an exact
 total. An empty read is still a complete answer. The warning also appears when the source did return
-everything, because the producer cannot tell.
+everything, because the producer cannot tell. Raising `maxPages` or asking again cannot clear it;
+declaring `paging:` so the listing can be walked does.
 
 An operation that declares no paging and no page size returns its whole collection as far as a
 client can tell, so its reads are complete. A learned listing that declares a page size sends it at

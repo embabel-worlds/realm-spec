@@ -187,6 +187,8 @@ These distinctions appear in the result envelope next to `rows` and `warnings`. 
 |---|---|---|---|
 | `fetchedRecords` | integer | on query, ask and saved-view results (the admin REST endpoints omit a zero) | Records the producers returned before query-side filtering, cache-served ones included. |
 | `materializedNodes` | integer | on query, ask and saved-view results (the admin REST endpoints omit a zero) | Graph nodes made available to the query from those records. |
+| `reason` | string | on query, ask, saved-view and admin REST results, only when the result is not a clean answer; absent on a clean answer, including a genuine zero | Why there is no clean answer, as a code a caller can branch on. The evidence codes are `FETCHED_NOT_MATCHED` (records were fetched and none matched), `PARTIAL_NOT_MATCHED` (an incomplete read matched nothing and no step failed) and `UNPUSHED_FILTER` (a bounded read omitted a declared filter); other codes report refusals and failures. Any of them means an empty result does not prove absence. |
+| `incomplete` | string | on query, ask and saved-view results, only when the read was incomplete; the admin REST endpoints omit it | One line, such as `Incomplete: based on the first 100 rows, more exist`, that qualifies every row and figure in the result. |
 | `answerBoundary` | object `{kind, unresolvedQuestion?}` | only on a non-empty record card | `kind: SUPPORTING_CONTEXT_ONLY`: the rows support the lookup but do not answer its original filter. `unresolvedQuestion` restates what is still unanswered. |
 | `cypher` | string | an ask result (`kg_ask`): on an empty result, a requested explanation, or a record card. A saved-view result: only on a requested explanation. A direct query (`kg_query`) never echoes it, since the caller wrote it. The admin REST query endpoints always include it. | The executed query, when present. |
 
@@ -2506,14 +2508,16 @@ Realm parameters are steering like everything above — stripped from the read, 
 cache key — and can never clobber the engine's reserved template variables (`anchors`, `exclude`,
 `want`, `hint`, …).
 
-For a `remote` producer that declares optional scalar `queryArgs` (`string`, `integer`, `number`,
+For a `remote` producer that declares scalar `queryArgs` (`string`, `integer`, `number`,
 `boolean`), keys in the edge's `realm` map are **request inputs**, not prompt parameters or record
 identities. Each supplied key must be declared and have a scalar value coercible to its declared
 type. It can be a literal, a query parameter, or a property of a node bound in an earlier clause; an
 unresolved, missing, non-scalar, or ambiguous value is rejected rather than silently dropped to
 make an unfiltered request. A value the query computes (a function call, arithmetic, or a `WITH`
 variable such as a date derived from `date()`) is not accepted: write it as a literal, for example
-`{realm: {from: '2026-07-01'}}`, and the rejection says so. Omit an unused optional input to retain the source's default. For
+`{realm: {from: '2026-07-01'}}`, and the rejection says so. Omit an unused optional input to retain the source's default.
+An input named in `requiredQueryArgs` must be supplied: a read without it is refused, naming the
+missing `{realm: {…}}` entry, and never sent bare. For
 example, a declared string `segment` can narrow a contact-list operation:
 
 ```cypher
@@ -2522,7 +2526,7 @@ MATCH (me)-[:HAS_MAILBOX_CONTACT {realm:{segment:me.segment}}]->(c:MailboxContac
 RETURN c.email
 ```
 
-Only declared optional `realm` inputs are forwarded alongside the producer's own arguments;
+Only declared `realm` inputs are forwarded alongside the producer's own arguments;
 distinct input sets stay separate in the cache. A
 single query cannot use different input sets for the same producer. A successfully executed
 upstream query that binds no input rows makes **no downstream request**; a virtual upstream
@@ -2542,9 +2546,9 @@ source evidence. Neither is reported as an unfiltered successful read. A conflic
 bounded read. Without `queryArgs`, existing producer-specific `realm`
 steering keeps its ordinary meaning above.
 
-A learned OpenAPI collection exposes optional scalar query parameters as declared `queryArgs`
+A learned OpenAPI collection exposes scalar query parameters as declared `queryArgs`
 except paging controls and conventional free-text search inputs, which are not treated as
-filters. A matching equality on a numeric or boolean response field, or an enum-constrained string field,
+filters; parameters the API marks required are also listed in `requiredQueryArgs`. A matching equality on a numeric or boolean response field, or an enum-constrained string field,
 may be sent as a source filter; an unconstrained text equality is still checked on returned
 records. An explicit `realm` input takes precedence over an inferred filter on the same field:
 a conflicting graph predicate remains a graph filter and cannot silently change the request.
@@ -3823,6 +3827,7 @@ is classified and surfaced as a warning on the result:
 | `PRODUCER_ERROR` (`RATE_LIMITED`) | the source throttled the call (an HTTP 429) | the source is up and the credentials are fine — the result is **unanswered, not empty**. Ask again shortly, or pin a specific entity so fewer calls are needed. Never "reconnect". |
 | `PRODUCER_ERROR` (`AUTH_EXPIRED`) | a 401 / "token expired" / `EXPIRED_AUTHENTICATION` | the OAuth token has **expired** — reconnect to refresh. The empty result is because the source rejected the call. |
 | `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page; a call budget ran out mid-fan-out; a join's `maxFanoutTotal` held part of what a fetch answered out of the graph; a declared floor or gate dropped records | the fetch **succeeded but is incomplete** — the source has more. *Not* a failure. The detail says which cause, because the fixes differ: raise the cap, narrow the anchor set, or simply ask again (a budgeted run keeps its completed work and resumes rather than restarting). |
+| `PARTIAL_RESULT` (`TRUNCATED`) | a `singlePage` producer (one whose listing declares paging it cannot walk) returned any records | the source **may have more**: the producer cannot tell the API's default first page from the whole listing, so the warning appears even when nothing is missing. Raising `maxPages` or asking again cannot change it; declare `paging:` so the listing can be walked, or read a listing that returns its whole collection. |
 | `PARTIAL_RESULT` (`NOT_FOUND`) | the source answered a definitive 404 for one key of a fan-out | that key **does not exist** — as opposed to "we could not find out", which is `FETCH_FAILURE`. The answer is short by exactly the named keys; the source is not down, and the other keys' rows are good. |
 | `PARTIAL_RESULT` (`DERIVED_LOWER_BOUND`) | a DERIVE rule set concluded while the facts its rules read were themselves incomplete (another diagnostic fired, or a demand went unmet) | membership and any aggregate over it are a **lower bound, not a total**. The fixpoint is correct over what was materialized and says nothing about what was not — a rule body cannot fetch (§13.6). Not a failure, and not "nothing was derived". |
 | `PARTIAL_RESULT` (`UNREACHED_BACK_HOP`) | a hop reached a fetched label from a node that has **no declared door onto it**, so the label could only match records the query had already fetched some other way | membership, and any count or list over it, is a **lower bound**; a total, average, minimum or maximum over it describes only the records it read and may be off in **either** direction. Every row returned is true — what is withdrawn is only the claim of completeness. The warning quotes the hop as the query wrote it and names the doors that would give the node rows of its own. Not a fetch failure, and not "no more data". |
