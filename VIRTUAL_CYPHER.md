@@ -422,7 +422,7 @@ absence.
 | `vector` | top-k semantic relevance to the anchor's **text** — a fused semantic + lexical retrieval, ranked as one list (§6.6) | nothing — *relevance is the join* (§6) |
 | `keyword` | top-k **lexical** (fulltext, exact-token) match to the anchor's text — the honest fit for "MENTIONS \<term\>" | nothing — same relevance contract as `vector`, only the mode differs (§6.6) |
 | `agentic-rag` | a **bounded LLM retrieval loop** over the same index: reformulates, runs both modes, reads further into inconclusive candidates, returns only documents it *judges* fit the edge's `intent` brief | nothing — relevance as a judgment (§6.6); EXPENSIVE, select explicitly |
-| `remote-search` | top-k **lexical** match via the REMOTE store's OWN search API (a gateway op with `{query}` substituted per anchor — e.g. Drive `fullText contains`); live, nothing ingested | nothing — same relevance contract as `keyword`, but the source searches itself; per-match `mode:'keyword'`/`rank` on the edge, score is a neutral 1.0 (matched, not similarity) |
+| `remote-search` | top-k **lexical** match via the REMOTE store's OWN search API (a gateway op with `{query}` substituted per anchor wherever it sits in `args`, nested maps and lists included — e.g. Drive `fullText contains`, or a stored query's `params: {q: "{query}"}`); live, nothing ingested | nothing — same relevance contract as `keyword`, but the source searches itself; per-match `mode:'keyword'`/`rank` on the edge, score is a neutral 1.0 (matched, not similarity) unless `recordScoreField` names the record field carrying the store's OWN score, which then rides the edge as `score` unrescaled — a record without it keeps 1.0 |
 | `generative` | an LLM **invents** plausible records ("suggest things like X"), each resolved onto the spine via `resolveVia`; demand-driven (re-probes with a growing exclusion until enough survive) | the anchor's name/text, batched into ONE prompt |
 | `aggregate` | gathers the anchor's connected neighborhood and LLM-**reduces** it to ONE record (a taste summary, a digest) | the anchor's identity; one record per anchor |
 | `extract` | gathers the anchor's neighborhood and **extracts typed records** from it — lazy ENTITIES, committed with real containment on first traversal (§5.6). `cardinality:` chooses fan-out (many records) or reshape (ONE record per anchor — §5.6.1) | the anchor key (per-anchor collect); many records per anchor, or exactly one |
@@ -2353,6 +2353,73 @@ first-stage anchor set, and the group line says how many of its model calls are 
 the cost gate reads the model-call total, a concept-mode search over many anchors can be refused
 as `TOO_EXPENSIVE` like any other model spend — narrow the anchor set, or opt in with
 `{ai: {materialize: true}}`.
+### 6.8 Memory — what the assistant remembers, as a relevance source
+
+What the assistant remembers about the acting user is a relevance source like any other: the index
+`memory`. A realm reaches it through the same producer kinds, the same `via` selector and the same
+per-match edge vocabulary as documents and email threads, so a query that knows
+`(:Concept)-[:RELEVANT_TO]->(:Document)` already knows memory.
+
+```yaml
+# producers/memory.yml
+- name: memoryVector
+  kind: vector
+  index: memory           # the acting user's memory, in the context they are in
+- name: memoryKeyword
+  kind: keyword
+  index: memory
+- name: memoryAbout
+  kind: participant       # memories that MENTION a known entity, by its resolved id
+  index: memory
+  identityField: entityId
+```
+
+**`Memory` is a shared parent label; each memory system is a child.** The standard model declares
+`Memory` and the assistant's own `DiceMemory` with `parents: [Memory]`. A realm that brings another
+memory system declares its own child — `ZepMemory`, `parents: [Memory]` — over its own producer
+(a `remote-search` with `recordScoreField`, or a host-provided index). Ancestors are physically
+present (LABELS_AND_COMPOSITION §2), so a query may name the parent and be answered by EVERY
+system that has a join, or name one child and read that system alone:
+
+```cypher
+MATCH (:Concept {value:'coffee'})-[r:RELEVANT_TO]->(m:Memory)        -- every memory system
+RETURN m.source, m.text, r.score, r.mode ORDER BY r.rank
+
+MATCH (:Concept {value:'coffee'})-[r:RELEVANT_TO]->(m:DiceMemory)    -- the assistant's own
+RETURN m.text, m.confidence, r.score
+
+MATCH (p:Person {name:'Ada Lovelace'})-[:REMEMBERED_IN]->(m:Memory)  -- by fact, not by name
+RETURN m.text
+```
+
+**The data contract every memory label carries.** `id` (identity), `text`, `confidence` (0..1),
+`status`, `created`, `revised`, `source` (which system holds it — `dice`, `zep`, …), and when the
+system knows them `validFrom` / `validTo`, `mentions` (names) and `entityIds` (resolved ids). A
+child may add its own properties; it may not drop these. The per-match data is on the EDGE:
+`r.score`, `r.mode`, `r.rank`, `r.snippet`, `r.matchedTerms`, and for the fused lane `r.probes`
+(which arms found it).
+
+**Three questions, three modes — the same three as a document.** The semantic lane (default,
+`via:'vector'`) answers "what do you remember ABOUT X": a vector arm and a term-overlap arm over
+the same scoped memories, fused by reciprocal rank, `r.mode:'fused'`; a fact both arms find
+outranks a lone high hit, and `r.score` stays a similarity where one exists. With no vector arm the
+lane falls back to lexical and says so (`r.mode:'keyword'`). The lexical lane (`via:'keyword'`)
+answers "memories that MENTION X": every assertable term present, or an honest empty. The
+`participant` kind answers "what do you know about THIS entity": memories whose resolved mentions
+include the anchor's id — a fact, never a name's neighbourhood. An `agentic-rag` producer over
+`memory` is accepted and answers with the semantic lane today; `r.mode` reports what ran.
+
+**Scope and curation hold at the source.** A memory is read in the acting user's own context, and
+no user — or a user with no context — reads nothing (§6.4). Reads are ACTIVE memories only. A
+`status` constraint on the memory node pushes down and relaxes that to the statuses it names;
+a CONTRADICTED memory is known-false and never answers, even when asked for by name — the rule the
+scope rewriter already holds persisted `Proposition` nodes to (§15). A child label from another
+system maps its own lifecycle onto the same vocabulary: ACTIVE for a current fact, SUPERSEDED or
+STALE for a retired one, CONTRADICTED for one proven false.
+
+Cost: one search per anchor, as for every relevance edge; the semantic lane is two probes over one
+store. Nothing leaves the deployment for the assistant's own memory; a child over a remote memory
+service pays that service's call per anchor, which `apiCalls` counts.
 
 ---
 
