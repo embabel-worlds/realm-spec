@@ -122,6 +122,38 @@ as a real.
 
 JSDoc on the property is its description.
 
+### 3.3a Lifecycle — `lifecycle:` holds every node of a label to a curation rule
+
+A type may declare which values of its `status` property a read admits, and which are never
+returned:
+
+```yaml
+- name: Memory
+  lifecycle:
+    active: [ACTIVE]          # what a plain read returns — the default
+    never:  [CONTRADICTED]    # known-false: not returned even when asked for by name — the default
+```
+
+**Guarantee — the rule is written into every read.** `MATCH (m:Memory)` reads only ACTIVE
+memories. `MATCH (m:Memory) WHERE m.status = 'SUPERSEDED'`, or `(m:Memory {status: 'STALE'})`,
+relaxes the read to anything but a `never` value: the constraint has to be on the node, in the
+same clause. `WHERE m.status = 'CONTRADICTED'` answers nothing. This is the rule the platform's
+`Proposition` has always been held to; a declared lifecycle holds your label the same way,
+whichever source fetched the node and whether it is stored or transient.
+
+**Guarantee — a child inherits it.** A type whose `parents:` chain reaches a type with a
+lifecycle is held to the nearest one; a child that declares its own overrides it. So `DiceMemory`
+under `Memory` is curated without restating anything, and so is a realm's `ZepMemory`.
+
+**Guarantee — the declaration is the world's own.** It holds in the world whose types declare
+it, and in no other; a platform-curated label (`Proposition`) keeps the platform's lifecycle and
+a declaration naming it is refused and reported.
+
+**Requirement — the property is `status`, and the node carries it.** A lifecycle is a shared
+vocabulary, so there is one spelling of it; a node of a curated label with no `status` answers
+nothing. `active` must name at least one value; a value may not be both `active` and `never`;
+either breaks the declaration at load, naming the type.
+
 ### 3.4 Edges
 
 An edge is declared as a **field on the side that holds the key**:
