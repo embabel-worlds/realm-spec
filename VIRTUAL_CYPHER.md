@@ -422,7 +422,7 @@ absence.
 | `vector` | top-k semantic relevance to the anchor's **text** — a fused semantic + lexical retrieval, ranked as one list (§6.6) | nothing — *relevance is the join* (§6) |
 | `keyword` | top-k **lexical** (fulltext, exact-token) match to the anchor's text — the honest fit for "MENTIONS \<term\>" | nothing — same relevance contract as `vector`, only the mode differs (§6.6) |
 | `agentic-rag` | a **bounded LLM retrieval loop** over the same index: reformulates, runs both modes, reads further into inconclusive candidates, returns only documents it *judges* fit the edge's `intent` brief | nothing — relevance as a judgment (§6.6); EXPENSIVE, select explicitly |
-| `remote-search` | top-k **lexical** match via the REMOTE store's OWN search API (a gateway op with `{query}` substituted per anchor wherever it sits in `args`, nested maps and lists included — e.g. Drive `fullText contains`, or a stored query's `params: {q: "{query}"}`); live, nothing ingested | nothing — same relevance contract as `keyword`, but the source searches itself; per-match `mode:'keyword'`/`rank` on the edge, score is a neutral 1.0 (matched, not similarity) unless `recordScoreField` names the record field carrying the store's OWN score, which then rides the edge as `score` unrescaled — a record without it keeps 1.0 |
+| `remote-search` | top-k **lexical** match via the REMOTE store's OWN search API (a gateway op with `{query}` substituted per anchor wherever it sits in `args`, nested maps and lists included — e.g. Drive `fullText contains`, or a stored query's `params: {q: "{query}"}`); live, nothing ingested | nothing — same relevance contract as `keyword`, but the source searches itself; per-match `mode:'keyword'`/`rank` on the edge, score is a neutral 1.0 (matched, not similarity) unless `recordScoreField` names the record field carrying the store's OWN score, which then rides the edge as `score` unrescaled — a record without it keeps 1.0. `compute:` maps the record onto the type's properties (an expression over `r`), as on every kind that returns a source's records |
 | `generative` | an LLM **invents** plausible records ("suggest things like X"), each resolved onto the spine via `resolveVia`; demand-driven (re-probes with a growing exclusion until enough survive) | the anchor's name/text, batched into ONE prompt |
 | `aggregate` | gathers the anchor's connected neighborhood and LLM-**reduces** it to ONE record (a taste summary, a digest) | the anchor's identity; one record per anchor |
 | `extract` | gathers the anchor's neighborhood and **extracts typed records** from it — lazy ENTITIES, committed with real containment on first traversal (§5.6). `cardinality:` chooses fan-out (many records) or reshape (ONE record per anchor — §5.6.1) | the anchor key (per-anchor collect); many records per anchor, or exactly one |
@@ -2424,6 +2424,18 @@ or a realm's `:ZepMemory` has the same curation predicate written into it that `
 gets, whichever system fetched the node and wherever the node came from — a persisted projection
 of a memory system's facts included. A memory node must therefore carry `status`; one without it
 answers nothing.
+
+**Systems a standard child exists for.** Beside the assistant's own `DiceMemory`: an Omnigraph graph
+(`OmnigraphMemory`, a `remote-search` over the graph's stored BM25 query); markdown memory
+(`MarkdownMemory` and its children for Claude Code's memory directory, OpenClaw's `MEMORY.md` and
+daily logs, a Cline/Roo memory bank, plain notes — `files` search producers over the world's
+`data/memory/`); a self-hosted Graphiti server (`GraphitiMemory`, `remote-search` over its `/search`,
+with `valid_at` / `invalid_at` as `validFrom` / `validTo` and a fact Graphiti has invalidated
+read as SUPERSEDED); Zep Cloud (`ZepMemory`, the same over Zep's graph search, keyed, with Zep's
+score on the edge); and the MCP memory server (`McpMemory`, a `files` producer with `unit: line`
+over its `memory.jsonl`, one entity per memory, `require: {type: entity}` leaving relation lines
+out). Each is its own realm under embabel-worlds; each maps its system's own state onto the one
+contract and lifecycle above, which is the whole of what a new system has to do.
 
 Cost: one search per anchor, as for every relevance edge; the semantic lane is two probes over one
 store. Nothing leaves the deployment for the assistant's own memory; a child over a remote memory
