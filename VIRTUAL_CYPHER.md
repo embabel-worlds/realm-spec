@@ -2417,6 +2417,14 @@ scope rewriter already holds persisted `Proposition` nodes to (§15). A child la
 system maps its own lifecycle onto the same vocabulary: ACTIVE for a current fact, SUPERSEDED or
 STALE for a retired one, CONTRADICTED for one proven false.
 
+**The lifecycle is declared, and every memory label is held to it.** `Memory` declares
+`lifecycle: { active: [ACTIVE], never: [CONTRADICTED] }` (DECLARING_TYPES.md §3.3a), and a child
+inherits it. So the rule above is not only the source's: a query naming `:Memory`, `:DiceMemory`
+or a realm's `:ZepMemory` has the same curation predicate written into it that `:Proposition`
+gets, whichever system fetched the node and wherever the node came from — a persisted projection
+of a memory system's facts included. A memory node must therefore carry `status`; one without it
+answers nothing.
+
 Cost: one search per anchor, as for every relevance edge; the semantic lane is two probes over one
 store. Nothing leaves the deployment for the assistant's own memory; a child over a remote memory
 service pays that service's call per anchor, which `apiCalls` counts.
