@@ -1388,6 +1388,30 @@ supplied answers the same rows as the same values written inline — supplied pa
 substituted before the query is read. A parameter nobody supplied is refused, never read as an empty
 list.
 
+**A fetched node pinned to a value bound upstream is narrowed to it.** In
+`MATCH … WITH x MATCH (a)-[:HAS_FIELD]->(f:Field {key: x})-[:ACCESSED_BY]->(m)`, the node a join
+FETCHES (`f`, not the anchor) is pinned to `x`, which an earlier clause bound. Its values are
+resolved before the fetch, and only the matching rows are kept — handed to a source that applies `IN`
+filters as one, filtered on receipt otherwise — so the next hop (`ACCESSED_BY`) is asked for those
+keys alone, as it would be for `{key: 'C.f3'}` written inline. The same holds for `WHERE f.key = x`
+(either operand order), `f.key IN xs`, and a pin to another node's property bound earlier
+(`{owner: frame.className}`). `WHERE f.key = x` pins exactly as `{key: x}` does when the condition is
+an `AND` of terms; under an `OR` it is a filter, and a comparison between two nodes' properties
+(`a.id = b.ownerId`) is a join, never a pin.
+
+What it guarantees and what it does not:
+
+- **The same rows as without it.** Narrowing never drops a row the query keeps; `OPTIONAL MATCH`
+  keeps its null rows.
+- **It holds back rather than guess.** When the earlier part of the query still reads data not yet
+  fetched, when there are more than 5,000 distinct values, when none resolve, or when a value is not
+  a plain scalar, the node is fetched in full and the pin applied afterwards — a fuller fetch, never a
+  wrong answer.
+- **It narrows what is fetched only where the source can be asked for it.** A source keyed by
+  something else (a whole-collection producer) still reads its collection; only what is kept, and
+  every later hop, shrinks. A realm that wants the read itself narrowed declares a producer selected
+  by that property.
+
 **What does NOT seed, and why**
 
 - **A filter that cannot list keys** — `STARTS WITH`, `CONTAINS`, a range, a regex on the key. Nothing
