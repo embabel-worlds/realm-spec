@@ -2368,7 +2368,7 @@ the next — so a logged exception is one row however many lines its trace takes
 - **Layouts.** `eventPattern`, when declared, is a regex over an event's first line (or first two,
   joined by a newline) whose named groups `timestamp`, `level`, `thread`, `logger` and `message` fill
   the row; another group name is refused when the realm loads. Undeclared, the Spring Boot,
-  Logback/Log4j, timestamp-then-level, java.util.logging and level-first layouts are tried in turn.
+  Logback/Log4j, time-level-logger, timestamp-then-level, java.util.logging and level-first layouts are tried in turn.
 - **Matching.** Under `emit: search` or a `content CONTAINS` filter, the term is judged against the
   whole event. A file is read up to `contentCapKb`; events past it are not returned.
 
