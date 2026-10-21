@@ -495,9 +495,10 @@ paging: { style: page, param: page, size: 25, maxPages: 200, total: data.meta.al
 ```
 
 The **LLM-backed** kinds (`generative`'s `generator:`, `aggregate`'s `reduce:`, `extract`'s `extract:`) take optional
-per-edge tuning — `role:` (a portable, world-defined model role id such as `chat_cheap`; **never a
-concrete model name**, which stays an ops concern) and `temperature:`. A query can override both for one
-fetch with the `ai.model` / `ai.temperature` edge directives (§7.2).
+per-edge tuning — `role:`, a portable, world-defined model role id such as `chat_cheap`; **never a
+concrete model name**, which stays an ops concern. A query can override it for one fetch with the
+`ai.model` edge directive (§7.2). These blocks take no sampling temperature: current models ignore or
+reject one, so the host sets none, and a `temperature:` a realm still declares is ignored with a warning.
 
 #### 5.3.1 Cost discipline for LLM-backed producers — `defaultWant` and `tools:`
 
@@ -791,7 +792,7 @@ The rules, all engine-enforced:
   user's own nodes), and each anchor's neighborhood reduces independently. `incoming: true` flips the
   traversal for containment shapes like `(Chunk)-[:PART_OF]->(Document)`.
 - **Freshness is an INPUT HASH, not a clock.** The persisted node carries a hash of the collected
-  items plus the full reduce fingerprint (function, effective instruction, role, temperature, band).
+  items plus the full reduce fingerprint (function, effective instruction, role, band).
   Edit the document — or the realm's prompt, or the role — and exactly that node regenerates, in place.
   The re-check costs one graph read; the model runs only when something actually changed.
 - **Wordcount BANDS.** A query's `{ai: {wordcount: N}}` quantizes to the nearest persisted band —
@@ -799,8 +800,8 @@ The rules, all engine-enforced:
   directive-free canonical **is** the standard band; a nearby request (250) is a hit on the same node.
   The band's own target (never the raw request) folds into the instruction, so one band has one
   stable fingerprint.
-- **Semantic steering stays transient.** A `hint`, `voice`, `realm.*` parameter, or a `model`/
-  `temperature` override makes the result a non-canonical artifact: it is reduced fresh for that
+- **Semantic steering stays transient.** A `hint`, `voice`, `realm.*` parameter, or a `model`
+  override makes the result a non-canonical artifact: it is reduced fresh for that
   query, returned with its own transient identity, and **never persisted, never served from, and
   never overwrites** the canonical node. `{ai: {fresh: true}}` bypasses the hash check but writes the
   regenerated canonical through.
@@ -2455,7 +2456,7 @@ outage**"*. For those, the query can call a **per-row LLM judgment** inline, exp
 These run at **execution time**, over the rows a query has already fetched — the LLM counterpart, at the
 value level, of §9's generation-time `examples:` steering. Four primitives across the three query positions:
 
-- **`{ai: {hint, model, temperature, confidence, fresh, voice, wordcount}}`** — *steer and tune* the
+- **`{ai: {hint, model, confidence, fresh, voice, wordcount}}`** — *steer and tune* the
   fetch behind an edge, as a nested directive map (§7.2; the flat `ai_*` spellings are RETIRED);
 - **`{realm: {…}}`** — the realm's OWN prompt parameters, passed verbatim (§7.2.2);
 - **`WHERE ai.relevant(n, '<criterion>')`** — *filter* rows by subjective relevance;
@@ -2484,7 +2485,7 @@ property value, so it could never silently filter the read if it leaked):
 ```cypher
 MATCH (p:Person {name:'…'})-[:RATED]->(seed:Movie)
 MATCH (seed)-[:SIMILAR_TO {ai: {hint:'obscure, and French', model:'chat_cheap',
-                                temperature: 0.2, confidence: 0.8}}]->(rec:Movie)
+                                confidence: 0.8}}]->(rec:Movie)
 RETURN rec.title
 ```
 
@@ -2501,8 +2502,8 @@ ignored. Its keys:
   through the world's role map exactly like the realm edge's own `role:` declaration. A query
   **never pins a concrete model name**; an unknown role falls back to the edge's declared tuning (with
   a warning), never a failure.
-- **`temperature`** — a sampling temperature layered on whatever base the role (or the edge's default)
-  resolves to.
+- **No `temperature`.** The host sets no sampling temperature; a `temperature` key in the map is
+  stripped with the rest of the steering and warned about as an unknown key, never applied.
 - **`confidence`** — raises a **generative** edge's confidence floor for this query ("only picks you're
   sure of" vs "brainstorm wildly"); below-floor records are dropped before resolution, costing no lookup.
 - **`fresh: true`** — bypasses the **cross-query TTL cache read** ("regenerate my taste summary *now*" /
@@ -2535,7 +2536,7 @@ ignored. Its keys:
 the full steering, so a `chat_cheap`, breezy, 40-word run never serves from (or pins) the plain cache
 entry. On a **graph-cached** aggregate (§5.5) the same principle splits three ways: `wordcount` selects
 a persisted band (still cached), `fresh` regenerates-and-writes-through, and everything semantic
-(`hint`/`voice`/`realm.*`/`model`/`temperature`) makes the result transient — it never touches the
+(`hint`/`voice`/`realm.*`/`model`) makes the result transient — it never touches the
 committed canonical node. The whole block is **steering, not data**: stripped from the executed query, never stamped onto
 a materialized edge. And since views are saved queries, a realm can bake any of it into a view
 (a `CheapRecommendations` view with `{ai: {model:'chat_cheap'}}`) with no extra mechanism.
@@ -2968,7 +2969,6 @@ has no voice and no word count:
 | Key | Applies to | Effect |
 |---|---|---|
 | `model` | EVERY aggregation | the world ROLE the reduction runs on; an unknown role falls back to the default, with a warning, never a failure |
-| `temperature` | EVERY aggregation | sampling temperature layered on that role |
 | `hint` | the PROSE reductions (`summarize`, `synthesize`) | a soft steer added alongside the instruction — never a filter, and never able to override grounding |
 | `voice` | the PROSE reductions | register/style ("second person, warm") |
 | `wordcount` | the PROSE reductions | a target length — a prompt-level target, never a mid-sentence cut |
@@ -3037,10 +3037,11 @@ The calls a reduction makes for independent groups (or batches of them) overlap,
 so a query that judges many groups waits for the slowest few round trips rather than the sum of
 all of them; the order of the rows and the count of the calls are unchanged by this.
 
-**A `classify` judgement is repeatable.** It runs at temperature 0 unless the call says otherwise
-(`{ai: {temperature: …}}`, or a role that carries its own), so the same evidence under the same
-rubric yields the same label run after run — a materialised view refreshed on its `ttl` keeps its
-labels where the words have not changed.
+**A `classify` judgement asks the same question every run.** The same evidence reaches the model
+cleaned the same way and in the same order, and the answer is snapped onto the declared label set,
+so a label never changes because the question did. It is not guaranteed to be identical run to run:
+the host sets no sampling temperature, which current models ignore or reject. A materialised view
+refreshed on its `ttl` keeps its labels between refreshes.
 
 ```cypher
 MATCH (t:ResearchTopic)-[:HAS_NEWS]->(n:NewsItem)
@@ -4250,9 +4251,9 @@ schema-level engineering could not touch.
   nulls and conversions, the same column names, the same refusals by type. A statement that fails
   changes nothing on either. A difference between the two is a defect in the engine that differs,
   not a dialect for queries to allow for.
-- **Idempotent re-runs.** A re-run re-fetches; caching (`ttl`/`immutable`) and `temperature: 0` for
-  any LLM-derived value make repeated runs of the same query agree — repeatability is a correctness
-  property, not just a speed one.
+- **Idempotent re-runs.** A re-run re-fetches; caching (`ttl`/`immutable`) makes repeated runs of the
+  same query agree, including on any LLM-derived value — repeatability is a correctness property, not
+  just a speed one. Without a cache, an LLM-derived value may differ between runs.
 - **A refusal is stable, and it is actionable.** A refused statement, re-issued unchanged, is
   refused again with the same text; every refusal names what was counted, the size and the limit it
   passed, and a lever that changes the outcome; and a figure that is only a floor says so. §9

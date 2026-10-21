@@ -3476,7 +3476,6 @@ conversation:
   skills: [diagrams]                     # skills by name, beside what realms and builtins bring
   llm: chat_best                         # an LLM role, never a model; default: the host's chat role
   sampling:                              # what a caller may ask for; omitted = the role's own settings
-    temperature: [0, 0.7]
     maxTokens: 2000
 authority:
   default: never
@@ -3488,8 +3487,10 @@ authority:
 | `builtins` | Which of the host's own tools the conversation keeps, by category: `code`, `graph`, `views`, `data`, `memory`, `documents`, `attachments`, `images`, `artifacts`, `apps`, `host`. `true` keeps all, `false` none. A host tool in no listed category is dropped. A realm's own tools are governed by `realms`, not this. Omitted means all, which is almost never what an agent should have — see [Scope it to the job](#scope-it-to-the-job). |
 | `skills` | Skills brought in by name, in addition to what `realms` and `builtins` bring: a host-provided skill, or one the world installed or wrote, that the named `builtins` categories would otherwise leave out. Three limits. A realm's skills arrive only with the realm: naming a skill another realm ships, without that realm in `realms`, is refused, and the refusal says to add the realm. A name brings in a skill and never a tool — host tools stay by category. A name that matches no skill is a validation error for the agent, listing the skills that exist. See [Scope it to the job](#scope-it-to-the-job). |
 | `llm` | The [LLM role](#llm-roles) the conversation runs on. A realm never names a model, and a caller cannot choose one. |
-| `sampling.temperature` | The range a caller's `temperature` is clamped to. |
 | `sampling.maxTokens` | The most a caller's `max_tokens` may ask for. |
+
+`sampling` declares no temperature. Current models ignore a sampling temperature or reject one, so a
+host sets none; a `temperature` an agent file still declares is ignored.
 
 #### Scope it to the job
 
@@ -3558,7 +3559,8 @@ and lists only them as models — the key to paste into a chat client.
 | `model` | Names the agent. Never chooses a model: the model is the agent's `conversation.llm` role. |
 | `messages` | The client's whole history. Only the newest user message is a new turn; the conversation is recognised as described below. |
 | `stream` | Answered as server-sent `chat.completion.chunk` events ending in `[DONE]`. An agent produces messages rather than tokens, so each message arrives as one chunk. |
-| `temperature`, `max_tokens` (`max_completion_tokens`) | Honoured within the agent's `sampling` bounds and clamped to them. With no bounds declared, the role's own settings stand and the value is ignored, since common clients send one on every request. |
+| `max_tokens` (`max_completion_tokens`) | Honoured within the agent's `sampling` bound and capped at it. With no bound declared, the role's own setting stands and the value is ignored. |
+| `temperature` | Accepted and ignored. Common clients send one on every request; the host sets no sampling temperature. |
 | `top_p`, `stop`, `seed` | Passed to the model when the role's provider supports them; otherwise ignored. |
 | `user` | The client's end-user id, kept apart in recognising conversations. |
 | `tools`, `tool_choice`, `response_format` | Ignored. The agent's tools are its own, and a caller cannot hand it others. |
@@ -4243,7 +4245,7 @@ source: realm
 objective: |
   What Roger is trying to achieve in a conversation. A persona with one advocates.
 sampling:
-  temperature: 0.4        # what this persona RUNS at
+  maxTokens: 600          # what this persona RUNS at
 notebook:
   sets: [pastoral]
   extraction:
@@ -4255,7 +4257,7 @@ notebook:
 | `objective` | no | What this persona is **trying to achieve** in a conversation. A persona with an objective advocates; one without it answers. |
 | `openingMove` | no | How it opens when it speaks first. |
 | `notebook` | no | The [notebook sets](#notebook) it keeps, and how they are extracted. |
-| `sampling` | no | What this persona RUNS at — `temperature`, `topP`, `maxTokens`. Distinct from an agent's `conversation.sampling`, which bounds what a *caller* may ask for. |
+| `sampling` | no | What this persona RUNS at — `topP`, `maxTokens`. Distinct from an agent's `conversation.sampling`, which bounds what a *caller* may ask for. |
 | `brief` | no | The persona's voice compacted into a few hundred words, for a realm that calls a model **directly** rather than through chat. Omit it on the chat path: `personality.jinja` is already carrying the voice there, and a second copy of it is a second thing to keep true. It never renders in chat — a rule meant for conversations goes in `behaviours.jinja` or `guardrails.jinja`; written only here, it reaches no conversation. |
 
 `objective`, `openingMove` and `notebook` do reach chat: a host renders them as the persona's agenda
@@ -4278,17 +4280,14 @@ file an operator can read, not only in the way it happens to argue.
 
 #### `sampling` — what the persona runs at
 
-Temperature is part of a character, not a deployment knob. A persona meant to surprise people needs
-a high one; a persona whose job is to be exact needs a low one, and the same number cannot serve
-both. The prior art is explicit about it: the 2024 chatbot this field generalises declared
-`defaultTemperature: 1.38` with a floor of 1.3 and a ceiling of 1.4, because being a little
-unpredictable was the point of her.
+A persona may declare how long it answers and how widely it samples, when a realm verb calls it
+directly. It declares no temperature: current models ignore a sampling temperature or reject one, so
+a host sets none, and a `temperature` a `brief.yml` still declares is ignored rather than refused.
 
 ```yaml
 # personalities/astrid/brief.yml
 sampling:
-  temperature: 1.38      # what she runs at
-  maxTokens: 400
+  maxTokens: 400         # what she runs at
 ```
 
 This is **not** an agent's `conversation.sampling`, and the two do different jobs:
@@ -4304,10 +4303,9 @@ escape an operator's bounds by declaring a number — it states a preference ins
 same request-and-grant that governs everything else a realm asks for.
 
 A host that does not read `sampling` ignores it and runs the role's settings, so declaring one never
-breaks a realm; it simply does not take effect. Worth knowing before relying on a temperature to
-carry a character: a surface whose model call takes no sampling arguments at all — as a host's
-general-purpose completion tool may not — cannot honour it, and the persona will run at whatever the
-role gives.
+breaks a realm; it simply does not take effect. A surface whose model call takes no sampling
+arguments at all — as a host's general-purpose completion tool may not — cannot honour it, and the
+persona will run at whatever the role gives.
 
 A brief **resolves by the same rules as the rest of the bundle**: the slug is unique across the
 world and a world-authored persona of that name shadows the realm's. So a brief is not a private
