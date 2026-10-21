@@ -2315,8 +2315,12 @@ RETURN f.exception, f.className, f.method, f.line, d.text
   frames it shares with the one before (`elided`). Module and class-loader prefixes (`java.base/`,
   `app//`) are not part of the class; a logging layout's packaging suffix (`~[lib.jar:1.0]`) is kept as
   `location`. Text with no trace answers nothing, with a `PRODUCER_ERROR` warning saying so.
+- **Nesting is kept.** A suppressed throwable's own causes belong to it, not to the one thrown:
+  `depth` is 0 on the chain from the thrown throwable to its root cause and one more inside each
+  suppressed throwable, and `parentIndex` names the throwable each one caused or was suppressed by.
+  `isRootCause` is the end of the depth-0 chain.
 - **`exceptions`** returns a row per throwable: `index`, `relation` (`thrown`, `cause`,
-  `suppressed`), `exception`, `simpleName`, `message`, `frameCount`, `elided`, `isRootCause`,
+  `suppressed`), `depth`, `parentIndex`, `exception`, `simpleName`, `message`, `frameCount`, `elided`, `isRootCause`,
   `topFrame`, and the first frame of it in a jar — `jarFrame`, `jarFrameLine`, `jarPath`, `sourceKey`,
   `spanKey`. **`frames`** returns a row per frame: `exceptionIndex`, `relation`, `exception`, `frame`
   (its position), `isTop`, `firstInJar`, `className`, `packageName`, `method`, `file`, `line`, `module`,
@@ -2333,6 +2337,10 @@ RETURN f.exception, f.className, f.method, f.line, d.text
   translation. A frame no jar compiled (the JDK, a library not mounted, a generated proxy) is still a
   row, with `inJar: false` and none of those keys. A jar root that cannot be found is a
   `PRODUCER_ERROR` warning.
+- **Whether the source is the jar's version** is answered by the declaration around a frame's line
+  (§5.19 `declarations` for its `spanKey`): `matches` compares that declaration's name with the
+  frame's `expectedName`. A span's `matches` looks for the name within `context` lines, and a frame's
+  line sits inside a method's body, so it can read false on the right source.
 
 Cost: a key is parsed in memory, and a jar's class list is read once and kept until the jar changes.
 A text larger than `maxTraceKb` (default 256) is refused with a warning, never half-read.
