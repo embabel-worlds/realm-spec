@@ -431,7 +431,9 @@ absence.
 | `sparql` | a **SPARQL 1.1 endpoint** (Wikidata, UniProt, an enterprise triplestore) queried with an authored SELECT template; the whole key batch lands in one `VALUES` clause (§5.14) | the anchor key, serialized into the query's `{{keys}}` token; rows echo it under `keyVar` |
 | `cypher` | a **remote openCypher graph** (Neo4j, Memgraph, Neptune — any engine speaking Bolt or openCypher-over-HTTP) queried with an authored read query; structurally read-only, governed by the shared `governance:` grammar (§5.15) | the anchor key batch, bound to `$keys`; rows echo it via the query's own RETURN |
 | `jar` | a **Java jar's classes**, read from the jar when a query reaches it — packages, types, fields, methods, field accesses and calls, with source lines; nothing ingested or stored (§5.18) | a jar path, or `<jar path>!<value>` for a property the producer selects `by` |
-| `source` | the **source a jar was compiled from** — files, spans of lines, declarations and call sites — read from a `-sources.jar`, a folder or a git commit when a query reaches it (§5.19) | a jar row's `sourceKey` or `spanKey` |
+| `source` | the **source a jar was compiled from** — files, spans of lines, declarations, call sites and local variables — read from a `-sources.jar`, a folder or a git commit when a query reaches it (§5.19) | a jar row's `sourceKey` or `spanKey` |
+| `stacktrace` | the **Java stack trace in a piece of text** — its throwables and frames, each frame naming the jar that compiled its class with that jar's keys (§5.20) | the text: a pasted trace, or a log event's `content` |
+| `files` | the world's **local files**, walked live under `data/` roots — one row per file, per line (`unit: line`) or per log event (`unit: event`, §5.20.1) | the owner key; free-text terms with `emit: search` |
 | `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
 | *captured handler* (no `kind`) | an approved handler in the realm's own captured installation, declared as a version-1 `producers/` file. It may walk its own cursor (`page:`) and receive `=`/`IN` filters as list arguments (`pushdown:`). No cache ([captured handler producers](README.md#captured-handler-producers)) | the anchor key batch, as a list under `keyArgument`; each record carries its key under `recordKeyField` |
 
@@ -2221,6 +2223,7 @@ A `source` producer reads source files where they are, when a query reaches them
 - { name: javaSourceSpan,  kind: source, emit: spans,        roots: [src], context: 6 }   # key: a spanKey
 - { name: javaDeclaration, kind: source, emit: declarations, roots: [src] }               # sourceKey or spanKey
 - { name: javaCallSites,   kind: source, emit: callsites,    roots: [src] }               # key: a spanKey
+- { name: javaLocals,      kind: source, emit: locals,       roots: [src] }               # sourceKey or spanKey
 - { name: upstream,        kind: source, emit: spans,
     roots: [ { git: "https://github.com/acme/acme", ref: "v{version}" } ] }
 ```
@@ -2233,7 +2236,7 @@ RETURN c.caller, cs.receiver, cs.arguments, cs.argumentTypes
 
 **The contract:**
 
-- **Four emits.** `files` returns the file a `sourceKey` names: `root`, `path`, `language`, `lines`,
+- **Five emits.** `files` returns the file a `sourceKey` names: `root`, `path`, `language`, `lines`,
   `sha256`, `package`, `candidates`, and for a git root `commit` and `url`. `spans` returns the numbered
   lines within `context` (default 6, at most 50) of a `spanKey`'s line, with `matches` — whether the
   word the key expects appears on them — and `inRange`. `declarations` returns, for a `sourceKey`,
@@ -2241,7 +2244,12 @@ RETURN c.caller, cs.receiver, cs.arguments, cs.argumentTypes
   innermost one around the line: `kind`, `name`, binary `owner`, `fromLine` / `toLine`, `signature`,
   `modifiers`, `annotations`, `javadoc`, and for a member its numbered `text`. `callsites` returns the
   calls on a `spanKey`'s line whose method (or, for a constructor, class) is the key's word: `receiver`,
-  `receiverType`, `arguments`, `argumentTypes`, `argumentTypesResolved`, `enclosing`. Every row carries
+  `receiverType`, `arguments`, `argumentTypes`, `argumentTypesResolved`, `enclosing`. `locals` returns,
+  for a `sourceKey`, every local variable the file declares, or for a `spanKey` those of the method,
+  constructor or initializer around the line: `kind` (`local`, `for`, `foreach`, `resource`,
+  `pattern`), `name`, `line`, `declaredType` as written, `isVar`, `isFinal`, `initializer`,
+  `initializerType`, `varEligible` and `varPreservesType` (below), `enclosing`, `enclosingKind`,
+  `enclosingOwner`, and the numbered `text` of the declaration. Every row carries
   `id`, `sourceKey`, `jarPath` and `anchorKey`, so a span or declaration joins back to its file by
   `sourceKey`.
 - **Where source is looked for, in order.** A `<jar name>-sources.jar` beside the jar; then each root,
@@ -2263,6 +2271,13 @@ RETURN c.caller, cs.receiver, cs.arguments, cs.argumentTypes
   the call, a field of an enclosing type — through the file's own types, single-type imports,
   `java.lang` and the file's package. A type only another file could explain is returned as written
   with `argumentTypesResolved` false; a method's return value is unknown.
+- **Whether `var` would do.** `varEligible` is the language's rule: one variable, given a value that
+  is not `null`, an array initializer, a lambda or a method reference (every enhanced-`for` variable;
+  never a pattern binding). `varPreservesType` says whether `var` would give the variable the type it
+  declares: true for `String s = "x"` or `Key k = new Key(id)`; false when the initializer's type is
+  another one (`long n = 1`, `List<X> xs = new ArrayList<>()`), an anonymous class, or a diamond under
+  a parameterised type; null when the initializer's type is not in the file — never guessed. It is
+  null for a local already declared with `var` and for one `var` cannot replace.
 - **What is honest about absence.** A key whose path no root holds returns nothing — a generated class
   has no source. A jar for which no root at all could be found, a declared root that could not be
   read, a git ref that names nothing, and a file larger than `maxFileKb` (default 1024) are each a
@@ -2274,6 +2289,80 @@ a commit for good); a folder tree is listed again when a lookup misses, at most 
 key is then one file read, and a syntax-tree emit parses a file once per fetch however many keys name
 it. A git root's first query pays for a shallow, blob-less fetch of the commit; each file read from it
 for the first time is one more fetch.
+
+### 5.20 `stacktrace` — a Java stack trace as a keyed source
+
+A `stacktrace` producer reads the Java stack trace in a piece of text, when a query reaches it. The
+key IS the text — a trace a user pasted, or a log event's `content` (§5.20.1) — so a literal-seeded
+anchor carries it:
+
+```yaml
+- { name: traceFrames,     kind: stacktrace, emit: frames,     jars: [jars] }
+- { name: traceExceptions, kind: stacktrace, emit: exceptions, jars: [jars] }
+```
+
+```cypher
+MATCH (t:StackTrace {text: $trace})-[:HAS_FRAME]->(f:StackFrame {firstInJar: true})-[:DECLARED_AT]->(d:JavaDeclaration)
+RETURN f.exception, f.className, f.method, f.line, d.text
+```
+
+**The contract:**
+
+- **The first trace in the text is read.** A header (`pkg.SomeException: message`, optionally after
+  `Exception in thread "…"`) counts only when frames follow it; text before it (a log line's own
+  message) is not part of the trace, and a wrapped message is kept whole. Each `Caused by:` and
+  `Suppressed:` is a throwable of its own, in order, with its frames and the count of `... n more`
+  frames it shares with the one before (`elided`). Module and class-loader prefixes (`java.base/`,
+  `app//`) are not part of the class; a logging layout's packaging suffix (`~[lib.jar:1.0]`) is kept as
+  `location`. Text with no trace answers nothing, with a `PRODUCER_ERROR` warning saying so.
+- **`exceptions`** returns a row per throwable: `index`, `relation` (`thrown`, `cause`,
+  `suppressed`), `exception`, `simpleName`, `message`, `frameCount`, `elided`, `isRootCause`,
+  `topFrame`, and the first frame of it in a jar — `jarFrame`, `jarFrameLine`, `jarPath`, `sourceKey`,
+  `spanKey`. **`frames`** returns a row per frame: `exceptionIndex`, `relation`, `exception`, `frame`
+  (its position), `isTop`, `firstInJar`, `className`, `packageName`, `method`, `file`, `line`, `module`,
+  `native`, `location`, `text`, `sourcePath`, and `expectedName` — the name its line should show (the
+  method; the class's simple name for a constructor; the enclosing method for a lambda body). Every row
+  carries `traceId` (the same text, the same id) and `anchorKey`.
+- **A frame finds its own jar.** Each frame's class is looked up in the jars under `jars` (each a jar
+  or a folder of jars, nested folders included; `-sources.jar` and `-javadoc.jar` are not code),
+  resolved as a jar path is: the world's `data/` tree, an operator-trusted root, the realm's own
+  directory. The first root, then path order, wins; `jarCandidates` says how many jars had the class.
+  A frame a jar compiled carries `jarPath`, `inJar: true`, `javaTypeId`, `sourceKey` and — when it
+  names a file and a line — `spanKey`, spelled exactly as that jar's own rows spell them (§5.18), so
+  it joins to the jar's types and the source producer's spans and declarations (§5.19) with no
+  translation. A frame no jar compiled (the JDK, a library not mounted, a generated proxy) is still a
+  row, with `inJar: false` and none of those keys. A jar root that cannot be found is a
+  `PRODUCER_ERROR` warning.
+
+Cost: a key is parsed in memory, and a jar's class list is read once and kept until the jar changes.
+A text larger than `maxTraceKb` (default 256) is refused with a warning, never half-read.
+
+#### 5.20.1 Log events — `files` with `unit: event`
+
+A `files` producer with `unit: event` returns one row per LOG EVENT — from a line that starts one to
+the next — so a logged exception is one row however many lines its trace takes:
+
+```yaml
+- { name: logEvents, kind: files, roots: [logs], include: ["**/*.log"], unit: event, contentCapKb: 8192 }
+```
+
+- **Where an event starts.** At a line containing a match of `eventStart`, when declared. Otherwise the
+  file decides: lines beginning with a date or time when it has any; else lines beginning with a level
+  word; else every line that is not a trace's continuation (indented, `Caused by:`, `Suppressed:`,
+  `... n more`).
+- **What a row says.** The file's fields, plus `line` and `endLine`, `content` (the event's text),
+  `timestamp`, `level`, `severity` (the level on one scale: `SEVERE` is `ERROR`, `WARNING` is `WARN`,
+  `FINE…` is `DEBUG`, `CONFIG` is `INFO`), `thread`, `logger`, `message`; and from the Java stack trace
+  in it, read as §5.20 reads one, `hasTrace`, `exception`, `exceptionMessage`, `causes`, `rootCause`,
+  `frameCount` and `fingerprint` — the same thrown and root exceptions at the same frames have the
+  same fingerprint, so a failure can be counted across events. A field the layout does not show is
+  null.
+- **Layouts.** `eventPattern`, when declared, is a regex over an event's first line (or first two,
+  joined by a newline) whose named groups `timestamp`, `level`, `thread`, `logger` and `message` fill
+  the row; another group name is refused when the realm loads. Undeclared, the Spring Boot,
+  Logback/Log4j, timestamp-then-level, java.util.logging and level-first layouts are tried in turn.
+- **Matching.** Under `emit: search` or a `content CONTAINS` filter, the term is judged against the
+  whole event. A file is read up to `contentCapKb`; events past it are not returned.
 
 ## 6. Vector edges — semantic joins in depth
 
