@@ -115,6 +115,34 @@ invocation; the owner-authenticated and delegated-bearer ingress routes below ap
 same journal through their own authenticated identity instead, with no captured guest
 invocation in the loop. There is no generic HTTP publication tool.
 
+## Reading back a realm's own records (proposed)
+
+A handler reads the records its own Realm published to one of its sources with
+`gateway.channel.read`; Wasm handlers use `ctx.gateway.channel.read`:
+
+```typescript
+const { entries, next, last } = await gateway.channel.read({ source: "changes", after: 0, limit: 50 });
+```
+
+`source` names a source the Realm declares, `after` is an offset (0 when omitted) and `limit`
+is a whole number from 1 to 100. The answer lists the records with offsets above `after`,
+oldest first, at most `limit` of them, each as `{offset, gap, record}`: `record` holds the
+`eventId`, `streamId`, `type`, `occurredAt` and `payload` as published, and `gap` is true where
+earlier records are no longer held. `next` is the offset to pass as `after` to read on, equal to
+`after` when nothing was returned, and `last` is the source's newest offset, 0 when it holds
+nothing. To get the newest `n` records, read once to learn `last`, then read after
+`last - n`.
+
+A read answers only the calling Realm's own records of that source in the World the invocation
+runs for. It never returns another Realm's records, even of a source with the same name, nor
+another World's or installation's, and a request cannot select any of them. The record does not
+say who published it. An undeclared source, or a call from anything that is not a Realm
+handler, is refused as not granted; a `limit` or `after` out of range is refused as invalid.
+The answer holds only as many records as fit the invocation's payload budget, so it may hold
+fewer than `limit`; a single record larger than that budget is refused as too large rather than
+skipped. Each read counts as one host call against the invocation's budget and is recorded like
+any other host call.
+
 ## Channels
 
 A channel declaration names exactly one transport — a live socket, a polled endpoint, or an
@@ -123,7 +151,9 @@ delivered to, spelled as a namespaced verb, and that handler must be one the Rea
 inventory declares. It names a credential the Realm also declares and never says where the
 secret lives. Host-owned fields are refused in a declaration, as are unknown keys and keys
 belonging to another transport. An outbound channel declares a reachable provider origin;
-loopback and bare addresses refuse, only the scheme that transport speaks is accepted, and the
+loopback and bare addresses refuse, as does a name that resolves to one when the host connects
+(see [Egress destinations](#egress-destinations-and-what-an-approval-covers-proposed)), only the
+scheme that transport speaks is accepted, the channel needs the owner's approval, and the
 url may carry one credential placeholder in its path or query and nothing else in braces. One
 file declares one channel name, the file is at most 64 KiB, and a symlink is refused however
 good the file it points at.
@@ -264,6 +294,35 @@ from a paired sender returns the assistant's final message and nothing else; a s
 answers, and the next call gets a fresh one. Withdrawing the grant refuses the call in flight
 and everything after it, while unpairing a sender lets the turn in flight finish and stops the
 next one. What a sender wrote never reaches a log line, a meter or a span.
+
+## The model call
+
+A Realm that declares the `model` capability asks, at admission, to put questions to the
+owner's model. The owner grants or withholds it on its own, like any other approval, and can
+withdraw it from the same surface. A Realm without the declaration has no model call, and a
+handler that asks anyway is refused. The grant unlocks nothing else: no API, no graph read, no
+credential.
+
+The handler names a role, never a model or a provider: `cheap`, `workhorse` or `best`, or none
+for the owner's default. The host chooses the model behind each role, holds the credential and
+pays the call against the owner's budgets; the guest never sees a model name, a key or a
+provider reply beyond the text. The request carries the prompt, the role, up to eight skill
+names and an output token cap, and nothing else; any other field refuses the call. A skill is
+named, never sent: it is one of the Realm's own under `skills/`, bare or as
+`<realm>-<skill>`, or one the owner's World already has, and the host supplies its text. The
+reply is the model's text and whether the host cut it.
+
+Every refusal is a code, never prose: `MODEL_NOT_GRANTED`, `MODEL_SKILL_UNKNOWN`,
+`MODEL_CALL_BUDGET`, `MODEL_DAILY_BUDGET` and `MODEL_PROMPT_TOO_LARGE`. A request the host
+cannot read is refused with no code. The call is bounded three ways: by calls per dispatch, by
+prompt bytes and output tokens, and by time, since it runs inside the dispatch's own deadline.
+The reference host allows two calls per dispatch, 64 KiB of prompt and 4,096 output tokens
+across them, and a daily budget the operator sets. The prompt and the reply are the Realm's own
+words and reach no log line, meter or span, as [observability](#observability) requires.
+
+This is the only model surface a captured handler has. The `gateway.ai.*` calls in the main
+specification belong to the conventional code-mode sandbox, lenses and routines; a captured
+handler does not see them.
 
 ## Pairing
 
@@ -430,7 +489,11 @@ host will not read a credential under is refused.
 
 A private SQLite dependency serves the Realm's own computation or persistence. Its database,
 WAL, snapshots and recovery overhead must fit that Realm's finite budget. It grants no access
-to an external datasource. The host channel journal is a separate delivery facility.
+to an external datasource. The host channel journal is a separate delivery facility. Its one
+method is `exec(sql, params)`: a host that mounts the dependency either binds `params` or
+refuses a call that carries them, and never runs the statement with the values dropped or
+spliced into the text. Which it does is part of the profile the host publishes; see
+[dependencies](TYPESCRIPT_REALMS.md#dependencies) for what a Realm can rely on.
 
 ## Captured API operations
 
@@ -469,6 +532,50 @@ The provider itself is trusted with that credential: rejecting common echoes can
 that a malicious provider has not transformed it into other response data. Revocation cannot
 undo a request already accepted by the provider.
 
+### Egress destinations and what an approval covers (proposed)
+
+These rules hold for every outbound request a Realm causes: an API operation and an outbound
+channel alike.
+
+- **Names.** A destination is a DNS name of at least two labels. An address literal, a single
+  label, and a name under a special-use suffix (`localhost`, `localdomain`, `local`,
+  `internal`, `intranet`, `private`, `corp`, `home`, `lan`, `home.arpa`, `arpa`, `test`,
+  `invalid`, `example`, `onion`, `alt`) refuse without any lookup.
+- **Addresses, at connect time.** The host resolves the name when it connects and refuses the
+  request unless every address the name resolves to is public. Refused for IPv4: this network
+  (`0.0.0.0/8`), private (`10/8`, `172.16/12`, `192.168/16`), shared address space
+  (`100.64/10`), loopback (`127/8`), link-local (`169.254/16`), the IETF protocol and
+  documentation blocks (`192.0.0/24`, `192.0.2/24`, `198.51.100/24`, `203.0.113/24`), the 6to4
+  relay (`192.88.99/24`), benchmarking (`198.18/15`), multicast (`224/4`) and reserved
+  (`240/4`). For IPv6 only global unicast (`2000::/3`) is allowed, and within it the IETF
+  protocol block (`2001::/23`, which holds Teredo and ORCHID), documentation (`2001:db8::/32`
+  and `3fff::/20`) and 6to4 (`2002::/16`) refuse. One refused address refuses the name, even when
+  others are public.
+- **Pinning.** The connection goes to an address that was checked; the host does not resolve the
+  name a second time, so a name cannot be repointed between the check and the connection. TLS
+  still verifies the declared host name.
+- **What a refusal says.** A refused name or address refuses the API call as a refused origin,
+  with a fixed reason that never names the host. A name that does not resolve is a network
+  failure. A channel whose declared name is refused stops; a channel whose name resolves to a
+  refused address backs off and tries again, since DNS can change.
+- **What an approval covers.** An operation's approval covers the Realm installation's captured
+  content, the API, the operation's origin (scheme, host, port and base path) and, for an
+  operation with a credential, the bound value. A changed capture, an origin that moves, even
+  only its base path, or a changed value each refuses the call as not approved for the current
+  value until the owner approves again. An operation declared `auth: none` is covered the same
+  way without the value.
+- **Channels need approval.** An outbound channel fetches nothing until the owner approves it.
+  The approval covers the captured content, the channel, its URL as declared, with the
+  credential placeholder unexpanded, and the bound value. A change to any of them pauses the
+  channel until the owner approves again. A channel whose URL would place the credential in the
+  scheme or the host never starts.
+- **Fixed headers.** An API entry's fixed `X-...` headers go out on every call as declared, under
+  the rules in [TypeScript Realms](TYPESCRIPT_REALMS.md); a set that breaks them refuses the call
+  before anything is sent. The host sets its own `User-Agent` and does not send a fixed header
+  under any other name.
+- **Logs and errors.** The key never appears in a log line, an error or a refusal: not under its
+  parameter name as written or URL-encoded, and not as its value as written or encoded.
+
 The reference profile supports:
 
 | Declaration | Support |
@@ -480,7 +587,7 @@ The reference profile supports:
 | Validation | Types, required fields, enum and string-length limits; numeric ranges and regex annotations remain provider validation. |
 | Authentication | API key in a query parameter or header, HTTP bearer token, or `auth: none` for a public read API; optional fixed `X-` headers. The host sends its own `User-Agent`, naming the host and the calling Realm, unless the operation's key travels in that header. |
 | Transport | The assembled request URI is bounded; a non-2xx provider status, unsupported content encoding, or a response exceeding the transport's own deadline all refuse the call — a small valid JSON payload alone does not guarantee acceptance. |
-| Response | At most 1 MiB of strict UTF-8 JSON; common credential echoes and diagnostic exception text are refused. |
+| Response | At most 1 MiB of strict UTF-8 JSON; common credential echoes and diagnostic exception text are refused. An operation declared with an `ndjson` response in `apis/apis.yml` (`responses: {<operationId>: application/x-ndjson}`) is read as newline-delimited JSON to the same byte limit and handed to the guest as `{records, truncated}`: every complete line, and `truncated` true when the host dropped an incomplete last line or stopped at the limit. The host sends the declared type as `Accept` and refuses a reply whose `Content-Type` does not match it. No other response type is in this profile. |
 
 The initial implementation rejects unsupported auth schemes, parameter references, alternative
 servers, a read operation carrying a mutation, and credential injection into HTTP
@@ -600,9 +707,111 @@ imports from other modules already included in the same bounded capture.
 
 No download, installation or registry resolution occurs. Libraries compiled into a Wasm
 program remain part of that artifact; the reference Wasm backend supplies no host packages.
-Other ecosystems, runtime provisioning and private database persistence remain open.
-Unsupported storage requirements must be rejected before handler execution. No VFS syntax
-is introduced here.
+
+Proposed: a host checks the requirements once it has chosen the backend and before any handler
+runs. A Wasm backend supplies no packages, so on it each requirement is reported as a
+`DEPENDENCY_PACKAGE_REFUSED` warning at its place in the manifest and the Realm's handlers stay:
+a handler runs only what its module carries, and one that reaches for a package the module does
+not carry fails in its own code. On a backend that runs
+bundled npm code, each requirement is checked against `dist/node_modules/<name>/package.json` as
+above: the name must be one npm allows (a scoped name is looked up under its scope), and a missing
+file, metadata over 64 KiB or not one JSON object, another name or version, an `exports` map,
+`"type": "module"`, `gypfile: true`, or an entry point (`main`, default `index`, as a file, with
+`.js` or `.json`, or as a directory's `index.js` or `index.json`) that is not inside the package
+refuses it, as does a requirement in any ecosystem but npm. Each refused requirement is reported
+as `DEPENDENCY_PACKAGE_REFUSED` at its place in the manifest, and any of them takes every handler
+in the Realm dark while its declarative content stays.
+
+`dependencies/manifest.json` carries one of two forms, and a backend reads the one it
+supports. The Docker form above lists packages under `dependencies`. The Wasm form lists
+registry modules under `entries`, each with `module`, `version`, `sha256` and, for a stateful
+module, `persistent`, `init` and `migrations`; it is what synth writes for a
+[TypeScript realm's dependencies](TYPESCRIPT_REALMS.md#dependencies). A file in the form the
+selected backend does not support is refused before any handler runs, with every handler in the
+Realm, so a Realm is never half loaded.
+
+A persistent private database is implemented on the Wasm backend for the `sqlite3-wasi`
+module: one database for each World, Realm installation and dependency key, restored before a
+dispatch and saved only when the dispatch succeeds, as the
+[dependencies contract](TYPESCRIPT_REALMS.md#dependencies) states, with its init script and
+migrations recorded by hash beside it. The Docker backend offers no private persistence: a
+Docker handler keeps durable state in the graph. Other ecosystems and runtime provisioning
+remain open. Unsupported storage requirements must be rejected before handler execution. No
+VFS syntax is introduced here.
+
+## Realm bundles
+
+Status: proposed. A realm bundle is one zip that carries a realm and the module bytes its
+dependencies name, so a host can load it with no clone, build or fetch step.
+
+**What the zip holds.** The entries sit directly under the zip's root, with no wrapping folder:
+
+| Entry | Holds |
+| --- | --- |
+| the realm's files | what a host captures from the realm directory: `realm.yml` or `realm.ts`, the handler sources or `dist/`, `dependencies/manifest.json`, `producers/` and the rest |
+| `modules/<sha256 hex>.wasm` | one file for each module digest the dependencies declare, its bytes hashing to its name |
+| `bundle.json` | optional; the descriptor below |
+
+A host reads a zip as it reads the same files in a directory, and leaves out the same names:
+`.git/` and `.claude/` anywhere, and `node_modules/` and `target/` at the root. `dist/node_modules/`
+is part of a realm and stays.
+
+**What refuses the zip.** A zip holds regular files and directories only. An entry that is a
+symbolic link or another special file, an absolute path, a path with a `..` or empty name, a name
+that repeats, a file where another entry needs a directory, or a size past the host's capture
+ceilings refuses the zip as a whole: the realm loads nothing from it, and the host names the
+reason.
+
+**The descriptor.** `bundle.json` is one JSON object with exactly these fields:
+
+```json
+{"bundleFormat":1,"name":"places","version":"0.2.0","sourceCommit":"0123456789abcdef0123456789abcdef01234567","contentDigest":"sha256:<64 hex>"}
+```
+
+- `bundleFormat` is the number 1. `name` is the realm's kebab-case name and `version` a semantic
+  version. `sourceCommit` is the 40 lowercase hex digit commit the files were taken from; forty
+  zeros means they were taken from a working tree.
+- `contentDigest` is `sha256:` and the sha256 of the text made of one line `<sha256 hex>  <path>`
+  for each regular file the host captures from the bundle, except the `bundle.json` at the root,
+  sorted by the path's UTF-8 bytes, each line ending in a newline. It covers what the files hold
+  and where they sit, never the zip's compression, timestamps or entry order.
+- A descriptor that is not that object, or whose `contentDigest` differs from the files, refuses
+  the realm as a whole. A `name` or `version` that differs from the realm's own metadata is
+  reported, and the metadata wins. A bundle with no `bundle.json` is not checked.
+
+**Module files.** A host offers a file under `modules/` to its module store only when a
+dependency declares that digest and the bytes hash to the file's name. A file no dependency
+names is reported and left alone. A file whose bytes do not match is reported and not stored;
+the realm still loads, and a call that needs the module is refused as a missing module. Carrying
+a module admits nothing: the operator's allowlist decides which modules a realm may use, as
+[dependencies](TYPESCRIPT_REALMS.md#dependencies) states, and a bundled module the allowlist lacks
+is refused as any other.
+
+**Writing one.** A bundle writer should give the same zip for the same input: entries sorted by
+path bytes, one fixed timestamp, no comment or extra fields. Two writers can still compress
+differently, so `contentDigest` is the identity a host and an author compare.
+
+**Module sources.** Proposed. A realm may carry its own modules lock at
+`dependencies/modules.lock.yml`, so an author can say where the bytes of each module the realm
+declares come from. It is a `modules` list whose entries hold `module`, `version`, `sha256` and
+`license`, and one source: `file:`, a path relative to the realm with no leading `/`, no `.` or
+`..` component, no backslash and no whitespace, naming a regular file inside the realm that is not
+a symbolic link; or `url:`, an https URL. An entry may instead be `pending: true` while its bytes
+have no published home, and may still name the URL they will be published at. A host does not
+read the lock when it loads a realm and grants nothing because of it: the tools that gather module
+bytes read it, a bundle writer takes a module from a `file:` path when the realm's `modules/`
+does not already hold it under its digest, and every byte found either way is kept only when it
+hashes to the digest the dependencies declare. A file the lock names that sits under `modules/`
+under any other name is not copied into the bundle as itself. A lock not in this form refuses the
+bundle.
+
+The source convention for published module bytes is one URL per digest:
+`https://<host>/<path>/<sha256 hex>.wasm`, whose last path segment is the module's own sha256 in
+lowercase hex followed by `.wasm`. A lock entry whose URL ends any other way is refused. A fetcher
+follows at most three redirects, each to https, and keeps the bytes only when they hash to the
+name; a redirect to any other scheme fails the fetch. Because the name is the digest, a mirror is
+any host that serves the same file under the same name, and no source is trusted for more than
+bytes that hash to it.
 
 ## Reference implementation
 
@@ -625,11 +834,41 @@ in the main specification:
 | Captured Virtual Cypher | Implemented owned reads and same-installation captured producers/collections with retained resource grants and rollback materialization. |
 | Owner database target approval | Adoption, upgrade, revocation and read-only production SQL use through the owner connection facade are implemented. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
-| Additional dependency ecosystems, private Realm database persistence and VFS | Not implemented on this path. |
+| [Realm bundles](#realm-bundles) | Proposed. A reference host that loads them reads a zip wherever it reads a realm directory. |
+| Persistent private SQLite dependency | Implemented on the Wasm backend for `sqlite3-wasi`: one database per World, installation and dependency key, restored before a dispatch, saved on success, init script and migrations recorded by hash. Not available on the Docker backend. |
+| The model call | Implemented for a Realm that declares the `model` capability, under its own grant and the budgets in [the model call](#the-model-call). |
+| Additional dependency ecosystems and VFS | Not implemented on this path. |
 | Firecracker, generalized remote backends and resumable arbitrary computation | Not implemented. |
 
 Hosts must state which profile and capabilities they support. Generated types describe an
 operation's contract; they do not grant permission or prove receiver availability.
+
+## Unattended operation
+
+A Realm runs whether or not anyone is looking at it. Once the owner's World is loaded, the
+host runs, with no client attached and no owner session open:
+
+- scheduled handlers, on their declared cron, and scheduled API-to-channel pollers;
+- channel transports: a socket stays connected and reconnects, a polled endpoint keeps
+  polling, an inbound webhook keeps being served, and each frame is dispatched;
+- journal replay to every approved consumer, including triggers, and the retries an
+  at-least-once delivery owes, resuming after a restart once the World loads;
+- watches, on their schedule;
+- the assistant call a granted consumer makes from a dispatch.
+
+A handler is told nothing about whether a client is attached and cannot ask. What waits for
+someone is only what needs a person: a browser app runs in a page the owner opens, a lens is
+produced when the owner opens it, and a write proposal or an approval sits until the owner
+decides. With no network, a channel or API call refuses as its transport rules say, and
+everything that does not leave the host, a schedule, a private database, the journal, still
+runs.
+
+Every owner approval in this contract is a route under `/api/v1`, listed step by step in
+[owner approval](TYPESCRIPT_REALMS.md#owner-approval-step-by-step). Nothing grants from inside
+a Realm, over a channel or from a configuration file. A host with no console therefore needs
+an owner path of its own to those routes, and until something grants, an installed Realm is
+loaded and inert. The shape of that path is the host's; this contract says only that it
+exists and that it grants exactly what the routes grant.
 
 ## Me captured GraphQL operation profile
 

@@ -5,12 +5,22 @@ the handler code it runs. `defineRealm` from
 [`@embabel/realm-types`](https://github.com/embabel-worlds/embabel-ts) checks the object while you
 write it, and `realm-synth` from the same repository turns it into the files this specification
 describes: `realm.yml`, `dist/manifest.json`, `producers/`, `channels/`, `apps/` and the rest.
-It also writes the TypeScript types the handlers import. The host never reads `realm.ts`. It reads
-what synth wrote.
+It also writes the TypeScript types the handlers import. A host reads what synth wrote.
+
+Proposed: a host may also read `realm.ts` directly. It then reads the file as text, removes the
+types, evaluates the module with no host calls, no network, no filesystem, no clock and no
+randomness, and takes the default export as the realm's definition. Both ways give the same realm:
+the metadata, functions and dependencies a host reads from `realm.ts` are the ones it would read
+from what synth writes for the same file. Such a host takes the realm as a bundle: `realm.ts`, the
+handler sources it names and every file it declares (dependency init scripts and migrations
+among them), as a directory or a zip of the same tree (see
+[realm bundles](HOSTED_EXECUTION.md#realm-bundles)). A realm with a `realm.yml` and no `realm.ts`
+is read as before. When a realm ships both, a host that reads `realm.ts` reads it and reports each
+generated file beside it as ignored.
 
 This document covers realms written with `execution: "captured"`. A captured realm runs from a
 verified copy the owner has admitted, and every capability it reaches is approved by the owner on
-its own. For each part of a realm it shows what you write, what synth accepts and refuses, and
+its own. Proposed: when a host reads `realm.ts`, the verified copy includes it. For each part of a realm it shows what you write, what synth accepts and refuses, and
 what the host does with it. The host-side detail lives in
 [hosted execution](HOSTED_EXECUTION.md), and each section here links to its part of it.
 
@@ -30,6 +40,7 @@ the owner what is down. Channels, dependencies and data pipes use small realms o
 - [Realm metadata](#realm-metadata)
 - [Handlers](#handlers)
 - [The handler context](#the-handler-context)
+- [The model call](#the-model-call)
 - [Credentials](#credentials)
 - [APIs](#apis)
 - [GraphQL](#graphql)
@@ -89,7 +100,9 @@ bun packages/realm-synth/src/cli.ts my-realm/realm.ts --out my-realm/dist \
   profile does not load, go to standard error and do not stop the build.
 
 Synth clears the output directory and writes it again on every run, so keep nothing by hand in
-it. It sorts every key, so the same `realm.ts` always gives the same bytes. It refuses a value
+it. It sorts every key, so the same `realm.ts` always gives the same bytes. Proposed: a host that
+reads `realm.ts` directly gives the realm synth would write from the same file, so the same
+`realm.ts` means the same realm whichever way a host reads it. It refuses a value
 with no file form: a function, a symbol, a `Date`, a `BigInt`, a `Map` or `Set`, a non-finite
 number, a circular reference, or `undefined` in an array. An object key whose value is
 `undefined` is left out. The text fields of goals, triggers, producers, lenses, watches, data
@@ -251,6 +264,9 @@ export default defineRealm({
 | `entry` | The handler source file, relative to the realm, with no leading `/`, no `\` and no `..` segment. Defaults to `wasm/handlers.ts`, or `wasm/handlers.py` for Python and `wasm/src/lib.rs` for `compiled`. A declared entry must exist and is also written to `dist/manifest.json`. |
 | `icon` | A URL starting `http://` or `https://`, written as is, or a realm-relative file, which must exist and which synth copies. |
 | `description`, `author`, `url`, `tags`, `exports`, `retry` | Written to `realm.yml`. `tags` and `exports` are written only when non-empty. |
+| `maturity` | The author's readiness claim, `experimental`, `beta`, `stable` or `deprecated`, written to `realm.yml` as for a [conventional realm](README.md#maturity). |
+| `capabilities` | What the realm asks the owner to grant at admission, beyond its handlers and resources. The one value is `"model"`, which asks for [the model call](#the-model-call). Written to `realm.yml` as `capabilities: [model]`. Refused on a conventional realm. The admission preview offers each one, and the owner may grant none of them. |
+| `skills` | The names of skills the realm ships under `skills/<name>/SKILL.md`, which a handler may name in a model call. Synth copies each one unchanged and puts its digest in the generated types, so a handler can key what it keeps on the exact skill text. |
 | `generatedAt` | The timestamp in `dist/manifest.json`. Defaults to `1970-01-01T00:00:00Z`, so the output does not change from run to run. |
 
 ## Handlers
@@ -333,6 +349,7 @@ the generated types say which members each handler gets.
 | `ctx.stream.send(text)`, `ctx.stream.close()` | websocket handlers | Writes to the channel's own socket, or asks the host to reconnect it. |
 | `ctx.frame`, `ctx.cursor`, `ctx.publish(...)` | consumers declared in `connecting` | The published event, the consumer's cursor, and a publish shortcut. |
 | `ctx.assistant.chat(text, thread)` | consumers that declared `assistant: true` | Asks the owner's assistant and resolves to its final message. |
+| `ctx.call("ai_complete", request)` | every handler, when the realm declares `capabilities: ["model"]` | Asks the owner's model by role, with skills by name. See [the model call](#the-model-call). |
 
 The generated `ctx.gateway` types each API namespace and the GraphQL namespace the realm
 declares, and `ctx.gateway.channel` with the receipts the host returns (see
@@ -386,6 +403,41 @@ export const reply: ReplyConsumerHandler = async (event, ctx) => {
   return {};
 };
 ```
+
+## The model call
+
+A realm that declares `capabilities: ["model"]` may put a question to the owner's model from any
+handler. The owner grants the model on its own at admission, and may not; a realm should keep
+working without it.
+
+```typescript
+const reply = ctx.call("ai_complete", {
+  prompt,
+  role: "best",
+  skills: ["chess-plans"],
+  maxOutputTokens: 1200,
+});
+// reply is { text: string, truncated: boolean }
+```
+
+- `prompt` is not blank. `role` is `"cheap"`, `"workhorse"` or `"best"`, or left out for the
+  owner's default. The realm names a role and never a model: the host chooses the model behind
+  each role and holds its credential.
+- `skills` names up to eight skills, each 1 to 64 characters: this realm's own, bare or as
+  `<realm>-<skill>`, or one the owner's World has. The host supplies the skill's text; the realm
+  never sends it.
+- `maxOutputTokens` is a positive whole number. The host cuts a longer reply and says so in
+  `truncated`.
+- Any other field is refused, and the generated types make it a compile error.
+- A refusal is thrown as an error whose `code` is `MODEL_NOT_GRANTED`, `MODEL_SKILL_UNKNOWN`,
+  `MODEL_CALL_BUDGET`, `MODEL_DAILY_BUDGET` or `MODEL_PROMPT_TOO_LARGE`. A request the host
+  cannot read is refused with no code.
+- The call is budgeted per dispatch (calls, prompt bytes and output tokens), per day, and by
+  the dispatch's own deadline; the reference values are in
+  [the model call](HOSTED_EXECUTION.md#the-model-call).
+
+A captured handler has no `gateway.ai`; that surface belongs to the conventional code-mode
+sandbox. `ctx.call` with any other tool name is refused.
 
 ## Credentials
 
@@ -457,6 +509,7 @@ apis: {
     headers: { "X-Client": "realm-oncall-radar" },
     operationIds: ["listUnresolvedIncidents", "listIncidents"],
     writeOperationIds: ["acknowledgeIncident"],
+    operations: { listIncidents: { response: "ndjson" } },
   },
 },
 ```
@@ -479,6 +532,16 @@ arguments object, with a comment in the generated file saying why. An operation 
 parameter named `body`. Every call resolves to `unknown`: the response comes back as the parsed
 JSON body with no envelope, so narrow it before use.
 
+`operations` holds per-operation settings keyed by operation id. The one setting is `response`:
+`"json"`, the default, or `"ndjson"` for an operation whose reply is newline-delimited JSON.
+Synth writes an `ndjson` operation to `apis/apis.yml` as `responses: {<id>: application/x-ndjson}`
+and types its call as `Promise<{records: T[], truncated: boolean}>`: every complete line parsed,
+and `truncated` true when the host dropped an incomplete last line or stopped at its byte limit.
+The host sends the declared type as `Accept` and refuses a reply of another type, so an
+operation that streams must be declared, or its reply is read as one JSON document and refused.
+No other response type is in this profile; see
+[captured API operations](HOSTED_EXECUTION.md#captured-api-operations).
+
 What synth checks, which is also what the host refuses at install:
 
 - At most 32 entries and 128 operations across them. The entry's key is a JavaScript identifier.
@@ -500,6 +563,7 @@ What synth checks, which is also what the host refuses at install:
 - `operationIds` lists 1 to 128 reads, each a `GET` with no request body. `writeOperationIds`
   lists up to 64 writes, each a `POST`, `PUT`, `PATCH` or `DELETE`. An operation is in one list,
   never both, and every listed id must exist in the document.
+- `operations` names only ids in one of those lists, and `response` is `"json"` or `"ndjson"`.
 - The document has exactly one `https` server on port 443, with no user info, query, fragment,
   server variables, percent-encoded path, `.` or `..` segment or `{` placeholder (other than
   `{credential}` under `auth: "path"`), and no per-path or per-operation server override.
@@ -863,12 +927,32 @@ export const record: RecordHandler = async (_input, ctx) => {
 | `publish({source, eventId, streamId, occurredAt, payload})` | `ChannelPublishReceipt`: `{receiptId, offset, replayed}` |
 | `publishBatch({source, batchId, expectedPosition, nextPosition, events})` | `ChannelBatchReceipt`: `{receiptId, offsets, replayed}`, one offset per event in order |
 | `position({source})` | `{position}`, a string, or `null` before the first batch |
+| `read({source, after, limit})` (proposed) | `{entries, next, last}`: the Realm's own records of the source after `after`, oldest first, `limit` 1 to 100 |
 
 A poller commits a page and its cursor together with `position` and `publishBatch`; each event in
 `events` is `{eventId, streamId, occurredAt, payload}`. The receipt from `ctx.gateway.channel`
 names its id `receiptId`, and the `ctx.publish` shortcut names it `id`. The limits and retry
 windows are under [publication](HOSTED_EXECUTION.md#publication) and
 [polling positions](HOSTED_EXECUTION.md#polling-positions).
+
+Proposed: a handler reads back what its own Realm published with `read`, described under
+[reading back a realm's own records](HOSTED_EXECUTION.md#reading-back-a-realms-own-records-proposed).
+A handler that answers the newest signals it recorded, newest first, reads once to learn the
+last offset and once below it:
+
+```typescript
+import type { RecentHandler } from "../.embabel/realm.d.ts";
+
+export const recent: RecentHandler = async (input, ctx) => {
+  const n = input.limit ?? 20; // 1 to 100
+  const { last } = await ctx.gateway.channel.read({ source: "pulse", limit: 1 });
+  const { entries } = await ctx.gateway.channel.read({ source: "pulse", after: Math.max(0, last - n), limit: n });
+  return { signals: entries.reverse().map(({ offset, record }) => ({ offset, ...record.payload })) };
+};
+```
+
+Called with `{limit: 2}` after three records, it answers the records at offsets 3 and 2, in that
+order. A read never returns another Realm's records, so the handler needs no filter for them.
 
 ## Dependencies
 
@@ -883,6 +967,7 @@ dependencies: {
     sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
     persistent: true,
     init: "db/schema.sql",
+    migrations: ["db/0001-categories.sql"],
   },
 },
 ```
@@ -905,8 +990,35 @@ export const addExpense: AddExpenseHandler = async (input, ctx) => {
   whose bytes do not hash to `sha256`. Either refusal takes every handler in the realm dark,
   including the ones that never touch the dependency. The reference host allows `sqlite3-wasi`
   and `h3-wasi`, at most eight dependencies, and modules up to 32 MiB.
-- SQLite has one method, `exec(sql, params)`, which resolves to rows as plain objects. Bind
-  values through `params` (strings, numbers or null). A `sqlite3-wasi` dependency may not declare
+- Proposed: a refused dependency refuses only itself. A module the operator has not allowed, one
+  the host's module store does not hold, one over the size limit, one whose bytes do not hash to
+  `sha256`, and a stateful option (`persistent` or `init`) on a module that keeps no state each
+  refuse that dependency alone. The load report names it at its place in the dependencies, with
+  the key, the module id and the digest, and a fix; every call to it is refused with a code, which
+  a handler can catch, and which ends the dispatch refused when it does not. The realm stays
+  loaded: its other dependencies are mounted, and a handler that never calls the refused one runs
+  as before.
+  An operator's refusal is reported ahead of a missing module, so the host never looks for the
+  bytes of a module it would not allow. What concerns the realm as a whole still refuses every
+  handler: more than eight dependencies, or a dependencies file the host cannot read. A bundle
+  that carries a module's bytes admits nothing by carrying them; a bundled module the allowlist
+  lacks is refused as above.
+- Proposed: a dependency call the host refuses with any code but `FAILED` ends the dispatch
+  refused, not failed, when the handler does not catch the refusal. The outcome names the code, the
+  dependency and the method, and carries the host's reason, never text the handler wrote. A
+  handler that catches the refusal ends however it goes on to end, and an error the handler
+  throws itself fails the dispatch even when it carries a refusal's code. `FAILED` means the
+  dependency broke rather than refused, and fails the dispatch as before. A dependency or method name
+  that is not printable text, or is longer than a name may be, fails the dispatch instead of
+  ending it refused.
+- SQLite has one method, `exec(sql, params)`, which resolves to rows as plain objects. `params`
+  is optional: a list of strings, numbers and nulls bound, in order, to the `?` placeholders in
+  `sql`. A host that mounts the dependency either binds them or refuses a call that carries them
+  with a code; it never runs the statement with the values dropped, and never splices them into
+  the text itself. Which of the two a host does is part of the profile it publishes, and a realm
+  that must run on every host builds its statement as text, quoting each value with SQL's own
+  escaping (a doubled quote inside a single-quoted literal), after checking the value. Values
+  from a handler's input are untrusted either way. A `sqlite3-wasi` dependency may not declare
   `methods`.
 - Any other module may declare the `methods` it calls, each with `args` and a `returns` type
   from `i32`, `i64`, `f32` and `f64`, and the generated types give `ctx.deps.<key>` exactly those
@@ -914,6 +1026,32 @@ export const addExpense: AddExpenseHandler = async (input, ctx) => {
   JavaScript number. A module with no declared methods is typed `unknown`. The operator's
   allowlist decides what a module may really do; a declared method the operator has not allowed
   refuses at call time.
+- Proposed: the host keeps a dependency's declared `methods` and enforces them. At most 64
+  methods, each named as a JavaScript identifier of at most 64 characters with exactly `args`
+  (at most 16 types) and `returns`; any other form makes the dependency entry unreadable. When a
+  dependency declares methods, a call to any other method is refused with `METHOD_NOT_DECLARED`
+  before the module runs, even when the operator's allowlist allows that method. A dependency
+  that declares none can call whatever the allowlist allows. At load, a declared method the
+  allowlist does not name, or names with other argument or result types, refuses that method
+  only: the load reports a `DEPENDENCY_METHOD_REFUSED` warning naming the method, a call to it
+  is refused with `METHOD_UNKNOWN` or `SIGNATURE_MISMATCH` before the module runs, and the
+  dependency's other declared methods, the realm's other dependencies and its handlers stay
+  available. A module whose own exports do not have the types the allowlist grants refuses the
+  whole dependency, with `SIGNATURE_MISMATCH` on every call and `DEPENDENCY_METHOD_REFUSED` at
+  load, so a wrong allowlist entry shows at load and not at the first call. A module whose dispatch answers any method by name (a reactor)
+  is narrowed by its declared methods, and their types are not compared.
+- Proposed: `string` is a fifth method type, for modules that take or answer text, such as a
+  chess engine that takes a position and answers its analysis. Only a module the operator allows
+  as a string-method module may have methods with `string` in them, and such a module exports
+  `embabel_alloc(len: i32) -> i32` and `embabel_free(ptr: i32, len: i32)` beside its methods. The
+  host writes each string argument as UTF-8 into memory `embabel_alloc` hands back and passes it
+  as a pointer and a length (an empty string as two zeros); a string result comes back as one
+  `i64` with the pointer in the high 32 bits and the length in the low 32. The host hands every
+  buffer back through `embabel_free` once it has read it. A result longer than the host's payload
+  budget, outside the module's memory, or not valid UTF-8 fails the call. A string argument is a
+  JavaScript string and a string result a JavaScript string; neither is parsed. Such a module gets
+  WASI and no other host function. Declaring a `string` method on any other module refuses the
+  dependency at load as a declared type the allowlist does not grant.
 - Without `persistent`, state lives for one dispatch and starts empty each time.
 - With `persistent: true`, the host keeps one database for each world, realm and dependency. It
   restores the database at the start of a dispatch and saves it only when the dispatch succeeds
@@ -924,10 +1062,35 @@ export const addExpense: AddExpenseHandler = async (input, ctx) => {
   Synth refuses a missing file and copies it into the output. The host copies it from the
   admitted capture (at most 1 MiB), so editing the file later changes nothing for the admitted
   version.
-- The host records the module, version, digest and init script's hash beside a persistent
-  database. Change any of them and the host reports a mismatch and refuses to reuse the database.
-  It neither wipes nor migrates it, and there is no migration step, so settle the schema before
-  the first install that persists, and ship a changed schema under a new dependency key.
+- `migrations` grows the schema after `init`, in order: a list of `.sql` files inside the realm,
+  relative to it with no leading `/` and no `..`, each at most 1 MiB, at most 64 of them, on a
+  `sqlite3-wasi` dependency that has an `init`. The init script is version 0 and the list is
+  versions 1 onwards. Synth refuses a missing file, copies each one into the output and writes
+  the list to `dependencies/manifest.json`. On ephemeral state they run after `init` each time
+  the state is created, so the schema is the same whether or not it persists.
+- The host records the module, version, digest, the init script's hash and the hash of every
+  migration it has applied, in order, beside a persistent database. Before a dispatch it applies
+  the migrations it has not applied yet, in list order, as one step: either every pending one
+  runs or none does, and a migration that fails leaves the stored rows as they were and refuses
+  the dispatch. A capture that appends migrations applies them at the first dispatch after the
+  owner approves it.
+- The list is append-only once a database exists. Change the module, version, digest or init
+  script, or change, remove or reorder a migration the host has already applied, and the host
+  reports a mismatch naming the first entry that differs and refuses to reuse the database. It
+  neither wipes nor repairs it. So settle `init` before the first install that persists, put
+  every later change in a new file at the end of `migrations`, and ship a schema that cannot be
+  reached by appending under a new dependency key.
+- Proposed: `migrations` is a field of the dependency in `realm.ts`, typed as a list of strings
+  beside `init`, so `defineRealm` checks it and a host that reads `realm.ts` takes the list as
+  written. A list that is not a list of strings, that names more than 64 files or one file twice,
+  that names a path that is not a `.sql` file inside the realm (a leading `/`, a `\` or a `..`),
+  or that sits on a module other than `sqlite3-wasi` or on an entry with no `init`, makes the
+  dependency entry unreadable, as a malformed `methods` does. A migration that fails refuses the
+  dispatch with a reason that names its place in the list and never its text, since the text may
+  hold data. A stored database whose applied migrations are not the start of the declared list is
+  refused with a reason that names the first place they differ, as `migrations[<n>]`.
+- A realm can travel as one zip with its module bytes under `modules/`; see
+  [realm bundles](HOSTED_EXECUTION.md#realm-bundles), which is proposed.
 - `layers` takes `name@version` references (a registry id and one to three dot-separated
   numbers), which synth checks and writes, sorted, to `dependencies/manifest.json`. The reference
   host refuses a realm that declares them, so leave them out. `--profile reference-wasm` and
