@@ -47,6 +47,21 @@ checkout is mounted.
   revision/optimistic-lock guards, multi-call orchestration, shaping a rich API into
   idiomatic methods, or giving a type *behaviour* (verbs). Handlers and YAML mix freely.
 
+## Third decision: will people ASK it things in words?
+
+Ask the user now, not at ship time: **"will people type questions at this realm, or only call
+it?"** A yes changes how you write every type, not just whether a test file exists — the
+natural-language generator reads your declarations, and what you leave implicit it guesses. A
+yes means, from the first type you write:
+
+- `values:` on every coded property and on every literal-seeded anchor's key (see "Make it
+  askable" below);
+- descriptions in the vocabulary people ask in, saying what the type does NOT carry;
+- `examples:` for every door a question must enter by a literal;
+- `tests/questions.yml` with its adversarial half, run before you call the realm done.
+
+A realm built without these and fixed after users find the holes ships the holes first.
+
 ## The pieces (read the spec section before writing one)
 
 | Want to… | Directory | Spec section |
@@ -319,6 +334,47 @@ Read the WARNINGS in every response, not just the rows. A `PRODUCER_ERROR` / `FI
 `INCOMPLETE_TRAVERSAL` note is the host telling you the answer is not what it appears to be — a
 0-row result with a warning is a broken realm, not an empty source.
 
+### Make it askable — declare what the generator would otherwise guess
+
+The text-to-Cypher generator sees your labels, edges, property names and `examples:`. It does
+not reliably see your prose, and it cannot see a literal it was never shown. Each gap below
+produced a wrong or refused answer on a live realm (realm-fr-streets, 2026-10-06):
+
+1. **`values:` on every coded property.** A property whose legal values are a fixed set —
+   a measure code, a status, a sex, an age band, an indicator label — declares them:
+
+   ```yaml
+   measure: { type: string, description: "Filosofi measure code.", values: [MED_SL, PR_MD60, GI_SL] }
+   ```
+
+   The prompt then says "use one of these EXACTLY", and the host's literal guard refuses a query
+   that compares the property with anything else. Undeclared, the generator invented
+   `measure = 'LI_FE'` for "life expectancy" and nothing stopped it. Declare the WHOLE set,
+   from the source (query it; never type it from memory) — a closed set that misses a real value
+   refuses a correct query. `values: {source: distinct}` only enumerates observed values for a
+   picker; it is not a closed set and guards nothing.
+
+2. **`values:` on a literal-seeded anchor's key.** A national anchor such as
+   `(:FrDepartements {set:'france'})` exists only when a query names its literal. Without
+   `set: { …, values: [france] }` the generator is told the key NAME and never its value, so
+   "which departement has the most immigrants" scanned the target bare and was refused as
+   unbounded on every attempt.
+
+3. **An example per literal door.** For each anchor a question must enter by a literal, one
+   `examples:` pair on the target type showing the door and a typical question
+   ([VIRTUAL_CYPHER.md §10](../../VIRTUAL_CYPHER.md)). Treat it as part of declaring the door,
+   not as a later steer.
+
+4. **Say what is NOT there, in the description.** "Published for women and men separately —
+   never average them"; "departement level only"; "no figures before 2016". Then put the same
+   fact in the battery's adversarial half, because a description is advice the generator may
+   ignore and only a test proves it did not.
+
+5. **A view for every question with a trap in it.** A saved view is tested joins; a generated
+   query is a guess. Where the honest answer needs a rule a guess will miss — fit per sex, filter
+   the exact indicator label, reconcile a count — write the view and describe it in the words the
+   question uses, so routing can pick it.
+
 ### If anyone types WORDS at your realm, ship `tests/questions.yml`
 
 Running every view proves the realm answers when called BY NAME. It says nothing about the form
@@ -345,8 +401,14 @@ Two halves, and the second is the one that finds fabrication:
    SEVERAL times: generation is stochastic, a fabrication that shows one run in five is still a
    fabrication, and one green run proves almost nothing. Check every response mechanically
    against `GET /api/v1/admin/kg/schema` — a property no label declares, or an answer column
-   claiming a word the query never selects, is a fabrication and fails the run. Reading the
-   queries by eye does not work; the failure mode is a query that looks entirely reasonable.
+   claiming a word the query never selects, is a fabrication and fails the run — and so is a
+   literal outside a property's declared `values:`. Reading the queries by eye does not work;
+   the failure mode is a query that looks entirely reasonable.
+
+A figure that reconciles can still answer the wrong question. Where a correct query MUST pin a
+property — a sex, a year, an exact indicator — assert it with `mustConstrain` (spec, `tests/`):
+the ask that pooled women and men into one regression returned rows, passed `nonEmpty`, and told
+the user income barely mattered when the per-sex correlation was 0.6.
 
 Every question that ever disappointed a user becomes a permanent entry. When the battery fails,
 fix the REALM first — a missing view, a description that does not carry the asking vocabulary, a
