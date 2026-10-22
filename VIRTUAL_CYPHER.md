@@ -431,6 +431,7 @@ absence.
 | `sparql` | a **SPARQL 1.1 endpoint** (Wikidata, UniProt, an enterprise triplestore) queried with an authored SELECT template; the whole key batch lands in one `VALUES` clause (§5.14) | the anchor key, serialized into the query's `{{keys}}` token; rows echo it under `keyVar` |
 | `cypher` | a **remote openCypher graph** (Neo4j, Memgraph, Neptune — any engine speaking Bolt or openCypher-over-HTTP) queried with an authored read query; structurally read-only, governed by the shared `governance:` grammar (§5.15) | the anchor key batch, bound to `$keys`; rows echo it via the query's own RETURN |
 | `jar` | a **Java jar's classes**, read from the jar when a query reaches it — packages, types, fields, methods, field accesses and calls, with source lines; nothing ingested or stored (§5.18) | a jar path, or `<jar path>!<value>` for a property the producer selects `by` |
+| `source` | the **source a jar was compiled from** — files, spans of lines, declarations and call sites — read from a `-sources.jar`, a folder or a git commit when a query reaches it (§5.19) | a jar row's `sourceKey` or `spanKey` |
 | `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
 | *captured handler* (no `kind`) | an approved handler in the realm's own captured installation, declared as a version-1 `producers/` file. It may walk its own cursor (`page:`) and receive `=`/`IN` filters as list arguments (`pushdown:`). No cache ([captured handler producers](README.md#captured-handler-producers)) | the anchor key batch, as a list under `keyArgument`; each record carries its key under `recordKeyField` |
 
@@ -2142,6 +2143,24 @@ RETURN f.name, a.method, a.access, a.lines
   `calleeOwner` — never a row of its own; `internal: false` marks those references. A field's
   `container` (`map`, `collection`, `array`, `threadlocal`, `reference`, `none`) is decided by its
   declared type and, for a type in the jar, that type's own supertypes down to the JDK.
+- **Generics are read from the class files.** A field carries `genericType`, its declared type with
+  type arguments as source writes it (`java.util.Map<com.x.Key, java.lang.String>`), and
+  `typeArguments`, those arguments erased to binary names. A map's key and a set's element — the type
+  the container hashes — is `keyType`; a map's value is `valueType`; a collection's, array's,
+  ThreadLocal's or Reference's is `elementType`; each has an `…Id` twin. A method carries
+  `genericParameters` and `genericReturnType`, a type its `typeParameters`. These hold for what a
+  declaration says, never for what flows through it at run time.
+- **A type says where its `hashCode` and `equals` come from.** `hashCodeFrom` and `equalsFrom` name the
+  class that supplies each: the type itself, an ancestor in the jar, a JDK ancestor, or
+  `java.lang.Object` — identity. They are absent for an interface, and when an ancestor in another
+  library would decide.
+- **Rows carry the keys a source producer selects on** (§5.19). Types, fields, methods, calls and
+  accesses carry `sourcePath` — the package path and the source file the class file records
+  (`com/x/Cache.java`; a nested class shares its outer class's file) — and `sourceKey`,
+  `<jar path>!<sourcePath>`. Methods, calls and accesses also carry `spanKey`,
+  `<sourceKey>#<line>#<name>`: their first line and the word expected there (the member's name, the
+  class's simple name for a constructor, `static` for an initializer). A class compiled without debug
+  information has neither.
 - **An access or a call is grouped by its target.** A method that reads a field on six lines is one
   `READ` row with six `lines`; a `WRITE` is an assignment. Adding to a collection held in a field is
   a `READ` of the field plus a call (`put`, `add`) in the same method.
@@ -2161,6 +2180,76 @@ changes on disk, so the first query against a jar pays for reading it and the re
 whole-jar hop over a large jar is still many rows — tens of thousands of calls in a mid-sized
 library — and is subject to `maxFanoutTotal` like any other; reach those rows through a keyed hop, or
 narrow them in the MATCH.
+
+**Code labels are language-neutral parents.** The standard model declares `Package`, `CodeType`,
+`Field`, `Method`, `Call`, `FieldAccess`, `Source`, `SourceSpan`, `SourceDeclaration` and `CallSite`,
+each with the properties every language's rows carry; a realm declares its language's children
+(`JavaMethod` with `parents: [Method]`) over its own producers, as memory systems are children of
+`Memory` (§6.8). A query naming a parent is answered by every language with a join.
+
+### 5.19 `source` — the source a jar was compiled from
+
+A `source` producer reads source files where they are, when a query reaches them, keyed by what a
+`jar` row (§5.18) already carries. Nothing is ingested; the rows are transient like any fetch.
+
+```yaml
+- { name: javaSourceFile,  kind: source, emit: files,        roots: [src] }               # key: a sourceKey
+- { name: javaSourceSpan,  kind: source, emit: spans,        roots: [src], context: 6 }   # key: a spanKey
+- { name: javaDeclaration, kind: source, emit: declarations, roots: [src] }               # sourceKey or spanKey
+- { name: javaCallSites,   kind: source, emit: callsites,    roots: [src] }               # key: a spanKey
+- { name: upstream,        kind: source, emit: spans,
+    roots: [ { git: "https://github.com/acme/acme", ref: "v{version}" } ] }
+```
+
+```cypher
+MATCH (j:Jar {path: 'data/jars/app.jar'})-[:HAS_CALL]->(c:JavaMethodCall {calleeOwner: 'java.util.Map', calleeName: 'put'})
+      -[:AT_SITE]->(cs:JavaCallSite)
+RETURN c.caller, cs.receiver, cs.arguments, cs.argumentTypes
+```
+
+**The contract:**
+
+- **Four emits.** `files` returns the file a `sourceKey` names: `root`, `path`, `language`, `lines`,
+  `sha256`, `package`, `candidates`, and for a git root `commit` and `url`. `spans` returns the numbered
+  lines within `context` (default 6, at most 50) of a `spanKey`'s line, with `matches` — whether the
+  word the key expects appears on them — and `inRange`. `declarations` returns, for a `sourceKey`,
+  every type, field, constructor, method and initializer the file declares, or for a `spanKey` the
+  innermost one around the line: `kind`, `name`, binary `owner`, `fromLine` / `toLine`, `signature`,
+  `modifiers`, `annotations`, `javadoc`, and for a member its numbered `text`. `callsites` returns the
+  calls on a `spanKey`'s line whose method (or, for a constructor, class) is the key's word: `receiver`,
+  `receiverType`, `arguments`, `argumentTypes`, `argumentTypesResolved`, `enclosing`. Every row carries
+  `id`, `sourceKey`, `jarPath` and `anchorKey`, so a span or declaration joins back to its file by
+  `sourceKey`.
+- **Where source is looked for, in order.** A `<jar name>-sources.jar` beside the jar; then each root,
+  in the order declared — a `-sources.jar` named as a root, a `<jar name>-sources.jar` inside a root
+  folder, the folder itself as a source tree, or a git repository. Paths resolve as a jar path does:
+  the world's `data/` tree, an operator-trusted root, the declaring realm's own directory. In a tree a
+  source path is found under any module and source folder (`core/src/main/java/com/x/Cache.java` for
+  `com/x/Cache.java`); when more than one file matches, the first in path order is read and
+  `candidates` says how many there were. The first root holding the path answers.
+- **A git root is read at a commit.** `ref` is a commit, tag or branch; `{version}` in it is replaced
+  by the jar's version. A tag or branch is resolved to its commit first, and rows report the commit, so
+  the same rows come back whatever the tag later points at. Only https URLs are accepted, held to the
+  same address rule as any fetched URL; a repository needing credentials is refused, not waited on.
+  The first read of a commit lists its files; a file's content is fetched the first time it is read.
+- **Declarations and call sites need a syntax tree.** They answer for Java source; a file in another
+  language answers `files` and `spans`, and these two emits return nothing for it with a
+  `PRODUCER_ERROR` warning saying so, as does a file that does not parse. An argument's type is
+  resolved from the file alone — `new X(…)`, a literal, a cast, a parameter, a local declared before
+  the call, a field of an enclosing type — through the file's own types, single-type imports,
+  `java.lang` and the file's package. A type only another file could explain is returned as written
+  with `argumentTypesResolved` false; a method's return value is unknown.
+- **What is honest about absence.** A key whose path no root holds returns nothing — a generated class
+  has no source. A jar for which no root at all could be found, a declared root that could not be
+  read, a git ref that names nothing, and a file larger than `maxFileKb` (default 1024) are each a
+  `PRODUCER_ERROR` warning naming what was missing. A source that is not the jar's version shows as
+  `matches: false` on its spans and declarations; its line numbers cannot be trusted.
+
+Cost: a root is listed once and kept for later keys and queries (an archive until it changes on disk,
+a commit for good); a folder tree is listed again when a lookup misses, at most once per fetch. Each
+key is then one file read, and a syntax-tree emit parses a file once per fetch however many keys name
+it. A git root's first query pays for a shallow, blob-less fetch of the commit; each file read from it
+for the first time is one more fetch.
 
 ## 6. Vector edges — semantic joins in depth
 
@@ -3641,7 +3730,7 @@ it is not.
 | `sql` | **yes**, on a KEYED table read | the statement is generated, so `count` compiles to `SELECT COUNT(*) … GROUP BY <keyColumn>` with the same keys, the same governance `where:` and the same pushed filters |
 | `cypher`, `sparql`, `graphql` | **no, not yet** | each could answer one — `count(o)`, `COUNT(DISTINCT ?x)`, a Relay `totalCount` — but its query is AUTHORED, and nothing in the declaration says which second query returns the number. Refused rather than guessed |
 | `generative`, `compute`, `extract`, `aggregate` | **no** | there are no source rows to count: the records are produced here, so counting them means producing them |
-| `tabular`, `files`, `jar`, `feed`, `vector`, `keyword`, `elasticsearch`, `publisher`, … | **no** | the unit of cost is the whole download or the whole retrieval, which has to happen before anything can be counted |
+| `tabular`, `files`, `jar`, `source`, `feed`, `vector`, `keyword`, `elasticsearch`, `publisher`, … | **no** | the unit of cost is the whole download or the whole retrieval, which has to happen before anything can be counted |
 
 A `sql` producer's declaration is lighter, because the engine writes the statement: `measure` — and
 `of`, the column, for `sum`/`min`/`max` — is the whole of it.
