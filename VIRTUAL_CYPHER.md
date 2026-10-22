@@ -2187,6 +2187,12 @@ RETURN f.name, a.method, a.access, a.lines
   `<sourceKey>#<line>#<name>`: their first line and the word expected there (the member's name, the
   class's simple name for a constructor, `static` for an initializer). A class compiled without debug
   information has neither.
+- **A method knows every line it has code on.** A method row carries `lines`, the source lines its
+  line-number table holds, ascending; `lastLine`, the last of them; and `at`, one `Owner.name:line`
+  per line. `line` is only where the method starts, and a constructor's code can start at a field
+  initializer above another constructor, so the method a stack frame's line was in is the one whose
+  `lines` hold it: `by: at` with key `<jar path>!<Owner>.<name>:<line>` returns exactly that method,
+  overloads included. Empty without debug information.
 - **An access or a call is grouped by its target.** A method that reads a field on six lines is one
   `READ` row with six `lines`; a `WRITE` is an assignment. Adding to a collection held in a field is
   a `READ` of the field plus a call (`put`, `add`) in the same method.
@@ -2322,7 +2328,7 @@ RETURN f.exception, f.className, f.method, f.line, d.text
 - **`exceptions`** returns a row per throwable: `index`, `relation` (`thrown`, `cause`,
   `suppressed`), `depth`, `parentIndex`, `exception`, `simpleName`, `message`, `frameCount`, `elided`, `isRootCause`,
   `topFrame`, and the first frame of it in a jar — `jarFrame`, `jarFrameLine`, `jarPath`, `sourceKey`,
-  `spanKey`. **`frames`** returns a row per frame: `exceptionIndex`, `relation`, `exception`, `frame`
+  `spanKey`, `methodAtKey`. **`frames`** returns a row per frame: `exceptionIndex`, `relation`, `exception`, `frame`
   (its position), `isTop`, `firstInJar`, `className`, `packageName`, `method`, `file`, `line`, `module`,
   `native`, `location`, `text`, `sourcePath`, and `expectedName` — the name its line should show (the
   method; the class's simple name for a constructor; the enclosing method for a lambda body). Every row
@@ -2332,7 +2338,8 @@ RETURN f.exception, f.className, f.method, f.line, d.text
   resolved as a jar path is: the world's `data/` tree, an operator-trusted root, the realm's own
   directory. The first root, then path order, wins; `jarCandidates` says how many jars had the class.
   A frame a jar compiled carries `jarPath`, `inJar: true`, `javaTypeId`, `sourceKey` and — when it
-  names a file and a line — `spanKey`, spelled exactly as that jar's own rows spell them (§5.18), so
+  names a file and a line — `spanKey` and `methodAtKey` (the key of the jar's `by: at`: the method
+  the line was in, §5.18), spelled exactly as that jar's own rows spell them (§5.18), so
   it joins to the jar's types and the source producer's spans and declarations (§5.19) with no
   translation. A frame no jar compiled (the JDK, a library not mounted, a generated proxy) is still a
   row, with `inJar: false` and none of those keys. A jar root that cannot be found is a
