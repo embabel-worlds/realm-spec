@@ -1399,8 +1399,9 @@ filters as one, filtered on receipt otherwise — so the next hop (`ACCESSED_BY`
 keys alone, as it would be for `{key: 'C.f3'}` written inline. The same holds for `WHERE f.key = x`
 (either operand order), `f.key IN xs`, and a pin to another node's property bound earlier
 (`{owner: frame.className}`). `WHERE f.key = x` pins exactly as `{key: x}` does when the condition is
-an `AND` of terms; under an `OR` it is a filter, and a comparison between two nodes' properties
-(`a.id = b.ownerId`) is a join, never a pin.
+an `AND` of terms; under an `OR` it is a filter, and a comparison between the properties of two
+nodes of the same `MATCH` (`a.id = b.ownerId`) is a join, never a pin. When an EARLIER `MATCH` bound
+`b`, the comparison is the inline pin `{id: b.ownerId}` and pins as that does, either operand order.
 
 What it guarantees and what it does not:
 
@@ -1414,6 +1415,26 @@ What it guarantees and what it does not:
   something else (a whole-collection producer) still reads its collection; only what is kept, and
   every later hop, shrinks. A realm that wants the read itself narrowed declares a producer selected
   by that property.
+
+**An anchor keyed by a value computed from fetched rows is fetched for each value.** In
+
+```cypher
+MATCH (me:AssistantUser)-[:HAS_LOG_EVENT]->(e:LogEvent)-[:HAS_FRAME]->(f:JavaStackFrame)
+WITH DISTINCT f.jarPath AS jar
+MATCH (j:Jar)-[:HAS_PACKAGE]->(p:JavaPackage) WHERE j.path = jar
+RETURN jar, count(p)
+```
+
+the jar is keyed by every value `jar` holds once the frames are fetched — however many fetches
+before it they are — exactly as `(j:Jar {path: 'jars/app.jar'})` keys it. The same holds for
+`{path: jar}` inline, for a key read straight off a node an earlier `MATCH` bound
+(`WHERE j.path = f.jarPath`), and for a key aggregated or unwound upstream; a computed pin on the
+fetched node (`… UNWIND causes AS cause … WHERE j.path = jar AND c.calleeOwner = cause`) applies on
+top, as above.
+
+- **Never an empty answer that is not one.** If the values can never be read — the earlier part of
+  the query reads data this query does not fetch — the join is not fetched and the answer carries a
+  `PARTIAL_RESULT` warning naming the anchor, the value its key is computed from, and the join.
 
 **What does NOT seed, and why**
 
