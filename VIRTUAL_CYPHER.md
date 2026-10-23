@@ -267,7 +267,7 @@ These are **rejected at plan time** (fail-closed), with a message:
 | `MATCH (p:Person)-[:HAS_HUBSPOT_CONTACT]->(hc)` with no predicate on `p` | **Unbound anchor** — `p` matches every person; the fan-out is unbounded. Pin or filter the anchor. |
 | `MATCH (i:Item)-[:MENTIONS]->(t:Tag)` where `Tag` is brought only via `TAGGED` | **Brought child off its declared edge** — a brought label is reachable only through the exact relationship its own `brings:` entry names, and only from the join whose target brought it. |
 | ``MATCH (`a b`:Repo)``, ``MATCH (`distinct`:Repo)`` | **A variable that needs backticks** — variables are plain names. Refused by name with the rename to use, never as a syntax error the caller did not make. A word that reads back bare (`count`, `match`, `all`) is a legal name; column aliases and property keys may be quoted as usual. |
-| `UNION` in a scoped query, including inside a `CALL { }` body | Each half is a separate scope, which the rewriter does not scope clause-by-clause → rejected. The refusal shows how to keep one statement: collect, concatenate and `UNWIND` for rows from two label sets (the second set optional, so an empty set keeps the other's rows), or aggregate one set, carry it through `WITH` and aggregate the other behind `OPTIONAL MATCH` for two totals in one row, or, for one row per group, `UNWIND` the distinct union of both sets' group keys and aggregate each set per key, so a group only one set has is kept. Two `CALL { }` subqueries side by side are another way to keep one statement, and are answered. |
+| `COUNT { MATCH (s:Bill) RETURN s UNION MATCH (s:Meeting) RETURN s }` | **Two `UNION` branches inside a subquery binding the same new name** — inside a `CALL { }`, `COUNT { }`, `EXISTS { }` or `COLLECT { }` body the branches share one scope, so a name bound afresh in two of them would be one variable read two ways. Refused naming it, with the rename that answers: `MATCH (s:Bill) RETURN s AS item UNION MATCH (s2:Meeting) RETURN s2 AS item`. A name may be shared across branches when it is imported or bound before the subquery, or when it is the returned column written as an alias (`RETURN t AS s`) in every branch but at most one. A statement-level `UNION` has no such limit: its branches are independent queries. |
 | `MATCH (s:Shop) CALL { MATCH (s)-[:TAGGED]->(t) RETURN t.tag AS tag } RETURN tag` | **A `CALL { }` body sharing a name with the statement around it without the two being one variable** — an outer name the body does not import (including under `CALL ()`), or a name the body binds and does not return that the outer query uses again after it. The body's `s` would be a second, unbound variable read as the caller's. Refused naming it, with the import (`CALL (s) { … }`) or the rename (`s2`) that answers. `CALL (*)` is refused with the explicit import list the body needs. `OPTIONAL CALL` is refused as a form this engine cannot read. Every other read-only `CALL { }` is answered on every engine, its body scoped like the statement around it — uncorrelated, side by side, nested, importing (`CALL (s) { … }` or a leading `WITH s`), returning rows or an aggregate, or feeding a hop outside it; a fetched hop inside a body is fetched for the rows that reach it. |
 | `MATCH (n) RETURN n.name`, or a node left unnamed: `MATCH (p:Person)-[:ABOUT]->()` | **Unscopable node** — a node is reached by the labels it names, so one that names none cannot be held to the asking principal. The lever is per node: a named node is told to take a label; a node the query left unnamed is told to take a name AND a label, because a label alone on `(:Label)` leaves nothing for the scope to be attached to and is refused in turn. |
 | Anything the Cypher parser can't parse | **Fail closed** — an unparseable query is rejected, never run unscoped. |
@@ -292,6 +292,33 @@ x` is not a re-binding.
 path, never only the shortest. `ANY SHORTEST`, `ALL SHORTEST`, `SHORTEST k`, `SHORTEST k GROUPS`
 and `ANY` select per pair of end nodes, shortest first: the selector picks among the pattern's paths,
 and the `WHERE` filters what it picked.
+
+**`UNION` and `UNION ALL` run, each branch scoped as its own query.** A branch is held to the
+asking principal exactly as a standalone query of that shape would be: every node it binds is scoped,
+and every refusal above applies to it — an unlabelled node, a write, a procedure call in any branch
+refuses the whole statement, with that branch's own refusal. Cypher's rules for combining branches
+apply. Every branch returns the same column names, and a statement whose branches differ is refused
+before it runs, naming each branch's columns. `UNION` and `UNION ALL` cannot be mixed in one
+statement. `UNION` removes duplicate rows by value equality; `UNION ALL` keeps them.
+
+```cypher
+MATCH (b:Bill)    WHERE b.due < date() RETURN b.title AS item, 'bill'    AS kind
+UNION ALL
+MATCH (m:Meeting) WHERE m.at  > datetime() RETURN m.subject AS item, 'meeting' AS kind
+```
+
+A `UNION` also runs inside a subquery — a `CALL { }` body, and `COUNT { }`, `EXISTS { }` and
+`COLLECT { }`. In a `CALL` each branch imports for itself, `CALL (p) { MATCH (p)-[:OWES]->(b:Bill)
+RETURN b.title AS item UNION MATCH (p)-[:ATTENDS]->(m:Meeting) RETURN m.subject AS item }`, and a
+branch that reads an outer variable without importing it is refused as any `CALL { }` body is.
+Inside a subquery the branches must name their own variables (the table above); a statement-level
+`UNION` has no such limit.
+
+Each statement-level branch is planned and fetched as its own query, so two branches that pin the
+same variable name to different anchors each fetch their own rows: a virtual join in one branch is
+never narrowed by a pin in another. A variable or alias literally named `union` that cannot be told
+apart from the keyword may make the statement be refused rather than split in the wrong place; a
+column alias named `union`, quoted or not (`AS union`, `` AS `union` ``), is read as a name.
 
 **A refusal names only what the query named.** Every variable a refusal quotes is one the query wrote.
 A node left unnamed is shown as `()`, as it was written, and a statement the ENGINE generated — a
