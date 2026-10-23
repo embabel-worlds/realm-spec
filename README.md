@@ -2931,6 +2931,10 @@ schema describes `args`; its transport envelope independently requires object-va
 `self` and accepts no fields beyond `self` and `args`, but `args` itself is typed by
 whatever schema the method declares — a method with no schema of its own admits any
 JSON value there, not only an object. Validation does not coerce values or add defaults.
+In a function's output, a member whose value is `null`, whose name `properties` lists and
+which its object's `required` does not name, is treated as absent; a `null` in a required
+member, in an array item, at the top level or in a member `properties` does not list is
+checked as any other value. Input admits `null` only where the schema's `type` does.
 
 The current profile supports these JSON Schema keywords:
 
