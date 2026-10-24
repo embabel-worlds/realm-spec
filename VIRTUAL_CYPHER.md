@@ -536,31 +536,33 @@ not rewrite the installed realm's files or invalidate its reviewed installation.
 
 Two learned realms may declare the same producer name and operation. Each realm's joins must
 still fetch through its own source connection. Another connection exposing the same operation
-is never a fallback. An unavailable connection leaves its bound realm unavailable.
+is never a fallback, nor is an API of the same name supplied by another realm. An unavailable
+connection leaves its bound realm unavailable, whether its credentials are missing, its spec
+cannot load, or the connection has been removed. Its copied API is not a replacement.
 
-Within the bound connection, operation matching ignores case and non-alphanumeric characters
-but requires exactly one matching operation. A substring match is insufficient. A missing or
-ambiguous operation produces a fetch-failure diagnostic, not a successful empty result, and
-makes no data request. The diagnostic identifies the connection and operation. For ambiguity,
-it lists the matching operation names and gives source-qualified gateway call templates;
-reconnecting or relearning an unchanged API does not disambiguate it.
+Within the bound connection, an exact-spelling operation match wins. If there is no exact
+match, matching ignores case and non-alphanumeric characters and requires exactly one match.
+A substring match is insufficient. A missing or ambiguous operation produces a fetch-failure
+diagnostic, not a successful empty result, and makes no data request. The diagnostic identifies
+the connection and operation; a failed connection also reports why it did not load.
 
 For example, if connection `pets` exposes both `getVideoTranscript` and
-`get_video_transcript`, a learned producer naming either is ambiguous. To call the first
-operation explicitly, use the qualified gateway form from the diagnostic:
+`get_video_transcript`, a producer naming either exactly answers through that operation.
+A producer naming `GETVIDEOTRANSCRIPT` is ambiguous. Its diagnostic lists both candidates
+and gives templates for narrowing the world connection to the intended operation:
 
-```http
-POST /api/v1/tools/pets_getVideoTranscript
-Content-Type: application/json
-
-{}
+```yaml
+operation-ids: [getVideoTranscript]
 ```
 
-Use the operation's JSON arguments instead of `{}` if it requires any. The other operation is
-`POST /api/v1/tools/pets_get_video_transcript`. These calls preserve the operation's exact
-spelling and target only `pets`; a bare gateway alias is not a source-selection guarantee.
-Qualifying the gateway call retrieves the chosen operation directly; it does not alter the
-producer declaration or make the ambiguous Cypher join executable.
+Apply the chosen filter to connection `pets` and reload the world. The unchanged producer and
+its Cypher join can then answer. This limits the operations available through that connection;
+reconnecting or relearning the unchanged, unfiltered API does not disambiguate it.
+
+For a direct call instead, use `gateway.pets.getVideoTranscript({})` or
+`gateway.pets.get_video_transcript({})`, supplying the operation's arguments in place of `{}`.
+These calls preserve exact spelling and target only `pets`; a bare gateway alias is not a
+source-selection guarantee. A direct gateway call does not change the producer's matching rules.
 
 #### Page-number origins
 
