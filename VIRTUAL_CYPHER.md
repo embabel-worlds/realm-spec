@@ -527,6 +527,41 @@ throttled — an empty there may be a key the source never reached, which no win
 > warning saying so. Use `ttl` for a window you can state, or `immutable` for data that does not
 > change.
 
+#### Learned API producers follow their source connection
+
+A learned realm's `remote` producers use the world connection named by the realm's
+`learning.yml` `source`. Re-pointing that connection changes where those producers fetch;
+the installed realm's copied API URL or credential reference does not override it. This does
+not rewrite the installed realm's files or invalidate its reviewed installation.
+
+Two learned realms may declare the same producer name and operation. Each realm's joins must
+still fetch through its own source connection. Another connection exposing the same operation
+is never a fallback. An unavailable connection leaves its bound realm unavailable.
+
+Within the bound connection, operation matching ignores case and non-alphanumeric characters
+but requires exactly one matching operation. A substring match is insufficient. A missing or
+ambiguous operation produces a fetch-failure diagnostic, not a successful empty result, and
+makes no data request. The diagnostic identifies the connection and operation. For ambiguity,
+it lists the matching operation names and gives source-qualified gateway call templates;
+reconnecting or relearning an unchanged API does not disambiguate it.
+
+For example, if connection `pets` exposes both `getVideoTranscript` and
+`get_video_transcript`, a learned producer naming either is ambiguous. To call the first
+operation explicitly, use the qualified gateway form from the diagnostic:
+
+```http
+POST /api/v1/tools/pets_getVideoTranscript
+Content-Type: application/json
+
+{}
+```
+
+Use the operation's JSON arguments instead of `{}` if it requires any. The other operation is
+`POST /api/v1/tools/pets_get_video_transcript`. These calls preserve the operation's exact
+spelling and target only `pets`; a bare gateway alias is not a source-selection guarantee.
+Qualifying the gateway call retrieves the chosen operation directly; it does not alter the
+producer declaration or make the ambiguous Cypher join executable.
+
 #### Page-number origins
 
 A `remote` producer with page-number paging starts at page 1 unless its declaration sets a
