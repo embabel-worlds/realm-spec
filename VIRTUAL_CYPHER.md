@@ -529,10 +529,12 @@ throttled — an empty there may be a key the source never reached, which no win
 
 #### Learned API producers follow their source connection
 
-A learned realm's `remote` producers use the world connection named by the realm's
-`learning.yml` `source`. Re-pointing that connection changes where those producers fetch;
-the installed realm's copied API URL or credential reference does not override it. This does
-not rewrite the installed realm's files or invalidate its reviewed installation.
+A learned realm's `remote` producers use the world connection recorded in its `learning.yml`.
+This file at the realm root is the learning journal: its `source` field identifies the connection
+from which the realm was learned. A connection uses its configured `name`, or, when unnamed,
+the API name reported when it was learned. Re-pointing that connection changes where those
+producers fetch; the installed realm's copied API URL or credential reference does not override
+it. This does not rewrite the installed realm's files or invalidate its reviewed installation.
 
 Two learned realms may declare the same producer name and operation. Each realm's joins must
 still fetch through its own source connection. Another connection exposing the same operation
@@ -549,15 +551,19 @@ the connection and operation; a failed connection also reports why it did not lo
 For example, if connection `pets` exposes both `getVideoTranscript` and
 `get_video_transcript`, a producer naming either exactly answers through that operation.
 A producer naming `GETVIDEOTRANSCRIPT` is ambiguous. Its diagnostic lists both candidates
-and gives templates for narrowing the world connection to the intended operation:
+and tells you to add the chosen operation to the connection's `operation-ids` and leave out
+its rival. Keep the other operations required by the realm or its callers. For example, if
+`listVideos` is also needed, the filter for choosing `getVideoTranscript` is:
 
 ```yaml
-operation-ids: [getVideoTranscript]
+operation-ids: [listVideos, getVideoTranscript]
 ```
 
-Apply the chosen filter to connection `pets` and reload the world. The unchanged producer and
-its Cypher join can then answer. This limits the operations available through that connection;
-reconnecting or relearning the unchanged, unfiltered API does not disambiguate it.
+Update connection `pets` and reload the world. The unchanged producer and its Cypher join can
+then answer, and `listVideos` remains available. If there was no filter, include every other
+operation you need: only listed operations remain available. Reconnecting the unchanged,
+unfiltered API leaves the ambiguity in the existing producer. Relearning can resolve it by
+writing producers that name the operations exactly.
 
 For a direct call instead, use `gateway.pets.getVideoTranscript({})` or
 `gateway.pets.get_video_transcript({})`, supplying the operation's arguments in place of `{}`.
