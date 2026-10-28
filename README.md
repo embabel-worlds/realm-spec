@@ -1580,6 +1580,7 @@ sources:
       # sourceModifiedAt: "{{ edition }}"#   the version token; see below for the default
       sourceKind: bible                  # the store, generically; defaults to the realm name
       tags: [bible, kjv]                 # stamped on every document and chunk
+    # extractEntities: false             # skip the per-document entity pass; see below (default true)
     sync:
       trigger: on-install                # on-install | scheduled | manual
       schedule: "0 0 3 * * SUN"          # six-field cron, host zone, for `scheduled`
@@ -1614,6 +1615,14 @@ background; a second trigger while one is running is reported, not queued.
 **Pruning** removes documents this source holds that no record produced, and only after a COMPLETE
 run: an empty read or a failed record deletes nothing, because "the source returned nothing" and "the
 source is gone" are indistinguishable from the host's side.
+
+**Entities.** Like any ingested document, each one a source lands is read once more after it is
+stored, by a model that finds the people, organizations and other entities it mentions and links the
+document to the ones the graph already holds: one model call per document landed. A source whose
+records already *are* graph entities — code declarations, a catalogue read from `reference/` — gains
+nothing from that pass, so it declares `extractEntities: false` and its documents are stored,
+chunked and embedded with no model call. The default is `true`, and a world that has turned the pass
+off for all documents keeps it off whatever a source declares.
 
 **Status.** Each run's outcome — `COMPLETE`, `PARTIAL` (some records failed; retried next trigger),
 `EMPTY` (no records; nothing pruned), `FAILED` (with the reason) — is recorded per world and reported
