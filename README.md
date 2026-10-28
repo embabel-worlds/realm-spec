@@ -88,7 +88,8 @@ realm-name/
 ├── channels/             # Realm-shipped provider connector drafts (YAML)
 │   └── my-channel.yml
 ├── agents/               # Agents — named colleagues whose routines react to signals/cron, adopted by the world
-│   └── my-handler.yml
+│   ├── my-handler.yml
+│   └── my-handler.md     # optional; the agent's prompt for a conversation
 ├── decorations/          # Scheduled KG node-decoration manifests
 │   └── my-decoration.yml
 ├── apps/                 # Bundled HTML apps served at /apps/{name}
@@ -203,6 +204,7 @@ tags:
 | `tags` | No | Free-text keywords, for finding the realm. They are not its category. |
 | `maturity` | No | The author's own readiness claim: `experimental`, `beta`, `stable` or `deprecated`. Absent means the realm makes no claim — which is **not** a claim of being finished. See [Maturity](#maturity). |
 | `host` | No | Execution host for the Realm's Functions: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
+| `capabilities` | No | Captured realms only. What the realm asks the owner to grant at admission beyond its handlers and resources. The one value is `model`, which asks for [the model call](HOSTED_EXECUTION.md#the-model-call). The owner may grant none of them. |
 
 ### Icons
 
@@ -1195,6 +1197,8 @@ for (const p of busy) {
 ```
 
 `params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below. Virtual Cypher calls are available to a captured handler once the owner separately approves `cypher_query`, following [the captured graph-query profile](HOSTED_EXECUTION.md#me-captured-graph-query-profile).
+
+A captured handler has no `gateway.ai`: it reaches a model only through the `model` capability, described in [the model call](HOSTED_EXECUTION.md#the-model-call).
 
 ## `views/` — saved queries, and the two shapes they come in
 
@@ -2543,6 +2547,12 @@ in different worlds do not share data, credentials, routes, receipts, canonical 
 caches, even when the same person owns both. Deployment-approved `Public`/reference datasets are the
 only exception.
 
+Composition never widens authority. When an execution reaches a surface another realm contributed,
+effective authority is the intersection of the calling adoption's grants, the callee's, and the
+principal's: a realm never gains a capability by calling one that holds more. The originating realm
+stays attributable on every downstream call and write for the life of the execution, and a nested
+call never replaces it. Two realms that compose must not assemble a capability neither holds alone.
+
 A host may share immutable code only when the canonical full-package `realmDigest` addresses it.
 Sharing a worker never relaxes world scoping. Local and single-tenant deployments run the same path
 with one world; deployment topology is not an authorization control.
@@ -2931,10 +2941,6 @@ schema describes `args`; its transport envelope independently requires object-va
 `self` and accepts no fields beyond `self` and `args`, but `args` itself is typed by
 whatever schema the method declares — a method with no schema of its own admits any
 JSON value there, not only an object. Validation does not coerce values or add defaults.
-In a function's output, a member whose value is `null`, whose name `properties` lists and
-which its object's `required` does not name, is treated as absent; a `null` in a required
-member, in an array item, at the top level or in a member `properties` does not list is
-checked as any other value. Input admits `null` only where the schema's `type` does.
 
 The current profile supports these JSON Schema keywords:
 
@@ -3369,10 +3375,12 @@ sweeps:                               # cold materializations it keeps filled �
 | Field | Required | Meaning |
 |---|---|---|
 | `name` | yes | Stable id. A world agent of the same name shadows the realm's. |
-| `job` | yes | One sentence, in the words of the person who will answer for it. |
+| `job` | yes | One sentence, in the words of the person who will answer for it. It is the one-line description a host shows beside the agent in a pick list. |
 | `routing` | no | What to ask this agent about, for a host that routes questions to colleagues. |
 | `persona` | no | A personality the host already has, or one this realm ships under `personalities/`, named `<realm>/<slug>` to say which realm's (`realm-bible/jonathon`). A persona confers no authority, but it is part of what the sponsor signs: for an agent people talk to it is the behaviour, guardrails included (see [Signed versions](#signed-versions)). |
 | `conversation` | no | How the agent is talked to: the realms it reaches, the host tools it keeps, the skills it brings in by name, its model role and the sampling a caller may ask for. See [Talking to an agent](#talking-to-an-agent). |
+| `prompt` | no | A markdown file beside the agent file under `agents/`, named by its plain file name (`coder.md`). Its text is the agent's instructions for a conversation. A host that runs a conversation through an outside coding agent gives it these instructions at the start of the session. The path may not leave `agents/`; a missing or unreadable file means the agent has no prompt. |
+| `asks` | no | Suggested first questions, a list of short strings a host may offer as one-click asks. |
 | `routines[]` | no | The work it does without being asked. Fields below. |
 | `duties[]` | no | Conditions it keeps true, each naming the view, lens or DERIVE label that should hold. _Forward-looking._ |
 | `sweeps[]` | no | Cold materializations it keeps filled, each naming a view of this realm's. See [Sweeps](#sweeps--the-cold-materializations-an-agent-keeps-filled). |
@@ -3521,29 +3529,42 @@ host sets none; a `temperature` an agent file still declares is ignored.
 
 > **Open question: what `realms: []` means.** The table says what an omitted `realms` reaches, the
 > realm that ships the agent, but not what an empty list reaches: no realm, or every realm the world
-> has. A focus already says an empty `realms` means no realm skills. Shinar, a host built against
-> this spec, reads `[]` as no realm and an omitted field as the shipping realm (its decision D271,
-> which closed its limitation L329). Options: `[]` reaches no realm, as for a focus; `[]` reaches
-> every realm in the world; or `[]` is a validation error, so the author says which they meant.
+> has. A focus already says an empty `realms` means no realm skills. Options: `[]` reaches no realm,
+> as for a focus; `[]` reaches every realm in the world; or `[]` is a validation error, so the author
+> says which they meant.
 
 > **Open question: whether `builtins` covers only the host's own tools.** The table says `builtins`
 > keeps the host's own tools and that `realms` governs a realm's tools. It does not say what happens
 > to the tools an agent runtime brings with it, such as a coding agent's shell and file editing, when
-> a host runs the conversation on such an agent. Shinar narrows only the tools it serves itself, and
-> records that the agent's own tools are left alone, behind the agent's own permission asks, even
-> under `builtins: false` (D271, L329). Options: state that `builtins` governs only the tools the
-> host serves, and the runtime's own tools are out of its reach; or extend `builtins` to them, so a
-> host must turn off what a category does not keep, or refuse to run the agent on that runtime.
+> a host runs the conversation on such an agent. Options: state that `builtins` governs only the
+> tools the host serves, and the runtime's own tools are out of its reach; or extend `builtins` to
+> them, so a host must turn off what a category does not keep, or refuse to run the agent on that
+> runtime.
 
 > **Open question: what `views`, `memory`, `attachments`, `images` and `apps` keep.** The table
 > names eleven categories and defines none. Most read plainly enough for a host to place its tools,
 > but these five leave real choices open: whether `views` runs a realm's saved views or also writes
 > them, whether `memory` is the speaker's memory, the agent's, or both, whether `attachments` and
 > `images` are the files a person sends or files the agent makes, and whether `apps` runs a realm's
-> apps or builds new ones. Shinar maps the other six categories onto its tools and keeps nothing for
-> these five, with a warning on the agent file, since it has no tools it could place in them (D271,
-> L329). Options: define each category by what its tools do; define each by a list of reference
-> tools; or leave them to the host and require it to report which categories it honours.
+> apps or builds new ones. Options: define each category by what its tools do; define each by a list
+> of reference tools; or leave them to the host and require it to report which categories it honours.
+
+**A prompt and suggested asks.** An agent people talk to may also carry a `prompt` and a list of
+`asks`. Here `coder.md` sits beside `coder.yml` under `agents/` and holds the agent's instructions
+for a conversation:
+
+```yaml
+# agents/coder.yml
+name: coder
+job: Answers questions about this repository's code from the realm's index.
+prompt: coder.md
+asks:
+  - Where is the Router type defined, and which modules use it?
+  - What would a change to the Router type touch?
+```
+
+A host lists every agent a loaded realm ships, qualified by realm (`code.coder`), and a realm with
+no agents is absent from that list.
 
 #### Scope it to the job
 
@@ -3579,23 +3600,18 @@ behaves: an agent that misbehaves with tools it should not have is a scoping def
 
 > **Open question: which tools every conversation keeps.** The paragraph above names "the few a host
 > keeps on every conversation" by example, its notes and progress reporting, but does not list them,
-> so an author cannot tell what `builtins: false` with `realms: []` still leaves. Shinar keeps, on
-> every conversation, the tools that list what the conversation may call and that read and stop its
-> own runs, and also the tools that reach a realm, each of which refuses a realm the conversation is
-> not bound to (D271, L329). Options: the spec lists the kept tools by purpose and a host keeps
-> nothing else; each host decides and reports them with the turn's tool surface; or the kept tools
-> become a category of their own that `builtins: false` can drop.
+> so an author cannot tell what `builtins: false` with `realms: []` still leaves. Options: the spec
+> lists the kept tools by purpose and a host keeps nothing else; each host decides and reports them
+> with the turn's tool surface; or the kept tools become a category of their own that `builtins:
+> false` can drop.
 
 > **Open question: how categories apply when namespaces are reached only through scripts.** On some
 > hosts the model reaches a host namespace only by writing a script that calls
 > `gateway.<namespace>.*`. A category then could apply in two places, the script tool and the
-> namespaces a script may call, and the spec does not say how they combine. Shinar places each host
-> namespace in a category, lets a script call only the namespaces of the named categories, and keeps
-> the script tools only with `code`, so a category whose tools are all namespaces gives nothing
-> without `code`; it warns on the agent file when that happens (D271, L329). Options: `code` keeps
-> the script tools and every other category only filters what a script may call, as Shinar does;
-> naming any such category also keeps the script tools, limited to its namespaces; or a category
-> covers only tools offered to the model directly, and a script reaches every host namespace.
+> namespaces a script may call, and the spec does not say how they combine. Options: `code` keeps
+> the script tools and every other category only filters what a script may call; naming any such
+> category also keeps the script tools, limited to its namespaces; or a category covers only tools
+> offered to the model directly, and a script reaches every host namespace.
 
 **Who can be talked to.** Only an agent that may work: signed, with a sponsor, active, not off duty,
 and in a world that is not halted. A host refuses a conversation with any other agent and says
