@@ -496,6 +496,7 @@ absence.
 | `sparql` | a **SPARQL 1.1 endpoint** (Wikidata, UniProt, an enterprise triplestore) queried with an authored SELECT template; the whole key batch lands in one `VALUES` clause (§5.14) | the anchor key, serialized into the query's `{{keys}}` token; rows echo it under `keyVar` |
 | `cypher` | a **remote openCypher graph** (Neo4j, Memgraph, Neptune — any engine speaking Bolt or openCypher-over-HTTP) queried with an authored read query; structurally read-only, governed by the shared `governance:` grammar (§5.15) | the anchor key batch, bound to `$keys`; rows echo it via the query's own RETURN |
 | `jar` | a **Java jar's classes**, read from the jar when a query reaches it — packages, types, fields, methods, field accesses and calls, with source lines; nothing ingested or stored (§5.18) | a jar path, or `<jar path>!<value>` for a property the producer selects `by` |
+| `source-tree` | a **project's source in thirteen languages**, parsed when a query reaches it — files, declarations with their annotations, imports and name-matched calls, in the standard model's code columns (§5.21) | a project's location: an https git URL (`@ref` optional) or a folder |
 | `source` | the **source a jar was compiled from** — files, spans of lines, declarations, call sites and local variables — read from a `-sources.jar`, a folder or a git commit when a query reaches it (§5.19) | a jar row's `sourceKey` or `spanKey` |
 | `stacktrace` | the **Java stack trace in a piece of text** — its throwables and frames, each frame naming the jar that compiled its class with that jar's keys (§5.20) | the text: a pasted trace, or a log event's `content` |
 | `files` | the world's **local files**, walked live under `data/` roots — one row per file, per line (`unit: line`) or per log event (`unit: event`, §5.20.1) | the owner key; free-text terms with `emit: search` |
@@ -2253,7 +2254,8 @@ RETURN f.name, a.method, a.access, a.lines
   `Owner.name(parameter types)`, constructors are `<init>` and a static initializer `<clinit>`.
 - **Only the jar's own classes are rows.** A supertype, field or callee outside the jar (the JDK,
   another library) is a name on the row that refers to it — `superclass`, `fieldOwner`,
-  `calleeOwner` — never a row of its own; `internal: false` marks those references. A field's
+  `calleeOwner` — never a row of its own; `internal: false` marks those references. A call row says
+  `resolution: exact`: bytecode names the method the runtime calls (§5.21). A field's
   `container` (`map`, `collection`, `array`, `threadlocal`, `reference`, `none`) is decided by its
   declared type and, for a type in the jar, that type's own supertypes down to the JDK.
 - **Generics are read from the class files.** A field carries `genericType`, its declared type with
@@ -2335,9 +2337,11 @@ RETURN c.caller, cs.receiver, cs.arguments, cs.argumentTypes
   word the key expects appears on them — and `inRange`. `declarations` returns, for a `sourceKey`,
   every type, field, constructor, method and initializer the file declares, or for a `spanKey` the
   innermost one around the line: `kind`, `name`, binary `owner`, `fromLine` / `toLine`, `signature`,
-  `modifiers`, `annotations`, `javadoc`, and for a member its numbered `text`. `callsites` returns the
+  `modifiers`, `annotations` (names), `annotationText` (each in full, as written), `javadoc`, and for
+  a member its numbered `text`. `callsites` returns the
   calls on a `spanKey`'s line whose method (or, for a constructor, class) is the key's word: `receiver`,
-  `receiverType`, `arguments`, `argumentTypes`, `argumentTypesResolved`, `enclosing`. `locals` returns,
+  `receiverType`, `arguments`, `argumentTypes`, `argumentTypesResolved`, `enclosing`, and
+  `resolution`: `type` when the receiver's static type is known, else `name` (§5.21). `locals` returns,
   for a `sourceKey`, every local variable the file declares, or for a `spanKey` those of the method,
   constructor or initializer around the line: `kind` (`local`, `for`, `foreach`, `resource`,
   `pattern`), `name`, `line`, `declaredType` as written, `isVar`, `isFinal`, `initializer`,
@@ -2465,6 +2469,72 @@ the next — so a logged exception is one row however many lines its trace takes
   Logback/Log4j, time-level-logger, timestamp-then-level, java.util.logging and level-first layouts are tried in turn.
 - **Matching.** Under `emit: search` or a `content CONTAINS` filter, the term is judged against the
   whole event. A file is read up to `contentCapKb`; events past it are not returned.
+
+### 5.21 `source-tree` — a project's source in any of thirteen languages
+
+A `source-tree` producer reads a project's source files in TypeScript (and TSX), JavaScript (and JSX),
+Python, Go, Rust, C, C++, C#, Ruby, PHP, Kotlin, Scala and Swift, parsing each with that language's
+grammar when a query reaches it. Nothing is ingested. Java is not among them: the `source` kind
+(§5.19) reads Java with a parser that resolves types, which syntax alone cannot.
+
+```yaml
+- { name: pyDeclarations, kind: source-tree, emit: declarations, languages: [python] }
+- { name: allFiles,       kind: source-tree, emit: files }                 # every language
+- { name: goCalls,        kind: source-tree, emit: calls, languages: [go], maxFileKb: 256 }
+```
+
+```cypher
+// Which handler serves a route, whatever the language: decorators, annotations and attributes alike
+MATCH (p:CodeProject {key: 'https://github.com/acme/shop'})-[:DECLARES]->(d:SourceDeclaration)
+WHERE any(a IN d.annotationText WHERE a CONTAINS '/items/{id}')
+RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
+```
+
+**The contract:**
+
+- **The key is a project's location**: an https git URL, optionally `@ref` (a commit, tag or branch;
+  the default branch without one), read at the commit it resolves to; or a folder under the world's
+  `data/` tree, an operator-trusted root, or the folder the operator mounted for project keys. A git
+  project is read once per commit and kept; a folder is read afresh for each fetch.
+- **Four emits, each row in the columns of a standard-model parent**, so a realm's language children
+  of those parents (`PythonDeclaration` under `SourceDeclaration`) carry them under the same names as
+  Java's:
+  - `files` (`Source`): `root`, `path`, `language`, `lines`, `sha256`, `commit` (git), `url` (on a
+    host with a file view), `parsed`, and `errors` — the number of syntax errors the file's tree holds.
+    Error recovery keeps everything around a broken region, so a file with errors still answers.
+  - `declarations` (`SourceDeclaration`): each class, interface, struct, enum, trait, module,
+    namespace, `impl`, function, method, constructor, field, variable and constant the language
+    has: `kind`, `name`, `owner` (the enclosing types, outermost first, `.`-joined; a Go receiver or
+    C++'s `Order::total` names its type explicitly), `fromLine` / `toLine`, `signature` (up to the body,
+    on one line, without annotations), `javadoc` (the doc comment above it, or a docstring), the
+    numbered `text` of a non-type declaration (at most 400 lines), `annotations` (the names of its
+    decorators, annotations or attributes) and `annotationText` (each in full).
+  - `imports` (`SourceImport`): `imported` (what it imports from: a module, package, path or header),
+    `names` (what it brings in, in source order; empty for a whole module), `alias`, `isStatic` (false).
+  - `calls` (`CallSite`): `method` (the called name), `receiver` (what it is called on, as written),
+    `arguments` (each as written), `enclosing` (the function or method it is in — for a call inside a
+    decorator or attribute, the declaration it decorates), `receiverType` and `argumentTypes` (empty:
+    syntax does not say) and `resolution`, always `name`.
+  Every row carries `id`, `sourceId` (its file's `id`), `path`, `language`, `line`, `url`, `project`
+  and `anchorKey`.
+- **A call is matched by name.** `resolution: name` says the callee is only known by its name: any
+  function of that name may be the one called. Present such a call as "calls something named `save`",
+  never as a resolved edge. Java's rows say `exact` (from bytecode, §5.18) or `type` (the receiver's
+  static type is known, §5.19).
+- **`languages` narrows what is read** to the named languages (empty reads them all). A name no
+  language has is refused with a `PRODUCER_ERROR` warning listing the languages there are.
+- **Each file is bounded.** A file larger than `maxFileKb` (default 512, at most 4096) is not read; a
+  file that takes longer than `parseTimeoutMs` (default 2000, at most 60000) to parse is abandoned;
+  past `maxFiles` (default 20000) source files the rest are not read. Each is a `PRODUCER_ERROR`
+  warning naming the file, never a half-read file. A key that names no readable project is a warning
+  with the reason.
+- **What is not read.** Directories a build or package manager writes (`node_modules`, `target`,
+  `build`, `out`, `.git`, …) are skipped. Generated files are read like any other.
+
+Cost: the first query of a git project pays for a shallow, blob-less fetch of the commit and one
+fetch of the language files' contents; each file is parsed once, the first time an emit needs it, and
+kept with the commit. A folder is listed and its files parsed again on each fetch. A repository of a
+few hundred files is read, from a cold git cache, in about ten seconds.
 
 ## 6. Vector edges — semantic joins in depth
 
