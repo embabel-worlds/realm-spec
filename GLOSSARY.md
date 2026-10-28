@@ -135,3 +135,33 @@ confirm completion of consumer processing or external effects.
 A durable position advanced after an offered record prefix succeeds under current admission.
 An uncheckpointed offer may be replayed, so effects need stable idempotency keys. Records that
 every adopted consumer has checkpointed past may be reclaimed by the host.
+
+
+## Source and dependency identity
+
+**Realm source**: `realm.ts` and its captured definition imports. The evaluated default object
+is the authored declaration; no YAML or manifest is generated from it. YAML-only realms are
+legacy and retain their existing loading behavior.
+
+**Realm version**: the author's semantic compatibility label. It is not an integrity check,
+a publisher identity, an SDK version or a target specification revision.
+
+**Module version**: an exact dependency label of one to three numeric components. It is not
+necessarily a semantic version and is never a substitute for the module's SHA-256 digest.
+
+**Module digest**: SHA-256 of the actual module bytes. Resolution, verification and operator
+admission use this identity regardless of local filename, registry or URL.
+
+**Captured realm identity**: the captured files' paths, executable bits and content digests.
+Moving or renaming a file creates a new revision even when its bytes have not changed.
+
+**Installation revision**: the host's identity for an installed capture and its admission
+state. A source URL or realm version cannot replace it in an authorization decision.
+
+**Contract revision**: the specification revision a host documents support for. A portable
+declaration for negotiating a target revision is not yet specified. An SDK package version
+or package lock does not establish host conformance.
+
+**Graph composition**: shared label, ancestry and method interpretation across installed
+realms. It does not import another realm's source, module bytes, credentials or grants.
+Explicit realm-source dependencies are reserved for a future consent and pinning contract.

@@ -7,6 +7,18 @@ not receive a World object, host filesystem path, credential store or provider t
 An author writing a captured realm in TypeScript starts from [TypeScript realms](TYPESCRIPT_REALMS.md),
 which shows each declaration in `realm.ts` form and links back to the sections here.
 
+## Source declarations
+
+Hosts read `realm.ts` directly under the [definition evaluation rules](TYPESCRIPT_REALMS.md#definition-evaluation).
+The entire transitive definition import graph is subject to those rules before admission.
+Handler isolation does not make unrestricted definition evaluation safe. Complete confinement
+and deterministic evaluation have not yet been demonstrated for every host.
+
+File-form declarations below describe legacy compatibility. They do not require generating
+or committing files from `realm.ts`, and do not add features to YAML. When both forms are
+present, [source selection](TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility)
+uses only `realm.ts` for declarations and reports ignored legacy paths.
+
 ## Admission
 
 An invocation retains its World, Realm installation, artifact digest, approval revision and
@@ -60,7 +72,7 @@ A source supplies its name, partition stream and event type. A consumer supplies
 and a captured `namespace.function` handler. Neither declaration supplies credentials or
 selects an owner World. Consumer names identify independent cursors.
 
-A Realm whose channels are generated carries four further declaration files, and a consumer
+A legacy Realm may carry four further declaration files, and a consumer
 file is held to the same rules whether the host reads it at installation or at run time: a key
 the host owns is refused at both, so is a handler the Realm never declared, and a conforming
 consumer is accepted at both. A consumer file carrying a YAML tag or anchor is refused, and the
@@ -671,7 +683,7 @@ and resolves package main/index, subpaths, relative modules and cycles inside th
 Missing imports have no host fallback. Package exports maps, ESM and native module loading
 are unsupported. Bundled code receives no additional authority or credentials.
 
-A Realm can declare exact package requirements in `dependencies/manifest.json`:
+A legacy Realm can declare exact package requirements in `dependencies/manifest.json`:
 
 ```json
 {
@@ -702,20 +714,27 @@ imports from other modules already included in the same bounded capture.
 
 No download, installation or registry resolution occurs. Libraries compiled into a Wasm
 program remain part of that artifact; the reference Wasm backend supplies no host packages.
-Other ecosystems, runtime provisioning and private database persistence remain open.
+Other ecosystems and runtime provisioning remain open. SQLite dependency persistence and
+migrations follow [dependency state](TYPESCRIPT_REALMS.md#dependency-state).
+There is not yet a portable `realm.ts` declaration for bundled npm requirements. It is
+deferred; a host must not fill this gap by reading an adjacent legacy manifest when `realm.ts`
+is present. This does not change legacy package loading.
 Unsupported storage requirements must be rejected before handler execution. No VFS syntax
 is introduced here.
 
 ## Realm bundles
 
-Status: proposed. A realm bundle is one zip that carries a realm and the module bytes its
-dependencies name, so a host can load it with no clone, build or fetch step.
+A realm bundle is one zip that carries a realm and the module bytes its dependencies name.
+It removes the need to clone a repository or fetch included modules. Installation still
+evaluates `realm.ts`, checks sources and may compile guest handler code. No bundle step
+generates declaration files from `realm.ts`. The descriptor format below remains a proposal
+for portable interchange; current bundle support does not establish every host's conformance.
 
 **What the zip holds.** The entries sit directly under the zip's root, with no wrapping folder:
 
 | Entry | Holds |
 | --- | --- |
-| the realm's files | what a host captures from the realm directory: `realm.yml`, `dist/`, `dependencies/manifest.json`, `producers/` and the rest |
+| the realm's files | `realm.ts`, its definition imports and referenced resources; or the unchanged files of a legacy YAML realm, including `dist/` and `dependencies/manifest.json` |
 | `modules/<sha256 hex>.wasm` | one file for each module digest the dependencies declare, its bytes hashing to its name |
 | `bundle.json` | optional; the descriptor below |
 
@@ -758,27 +777,23 @@ is refused as any other.
 path bytes, one fixed timestamp, no comment or extra fields. Two writers can still compress
 differently, so `contentDigest` is the identity a host and an author compare.
 
-**Module sources.** Proposed. A realm may carry its own modules lock at
-`dependencies/modules.lock.yml`, so an author can say where the bytes of each module the realm
-declares come from. It is a `modules` list whose entries hold `module`, `version`, `sha256` and
-`license`, and one source: `file:`, a path relative to the realm with no leading `/`, no `.` or
-`..` component, no backslash and no whitespace, naming a regular file inside the realm that is not
-a symbolic link; or `url:`, an https URL. An entry may instead be `pending: true` while its bytes
-have no published home, and may still name the URL they will be published at. A host does not
-read the lock when it loads a realm and grants nothing because of it: the tools that gather module
-bytes read it, a bundle writer takes a module from a `file:` path when the realm's `modules/`
-does not already hold it under its digest, and every byte found either way is kept only when it
-hashes to the digest the dependencies declare. A file the lock names that sits under `modules/`
-under any other name is not copied into the bundle as itself. A lock not in this form refuses the
-bundle.
+**Module sources.** A TypeScript realm declares each source only in its dependency's `from`
+field. See [dependency sources](TYPESCRIPT_REALMS.md#dependency-sources). There is no module
+lock file, no `pending` source and no separate source list for a bundle writer or fetch tool.
+Those tools read the same `realm.ts` declaration. Source acquisition and dependency admission
+are independent: acquiring verified bytes never authorizes execution.
 
-The source convention for published module bytes is one URL per digest:
-`https://<host>/<path>/<sha256 hex>.wasm`, whose last path segment is the module's own sha256 in
-lowercase hex followed by `.wasm`. A lock entry whose URL ends any other way is refused. A fetcher
-follows at most three redirects, each to https, and keeps the bytes only when they hash to the
-name; a redirect to any other scheme fails the fetch. Because the name is the digest, a mirror is
-any host that serves the same file under the same name, and no source is trusted for more than
-bytes that hash to it.
+A local source may use a human-readable filename. A bundle can carry that file at its declared
+path and also offer verified bytes at `modules/<sha256>.wasm`; a writer must preserve every
+path referenced by `from.local`. Digest-addressed transport copies do not become declarations.
+Renaming or dropping a referenced source file changes the captured realm identity and cannot
+be hidden as a packaging-only operation. A bundle descriptor is transport integrity metadata,
+not another place to declare or edit realm capabilities or dependency sources.
+
+The source contract leaves room for new `from` tags, a later `variants` list and registries
+that resolve a module name plus exact version. Every such extension must preserve digest
+verification and independent operator admission. A registry or host may require license and
+provenance metadata as policy, even though the portable declaration makes them optional.
 
 ## Reference implementation
 
@@ -801,7 +816,7 @@ in the main specification:
 | Captured Virtual Cypher | Implemented owned reads and same-installation captured producers/collections with retained resource grants and rollback materialization. |
 | Owner database target approval | Adoption, upgrade, revocation and read-only production SQL use through the owner connection facade are implemented. |
 | Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
-| Additional dependency ecosystems, private Realm database persistence and VFS | Not implemented on this path. |
+| Additional dependency ecosystems and VFS | Not implemented on this path. SQLite dependency persistence is separately specified. |
 | Firecracker, generalized remote backends and resumable arbitrary computation | Not implemented. |
 
 Hosts must state which profile and capabilities they support. Generated types describe an
@@ -1410,8 +1425,8 @@ operator's to set. The defaults are:
 | All of an app's resources together | 10 MiB |
 
 An app over any of these is refused when it is opened. The host does not trim it to fit. Check
-the host's published limits before shipping an app near the defaults. realm-synth holds an app to
-the same defaults unless it is given the host's limits (see
+the host's published limits before shipping an app near the defaults. Authoring checks should use
+those limits too (see
 [app limits and profiles](TYPESCRIPT_REALMS.md#app-limits-and-profiles)).
 
 The browser receives a `realm.call(handler, arguments)` function. It returns a promise for
