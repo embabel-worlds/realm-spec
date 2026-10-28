@@ -496,7 +496,7 @@ absence.
 | `sparql` | a **SPARQL 1.1 endpoint** (Wikidata, UniProt, an enterprise triplestore) queried with an authored SELECT template; the whole key batch lands in one `VALUES` clause (§5.14) | the anchor key, serialized into the query's `{{keys}}` token; rows echo it under `keyVar` |
 | `cypher` | a **remote openCypher graph** (Neo4j, Memgraph, Neptune — any engine speaking Bolt or openCypher-over-HTTP) queried with an authored read query; structurally read-only, governed by the shared `governance:` grammar (§5.15) | the anchor key batch, bound to `$keys`; rows echo it via the query's own RETURN |
 | `jar` | a **Java jar's classes**, read from the jar when a query reaches it — packages, types, fields, methods, field accesses and calls, with source lines; nothing ingested or stored (§5.18) | a jar path, or `<jar path>!<value>` for a property the producer selects `by` |
-| `source-tree` | a **project's source in thirteen languages**, parsed when a query reaches it — files, declarations with their annotations, imports, name-matched calls and the type names each file uses, in the standard model's code columns (§5.21) | a project's location: an https git URL (`@ref` optional) or a folder |
+| `source-tree` | a **project's source in fourteen languages**, parsed when a query reaches it — files, declarations with their annotations, imports, name-matched calls and the type names each file uses, in the standard model's code columns, and any syntax a realm's own query captures (§5.21) | a project's location: an https git URL (`@ref` optional) or a folder |
 | `source` | the **source a jar was compiled from** — files, spans of lines, declarations, call sites and local variables — read from a `-sources.jar`, a folder or a git commit when a query reaches it (§5.19) | a jar row's `sourceKey` or `spanKey` |
 | `stacktrace` | the **Java stack trace in a piece of text** — its throwables and frames, each frame naming the jar that compiled its class with that jar's keys (§5.20) | the text: a pasted trace, or a log event's `content` |
 | `files` | the world's **local files**, walked live under `data/` roots — one row per file, per line (`unit: line`) or per log event (`unit: event`, §5.20.1) | the owner key; free-text terms with `emit: search` |
@@ -2535,17 +2535,18 @@ the next — so a logged exception is one row however many lines its trace takes
 - **Matching.** Under `emit: search` or a `content CONTAINS` filter, the term is judged against the
   whole event. A file is read up to `contentCapKb`; events past it are not returned.
 
-### 5.21 `source-tree` — a project's source in any of thirteen languages
+### 5.21 `source-tree` — a project's source in any of fourteen languages
 
 A `source-tree` producer reads a project's source files in TypeScript (and TSX), JavaScript (and JSX),
-Python, Go, Rust, C, C++, C#, Ruby, PHP, Kotlin, Scala and Swift, parsing each with that language's
-grammar when a query reaches it. Nothing is ingested. Java is not among them: the `source` kind
-(§5.19) reads Java with a parser that resolves types, which syntax alone cannot.
+Python, Go, Rust, C, C++, C#, Ruby, PHP, Kotlin, Scala, Swift and Java, parsing each with that
+language's grammar when a query reaches it. Nothing is ingested. Its Java rows are syntax, like every
+other language's: the `source` kind (§5.19) still reads Java with a parser that resolves types.
 
 ```yaml
 - { name: pyDeclarations, kind: source-tree, emit: declarations, languages: [python] }
 - { name: allFiles,       kind: source-tree, emit: files }                 # every language
 - { name: goCalls,        kind: source-tree, emit: calls, languages: [go], maxFileKb: 256 }
+- { name: javaMetrics,    kind: source-tree, emit: captures, languages: [java], query: queries/java-metrics.scm }
 ```
 
 ```cypher
@@ -2561,7 +2562,7 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
   the default branch without one), read at the commit it resolves to; or a folder under the world's
   `data/` tree, an operator-trusted root, or the folder the operator mounted for project keys. A git
   project is read once per commit and kept; a folder is read afresh for each fetch.
-- **Five emits, each row in the columns of a standard-model parent**, so a realm's language children
+- **Five emits, each row in the columns of a standard-model parent** (and a sixth, `captures`, below), so a realm's language children
   of those parents (`PythonDeclaration` under `SourceDeclaration`) carry them under the same names as
   Java's:
   - `files` (`Source`): `root`, `path`, `language`, `lines`, `sha256`, `commit` (git), `url` (on a
@@ -2597,6 +2598,38 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
   static type is known, §5.19).
 - **`languages` narrows what is read** to the named languages (empty reads them all). A name no
   language has is refused with a `PRODUCER_ERROR` warning listing the languages there are.
+- **`captures` runs the realm's own query.** `query:` names a tree-sitter query file (`.scm`) in the
+  realm, relative to its root, and `languages:` names the one language whose grammar it is written
+  against. Each node the query captures is one row: `capture` (the capture's name, without `@`),
+  `nodeType` (the grammar's name for the node, `cast_expression`), `text` (the node's text, whitespace
+  collapsed, at most 200 characters), `line` / `column` / `toLine` / `toColumn` (where its first and
+  last characters are), `match` (an id shared by the captures of one match, so a cast and its
+  `@cast.type` are read together), `pattern` (the pattern's index in the query, from 0), and the
+  innermost declaration it is in: `enclosingId` (that declaration's `declarations` row `id`, so
+  `WHERE c.enclosingId = d.id` joins them), `enclosing` (its name) and `enclosingKind` (empty at the top
+  level). A node two patterns capture under one name is one row. Text predicates (`#eq?`, `#not-eq?`,
+  `#match?`, `#any-of?`) are applied.
+
+  ```scheme
+  ; queries/java-metrics.scm
+  (if_statement) @if
+  [(for_statement) (enhanced_for_statement) (while_statement) (do_statement)] @loop
+  (cast_expression type: (_) @cast.type) @cast
+  ```
+
+  ```cypher
+  // Ifs per method, longest first; commented-out code is a comment node, so it never counts
+  MATCH (p:CodeProject {key: $project})-[:CAPTURES]->(c:JavaCapture {capture: 'if'})
+  RETURN c.path, c.enclosing, count(*) AS ifs ORDER BY ifs DESC
+  ```
+
+  Refused with a `PRODUCER_ERROR` warning and no rows: a query file the realm does not have, one with
+  a character outside ASCII (tree-sitter would silently lose its end; the warning names the line), and
+  one that does not compile against the grammar (the warning gives tree-sitter's row and column).
+  Refused when the realm is loaded: `query:` on another emit, `captures` without `query:`, a `query:`
+  that leaves the realm (`..`, a leading `/`), and `captures` naming other than one language. A file
+  capturing more than `maxCaptures` nodes (default 10000, at most 100000) answers its first
+  `maxCaptures` and is reported. Captures are not kept: each fetch parses the files again.
 - **Each file is bounded.** A file larger than `maxFileKb` (default 512, at most 4096) is not read; a
   file that takes longer than `parseTimeoutMs` (default 2000, at most 60000) to parse is abandoned;
   past `maxFiles` (default 20000) source files the rest are not read. Each is a `PRODUCER_ERROR`
