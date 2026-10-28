@@ -496,7 +496,7 @@ absence.
 | `sparql` | a **SPARQL 1.1 endpoint** (Wikidata, UniProt, an enterprise triplestore) queried with an authored SELECT template; the whole key batch lands in one `VALUES` clause (§5.14) | the anchor key, serialized into the query's `{{keys}}` token; rows echo it under `keyVar` |
 | `cypher` | a **remote openCypher graph** (Neo4j, Memgraph, Neptune — any engine speaking Bolt or openCypher-over-HTTP) queried with an authored read query; structurally read-only, governed by the shared `governance:` grammar (§5.15) | the anchor key batch, bound to `$keys`; rows echo it via the query's own RETURN |
 | `jar` | a **Java jar's classes**, read from the jar when a query reaches it — packages, types, fields, methods, field accesses and calls, with source lines; nothing ingested or stored (§5.18) | a jar path, or `<jar path>!<value>` for a property the producer selects `by` |
-| `source-tree` | a **project's source in thirteen languages**, parsed when a query reaches it — files, declarations with their annotations, imports and name-matched calls, in the standard model's code columns (§5.21) | a project's location: an https git URL (`@ref` optional) or a folder |
+| `source-tree` | a **project's source in thirteen languages**, parsed when a query reaches it — files, declarations with their annotations, imports, name-matched calls and the type names each file uses, in the standard model's code columns (§5.21) | a project's location: an https git URL (`@ref` optional) or a folder |
 | `source` | the **source a jar was compiled from** — files, spans of lines, declarations, call sites and local variables — read from a `-sources.jar`, a folder or a git commit when a query reaches it (§5.19) | a jar row's `sourceKey` or `spanKey` |
 | `stacktrace` | the **Java stack trace in a piece of text** — its throwables and frames, each frame naming the jar that compiled its class with that jar's keys (§5.20) | the text: a pasted trace, or a log event's `content` |
 | `files` | the world's **local files**, walked live under `data/` roots — one row per file, per line (`unit: line`) or per log event (`unit: event`, §5.20.1) | the owner key; free-text terms with `emit: search` |
@@ -2561,7 +2561,7 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
   the default branch without one), read at the commit it resolves to; or a folder under the world's
   `data/` tree, an operator-trusted root, or the folder the operator mounted for project keys. A git
   project is read once per commit and kept; a folder is read afresh for each fetch.
-- **Four emits, each row in the columns of a standard-model parent**, so a realm's language children
+- **Five emits, each row in the columns of a standard-model parent**, so a realm's language children
   of those parents (`PythonDeclaration` under `SourceDeclaration`) carry them under the same names as
   Java's:
   - `files` (`Source`): `root`, `path`, `language`, `lines`, `sha256`, `commit` (git), `url` (on a
@@ -2580,11 +2580,20 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
     `arguments` (each as written), `enclosing` (the function or method it is in — for a call inside a
     decorator or attribute, the declaration it decorates), `receiverType` and `argumentTypes` (empty:
     syntax does not say) and `resolution`, always `name`.
+  - `references` (`SourceReference`): each name used where a type goes — a parameter's, field's or
+    return type, a base class or interface, a generic argument, an annotation, a constructor call — as
+    `name` (the last segment, as written), `enclosing` (the innermost declaration it is used in: a
+    field's type is used in the field; empty at the top level) and `resolution`, always `name`. A
+    declaration's own name is not a reference (`class Order` does not use `Order`), nor is a generic
+    parameter inside the declaration that declares it (`T` in `class Box<T>`). A built-in type
+    (`string`, `int`) is a reference like any other; join to the project's declarations to keep the
+    project's own.
   Every row carries `id`, `sourceId` (its file's `id`), `path`, `language`, `line`, `url`, `project`
   and `anchorKey`.
-- **A call is matched by name.** `resolution: name` says the callee is only known by its name: any
-  function of that name may be the one called. Present such a call as "calls something named `save`",
-  never as a resolved edge. Java's rows say `exact` (from bytecode, §5.18) or `type` (the receiver's
+- **A call or a reference is matched by name.** `resolution: name` says the callee or type is only
+  known by its name: any function or type of that name may be the one meant. Present such a row as
+  "calls something named `save`" or "uses a type named `Order`", never as a resolved edge; where two
+  of the project's types share a name, say so. Java's rows say `exact` (from bytecode, §5.18) or `type` (the receiver's
   static type is known, §5.19).
 - **`languages` narrows what is read** to the named languages (empty reads them all). A name no
   language has is refused with a `PRODUCER_ERROR` warning listing the languages there are.
