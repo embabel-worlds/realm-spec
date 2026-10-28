@@ -532,9 +532,11 @@ throttled — an empty there may be a key the source never reached, which no win
 A learned realm's `remote` producers use the world connection recorded in its `learning.yml`.
 This file at the realm root is the learning journal: its `source` field identifies the connection
 from which the realm was learned. A connection uses its configured `name`, or, when unnamed,
-the API name reported when it was learned. Re-pointing that connection changes where those
-producers fetch; the installed realm's copied API URL or credential reference does not override
-it. This does not rewrite the installed realm's files or invalidate its reviewed installation.
+the API name reported when it was learned. An unnamed connection is also tied to the URL it was
+learned from: another unnamed connection that later reports the same API name never takes its
+place, and the realm stays unavailable until that original connection loads under its name again.
+Re-pointing a named connection changes where those producers fetch; the installed realm's
+copied API URL or credential reference does not override it. This does not rewrite the installed realm's files or invalidate its reviewed installation.
 
 Two learned realms may declare the same producer name and operation. Each realm's joins must
 still fetch through its own source connection. Another connection exposing the same operation
@@ -552,8 +554,10 @@ For example, if connection `pets` exposes both `getVideoTranscript` and
 `get_video_transcript`, a producer naming either exactly answers through that operation.
 A producer naming `GETVIDEOTRANSCRIPT` is ambiguous. Its diagnostic lists both candidates
 and tells you to add the chosen operation to the connection's `operation-ids` and leave out
-its rival. Keep the other operations required by the realm or its callers. For example, if
-`listVideos` is also needed, the filter for choosing `getVideoTranscript` is:
+its rival, however the list spells it. When no filter can tell the candidates apart, as with
+`get/Video/Transcript` and `get_video_transcript`, it tells you to relearn instead. Keep the
+other operations required by the realm or its callers. For example, if `listVideos` is also
+needed, the filter for choosing `getVideoTranscript` is:
 
 ```yaml
 operation-ids: [listVideos, getVideoTranscript]
