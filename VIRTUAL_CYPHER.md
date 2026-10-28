@@ -497,7 +497,6 @@ absence.
 | `cypher` | a **remote openCypher graph** (Neo4j, Memgraph, Neptune — any engine speaking Bolt or openCypher-over-HTTP) queried with an authored read query; structurally read-only, governed by the shared `governance:` grammar (§5.15) | the anchor key batch, bound to `$keys`; rows echo it via the query's own RETURN |
 | `jar` | a **Java jar's classes**, read from the jar when a query reaches it — packages, types, fields, methods, field accesses and calls, with source lines; nothing ingested or stored (§5.18) | a jar path, or `<jar path>!<value>` for a property the producer selects `by` |
 | `source-tree` | a **project's source in fourteen languages**, parsed when a query reaches it — files, declarations with their annotations, imports, name-matched calls and the type names each file uses, in the standard model's code columns, and any syntax a realm's own query captures (§5.21) | a project's location: an https git URL (`@ref` optional) or a folder |
-| `source` | the **source a jar was compiled from** — files, spans of lines, declarations, call sites and local variables — read from a `-sources.jar`, a folder or a git commit when a query reaches it (§5.19) | a jar row's `sourceKey` or `spanKey` |
 | `stacktrace` | the **Java stack trace in a piece of text** — its throwables and frames, each frame naming the jar that compiled its class with that jar's keys (§5.20) | the text: a pasted trace, or a log event's `content` |
 | `files` | the world's **local files**, walked live under `data/` roots — one row per file, per line (`unit: line`) or per log event (`unit: event`, §5.20.1) | the owner key; free-text terms with `emit: search` |
 | `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
@@ -2270,7 +2269,7 @@ RETURN f.name, a.method, a.access, a.lines
   class that supplies each: the type itself, an ancestor in the jar, a JDK ancestor, or
   `java.lang.Object` — identity. They are absent for an interface, and when an ancestor in another
   library would decide.
-- **Rows carry the keys a source producer selects on** (§5.19). Types, fields, methods, calls and
+- **Rows carry the keys a jar's source is read by** (§5.19). Types, fields, methods, calls and
   accesses carry `sourcePath` — the package path and the source file the class file records
   (`com/x/Cache.java`; a nested class shares its outer class's file) — and `sourceKey`,
   `<jar path>!<sourcePath>`. Methods, calls and accesses also carry `spanKey`,
@@ -2370,21 +2369,24 @@ each with the properties every language's rows carry; a realm declares its langu
 (`JavaMethod` with `parents: [Method]`) over its own producers, as memory systems are children of
 `Memory` (§6.8). A query naming a parent is answered by every language with a join.
 
-### 5.19 `source` — the source a jar was compiled from
+### 5.19 `source-tree` with `from: jar` — the source a jar was compiled from
 
-`source-tree` with `from: jar` (§5.21) reads the same keys and returns the same rows; prefer it. This
-kind is retired with the next engine release.
+The `source-tree` kind (§5.21) with `from: jar` reads a jar's source; the `source` kind that did before
+is retired: a producer file that still writes `kind: source` does not load, and the realm reports it as a
+problem naming the file.
+Change `kind: source` to `kind: source-tree, from: jar` and `emit: callsites` to `emit: calls`: keys,
+ids and columns are as they were.
 
-A `source` producer reads source files where they are, when a query reaches them, keyed by what a
+A `from: jar` producer reads source files where they are, when a query reaches them, keyed by what a
 `jar` row (§5.18) already carries. Nothing is ingested; the rows are transient like any fetch.
 
 ```yaml
-- { name: javaSourceFile,  kind: source, emit: files,        roots: [src] }               # key: a sourceKey
-- { name: javaSourceSpan,  kind: source, emit: spans,        roots: [src], context: 6 }   # key: a spanKey
-- { name: javaDeclaration, kind: source, emit: declarations, roots: [src] }               # sourceKey or spanKey
-- { name: javaCallSites,   kind: source, emit: callsites,    roots: [src] }               # key: a spanKey
-- { name: javaLocals,      kind: source, emit: locals,       roots: [src] }               # sourceKey or spanKey
-- { name: upstream,        kind: source, emit: spans,
+- { name: javaSourceFile,  kind: source-tree, from: jar, emit: files,        roots: [src] }             # key: a sourceKey
+- { name: javaSourceSpan,  kind: source-tree, from: jar, emit: spans,        roots: [src], context: 6 } # key: a spanKey
+- { name: javaDeclaration, kind: source-tree, from: jar, emit: declarations, roots: [src] }             # sourceKey or spanKey
+- { name: javaCallSites,   kind: source-tree, from: jar, emit: calls,        roots: [src] }             # key: a spanKey
+- { name: javaLocals,      kind: source-tree, from: jar, emit: locals,       roots: [src] }             # sourceKey or spanKey
+- { name: upstream,        kind: source-tree, from: jar, emit: spans,
     roots: [ { git: "https://github.com/acme/acme", ref: "v{version}" } ] }
 ```
 
@@ -2403,7 +2405,7 @@ RETURN c.caller, cs.receiver, cs.arguments, cs.argumentTypes
   every type, field, constructor, method and initializer the file declares, or for a `spanKey` the
   innermost one around the line: `kind`, `name`, binary `owner`, `fromLine` / `toLine`, `signature`,
   `modifiers`, `annotations` (names), `annotationText` (each in full, as written), `javadoc`, and for
-  a member its numbered `text`. `callsites` returns the
+  a member its numbered `text`. `calls` returns the
   calls on a `spanKey`'s line whose method (or, for a constructor, class) is the key's word: `receiver`,
   `receiverType`, `arguments`, `argumentTypes`, `argumentTypesResolved`, `enclosing`, and
   `resolution`: `type` when the receiver's static type is known, else `name` (§5.21). `locals` returns,
@@ -2429,9 +2431,9 @@ RETURN c.caller, cs.receiver, cs.arguments, cs.argumentTypes
   the same rows come back whatever the tag later points at. Only https URLs are accepted, held to the
   same address rule as any fetched URL; a repository needing credentials is refused, not waited on.
   The first read of a commit lists its files; a file's content is fetched the first time it is read.
-- **Declarations and call sites need a syntax tree.** They answer for Java source; a file in another
-  language answers `files` and `spans`, and these two emits return nothing for it with a
-  `PRODUCER_ERROR` warning saying so, as does a file that does not parse. An argument's type is
+- **Declarations, call sites and locals need a syntax tree.** They answer for Java source; a file in
+  another language answers `files` and `spans`, and these emits return nothing for it with a
+  `PRODUCER_ERROR` warning saying so. A file with syntax errors answers around them. An argument's type is
   resolved from the file alone — `new X(…)`, a literal, a cast, a parameter, a local declared before
   the call, a field of an enclosing type — through the file's own types, single-type imports,
   `java.lang` and the file's package. A type only another file could explain is returned as written
@@ -2499,7 +2501,7 @@ RETURN f.exception, f.className, f.method, f.line, d.text
   A frame a jar compiled carries `jarPath`, `inJar: true`, `javaTypeId`, `sourceKey` and — when it
   names a file and a line — `spanKey` and `methodAtKey` (the key of the jar's `by: at`: the method
   the line was in, §5.18), spelled exactly as that jar's own rows spell them (§5.18), so
-  it joins to the jar's types and the source producer's spans and declarations (§5.19) with no
+  it joins to the jar's types and the spans and declarations of its source (§5.19) with no
   translation. A frame no jar compiled (the JDK, a library not mounted, a generated proxy) is still a
   row, with `inJar: false` and none of those keys. A jar root that cannot be found is a
   `PRODUCER_ERROR` warning.
@@ -2667,9 +2669,9 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
     `extension`, `module`, `link`.
 - **`from: jar`: the source a jar was compiled from.** The key is what a `jar` row (§5.18) carries: a
   `sourceKey` (`<jar path>!com/x/Cache.java`) or a `spanKey` (`…#<line>#<name>`). The file is looked
-  for beside the jar as a `-sources.jar`, then under `roots:` in order, exactly as §5.19 says, and the
-  emits are §5.19's with its columns and ids: `files`, `spans` (`context`, default 6), `declarations`,
-  `calls` (§5.19's `callsites`: the calls on the key's line, with `receiverType`, `argumentTypes`,
+  for beside the jar as a `-sources.jar`, then under `roots:` in order, as §5.19 says, with §5.19's
+  emits, columns and ids: `files`, `spans` (`context`, default 6), `declarations`,
+  `calls` (the calls on the key's line, with `receiverType`, `argumentTypes`,
   `argumentTypesResolved` and `resolution: type` where the receiver's static type is known) and
   `locals`. `maxFileKb` defaults to 1024 for jar keys. A file in another language answers `files` and
   `spans`, with a warning for the rest; a file with syntax errors answers around them.
