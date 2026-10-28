@@ -2567,7 +2567,9 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
 - **The key is a project's location**: an https git URL, optionally `@ref` (a commit, tag or branch;
   the default branch without one), read at the commit it resolves to; or a folder under the world's
   `data/` tree, an operator-trusted root, or the folder the operator mounted for project keys. A git
-  project is read once per commit and kept; a folder is read afresh for each fetch.
+  project is read once per commit and kept; a folder is read afresh for each fetch. A tag or branch,
+  the default branch included, is resolved to its commit at most once a minute, so a pushed commit is
+  read by the first fetch a minute after it.
 - **Five emits, each row in the columns of a standard-model parent** (and a sixth, `captures`, below), so a realm's language children
   of those parents (`PythonDeclaration` under `SourceDeclaration`) carry them under the same names as
   Java's:
@@ -2597,6 +2599,12 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
     project's own.
   Every row carries `id`, `sourceId` (its file's `id`), `path`, `language`, `line`, `url`, `project`
   and `anchorKey`.
+- **`id` names a row where it was read, not what it is.** It holds the project as read
+  (`host/repo@<commit>` for a repository) and the row's line and column, so it changes with every commit
+  and whenever the code above it moves. It is the key to join rows of one read (`enclosingId = d.id`).
+  To keep anything about a declaration from one read to the next — a document named after it, a stored
+  note — name it by the project key, `path`, `kind`, `owner` and `name`, numbering the second and later
+  of one name in a file by line; and leave `text`'s line numbers out of anything compared across reads.
 - **A call or a reference is matched by name.** `resolution: name` says the callee or type is only
   known by its name: any function or type of that name may be the one meant. Present such a row as
   "calls something named `save`" or "uses a type named `Order`", never as a resolved edge; where two
