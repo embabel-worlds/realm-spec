@@ -4539,6 +4539,65 @@ Resolution order is the same as `views/`: world config tiers (`config/hints/`) f
 each installed realm's `hints/`, one parse failure costing that file — recorded against
 `realms/<name>` where its author will look — never the rest.
 
+## Validating a realm in CI
+
+`realm_validate` answers "would this load?" inside a running appliance. The same checks run with no
+appliance at all, so a realm repository can make them a **required check** — including on pull
+requests from forks, which can reach neither an appliance nor its MCP door. They cover what
+`realm_validate` covers: `realm.yml`, types and their parents, joins, producers and the governance
+their source can honour, views, rules, apps, side files, and the handler build.
+
+The validator ships in the appliance server image, `ghcr.io/embabel/assistant`, as a second command.
+The image you validate with is the appliance whose verdict you get, so pin the tag your users run
+when it matters; `latest` follows releases.
+
+**A realm that builds on other realms** names them. A realm that extends `realm-code-model`'s types,
+or joins through `realm-java-code`'s producers, does not load alone, and is not judged alone: each
+realm given as a dependency counts as installed beside it — its types and producers, not its own
+problems. The default world's types are always known, as they are in every world.
+
+### The reusable workflow
+
+```yaml
+# .github/workflows/validate.yml
+name: Validate
+on: [push, pull_request]
+jobs:
+  realm:
+    uses: embabel-worlds/realm-spec/.github/workflows/validate-realm.yml@main
+    with:
+      with: embabel-worlds/realm-code-model embabel-worlds/realm-java-code
+      # path: .            the realm's directory in this repository
+      # image: ghcr.io/embabel/assistant:<tag>
+      # strict: true       fail on warnings too
+```
+
+Then mark **`realm / validate`** required under the repository's branch protection. `with` takes
+`owner/repo`, `owner/repo@ref` (a branch or tag), or `./dir` in the same repository, separated by
+spaces or newlines. The workflow needs no secret and only `contents: read`; the checkout and every
+dependency are mounted read-only.
+
+### The same check anywhere else
+
+```bash
+docker run --rm --entrypoint realm-validate \
+  -v "$PWD:/realms/my-realm:ro" \
+  -v "$PWD/../realm-code-model:/with/realm-code-model:ro" \
+  ghcr.io/embabel/assistant:latest /realms/my-realm --with /with/realm-code-model
+```
+
+With the appliance CLI installed, `embabel realm validate . --with ../realm-code-model` runs the same
+image at the appliance's own version, with nothing running.
+
+| Option | Meaning |
+|---|---|
+| `--with <dir>` | a realm installed beside this one; repeatable |
+| `--json` | the report as JSON: `realm`, `ok`, `passed`, `errors`, `warnings`, `notes`, `problems[]` with `severity`, `message`, `suggestion` and `location` (`file`, `path`, `line`, `column`) |
+| `--strict` | fail on warnings as well as errors |
+
+Exit status `0` passes, `1` does not (an error, or a warning under `--strict`), and `2` could not
+validate — a directory that does not exist, or a check that itself failed. A note never fails.
+
 ## Installation
 
 Realms are installed as git repos cloned into the world's `config/realms/` directory:

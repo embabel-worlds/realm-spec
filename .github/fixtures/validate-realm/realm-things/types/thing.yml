@@ -1,0 +1,4 @@
+- name: Thing
+  description: Any thing.
+  properties:
+    id: { identity: true }
