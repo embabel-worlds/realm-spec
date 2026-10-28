@@ -2372,6 +2372,9 @@ each with the properties every language's rows carry; a realm declares its langu
 
 ### 5.19 `source` — the source a jar was compiled from
 
+`source-tree` with `from: jar` (§5.21) reads the same keys and returns the same rows; prefer it. This
+kind is retired with the next engine release.
+
 A `source` producer reads source files where they are, when a query reaches them, keyed by what a
 `jar` row (§5.18) already carries. Nothing is ingested; the rows are transient like any fetch.
 
@@ -2539,8 +2542,9 @@ the next — so a logged exception is one row however many lines its trace takes
 
 A `source-tree` producer reads a project's source files in TypeScript (and TSX), JavaScript (and JSX),
 Python, Go, Rust, C, C++, C#, Ruby, PHP, Kotlin, Scala, Swift and Java, parsing each with that
-language's grammar when a query reaches it. Nothing is ingested. Its Java rows are syntax, like every
-other language's: the `source` kind (§5.19) still reads Java with a parser that resolves types.
+language's grammar when a query reaches it. Nothing is ingested. Java has emits of its own besides,
+which name types by binary name and say what the file alone shows about types (below), and the kind
+also reads the source a jar was compiled from (`from: jar`), with the rows of §5.19.
 
 ```yaml
 - { name: pyDeclarations, kind: source-tree, emit: declarations, languages: [python] }
@@ -2637,6 +2641,51 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
   with the reason.
 - **What is not read.** Directories a build or package manager writes (`node_modules`, `target`,
   `build`, `out`, `.git`, …) are skipped. Generated files are read like any other.
+
+- **Java's own emits, by binary name.** A name is resolved as the file resolves it, from the file
+  alone: written qualified, a type the file declares (`pkg.Outer$Inner`), a single-type import,
+  `java.lang`, or (with no on-demand import that could supply it) the file's own package. Where an
+  on-demand import could, the name stays as written and the row says it is unresolved.
+  - `types`: each class, interface, enum, record and annotation type a project declares outside a
+    method or anonymous class — `name` (binary), `simpleName`, `packageName`, `kind`, `extends` and
+    `implements` (resolved), `annotations` (resolved), `annotationText`, `modifiers`, `isTopLevel`,
+    `line`, `lastLine`, `module` (the Maven module whose `pom.xml` directory holds the file; `''` for
+    the root), `link`.
+  - `members`: each field (one per variable), constructor and method of those types — `owner`
+    (binary), `name`, `kind`, `signature`, `type` (a field's element type, resolved), `returnType`,
+    `parameters`, `parameterTypes` (resolved), `annotations`, `modifiers`, and the declaration columns
+    (`fromLine`, `toLine`, `text`, `javadoc`, `annotationText`). Id: `<project>!<owner>#<name>(<parameter types>)`.
+  - `annotations`: each annotation written on a type, member or parameter, with its attributes as
+    written — `name`, `qualifiedName` (null where the file cannot say), `attributes` (`name=value`),
+    `value`/`values`, `text`, `targetKind`, `targetId`, `targetName`, `owner`.
+  - `imports` of a Java file carry, beside every language's columns, `name`, `isStatic`, `isWildcard`
+    and `packageName`.
+  - `configs`: every key of the project's `.properties` and YAML files, flattened to a dotted path
+    (`server.ssl.enabled`, `servers[0].url`), with `value` as written, `document` (of a multi-document
+    YAML file, from 0), `fileName`, `module` and `line`. YAML is composed, never constructed.
+  - `projectFiles`: every file of the project, whatever its language — `path`, `fileName`,
+    `extension`, `module`, `link`.
+- **`from: jar`: the source a jar was compiled from.** The key is what a `jar` row (§5.18) carries: a
+  `sourceKey` (`<jar path>!com/x/Cache.java`) or a `spanKey` (`…#<line>#<name>`). The file is looked
+  for beside the jar as a `-sources.jar`, then under `roots:` in order, exactly as §5.19 says, and the
+  emits are §5.19's with its columns and ids: `files`, `spans` (`context`, default 6), `declarations`,
+  `calls` (§5.19's `callsites`: the calls on the key's line, with `receiverType`, `argumentTypes`,
+  `argumentTypesResolved` and `resolution: type` where the receiver's static type is known) and
+  `locals`. `maxFileKb` defaults to 1024 for jar keys. A file in another language answers `files` and
+  `spans`, with a warning for the rest; a file with syntax errors answers around them.
+
+  ```yaml
+  - { name: javaSourceSpan,  kind: source-tree, from: jar, emit: spans, roots: [src], context: 6 }   # key: a spanKey
+  - { name: javaCallSitesAt, kind: source-tree, from: jar, emit: calls, roots: [src] }               # key: a spanKey
+  - { name: upstream,        kind: source-tree, from: jar, emit: declarations,
+      roots: [ { git: "https://github.com/acme/acme", ref: "v{version}" } ] }
+  ```
+
+  An argument's type is what the file shows: `new X(…)`, a literal, a cast, a parameter (a method's, a
+  typed lambda's, a catch clause's), a local declared before the call, a field of an enclosing type.
+  A method's return value, an inherited field, a parenthesized expression and a lambda's inferred
+  parameter are unknown (`""`), never guessed. Expressions (`arguments`, `receiver`, `initializer`,
+  a call's `text`) are as written, whitespace collapsed.
 
 Cost: the first query of a git project pays for a shallow, blob-less fetch of the commit and one
 fetch of the language files' contents; each file is parsed once, the first time an emit needs it, and
