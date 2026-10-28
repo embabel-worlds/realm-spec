@@ -2238,7 +2238,8 @@ RETURN f.name, a.method, a.access, a.lines
 **The contract:**
 
 - **`emit` is the collection, `by` is the selector.** `emit` is one of `artifact`, `packages`,
-  `types`, `fields`, `methods`, `accesses`, `calls`. With `by` absent (or `jarPath`) the key is a jar
+  `types`, `fields`, `methods`, `accesses`, `calls`, `casts`, `methodBodies`. With `by` absent (or
+  `jarPath`) the key is a jar
   path and every row of that collection is returned. With any other `by` the key is
   `<jar path>!<value>`, and the rows are those whose `by` property equals `value`, or — for a list
   property such as a type's `interfaces` — contains it. A `by` that is not a property of the
@@ -2285,6 +2286,47 @@ RETURN f.name, a.method, a.access, a.lines
 - **An access or a call is grouped by its target.** A method that reads a field on six lines is one
   `READ` row with six `lines`; a `WRITE` is an assignment. Adding to a collection held in a field is
   a `READ` of the field plus a call (`put`, `add`) in the same method.
+- **What the program casts at run time: `casts`.** One row per `checkcast` and `instanceof`
+  instruction in the jar's own method bodies, never grouped: `kind` (`cast` or `instanceof`),
+  `targetType` (binary name, an array as `T[]`; `targetTypeId` reaches the type when it is in the
+  jar, `internal` says so), `targetElementType` (the type without its brackets) and `isArray`;
+  `method`, the `methods` key of the method the instruction was written in, with `methodId`,
+  `methodOwner` and `methodName`; `line`, the source line from debug information; and `ordinal`, its
+  place among the method's casts and instanceofs, from 1. `key` is
+  `<method key> <kind> <targetType> #<ordinal>`. A cast inside a lambda belongs to the method the
+  lambda is written in, as a call or access there does, and `lambda` names the compiled lambda
+  (`lambda$parse$0`); `inSyntheticMethod` marks every cast the compiler placed in a method of its
+  own making. A row carries `sourceKey` and, with a line, `spanKey` `<sourceKey>#<line>#<word>`,
+  where the word is the target's simple name (`Entry` for `Map$Entry`, `int` for `int[]`).
+- **How a method's code branches: `methodBodies`.** One row per compiled method body — abstract
+  and native methods have none — counting what the compiler emitted: `branches` (every conditional
+  jump: `if`, `&&`, `||`, `?:`, a loop's test, a null check), `backEdges` (jumps to earlier code: one
+  per loop, as compiled), `switches` (switch instructions), `handlers` (distinct exception
+  handlers) and `catchAnyHandlers` (those catching anything: `finally`, `synchronized`), `casts`,
+  `instanceofs`, `instructions`, and `line`, `lastLine` and `lineSpan` from the line table.
+  `method` names the `methods` key the body belongs to — a lambda body (`isLambda`) belongs to
+  the method it is written in, so selecting `by: method` returns a method's own body and one per
+  lambda in it; sum them for the method as written. `key` is the
+  body's own: the method's key, a lambda's compiled name, or for a bridge (`isBridge`), which shares
+  its method's key, `<method key> returns <type>`. A synthetic accessor has no `method`.
+- **Bytecode counts are not source counts.** Both collections read what the compiler wrote, and a
+  reader comparing them with the source should expect:
+  - casts the source never wrote: a generic method's erased result (`String s = list.get(0)` is a
+    `checkcast String`), a bridge's argument, a pattern match (`o instanceof Foo f` is an
+    `instanceof` and a `cast`), an enum's `values()` (a cast of the cloned array), a Kotlin
+    smart cast;
+  - no row for what source calls a conversion: widening and narrowing between primitives
+    (`(int) aLong`), boxing and unboxing are other instructions, not casts;
+  - a switch on a string is two switch instructions (one on the hash code, one on the position)
+    plus an `equals` branch per label; a switch on an enum reads a synthetic lookup array first; a
+    pattern switch is an `invokedynamic` that picks the case, a switch on its answer, and a cast
+    per typed case;
+  - `&&`, `||`, `?:` and `assert` are branches; `for`, `while` and `do` compile to one back edge
+    each, and a `continue` that jumps back to a loop's test is another;
+  - `finally` code is copied into every exit path, so its branches and casts count once per copy;
+  - a compiler other than javac (kotlinc, scalac, a bytecode weaver) makes different choices, and
+    Kotlin's inlined functions report line numbers past the end of the file, which stretch
+    `lastLine` and `lineSpan`.
 - **Where a jar may be.** A relative path resolves against the world's `data/` tree, then against
   the declaring realm's own directory — so a realm can ship an example jar — and an absolute path
   must lie under a root the operator trusts. A key that names no readable jar there yields no rows
