@@ -2327,11 +2327,29 @@ RETURN f.name, a.method, a.access, a.lines
   - a compiler other than javac (kotlinc, scalac, a bytecode weaver) makes different choices, and
     Kotlin's inlined functions report line numbers past the end of the file, which stretch
     `lastLine` and `lineSpan`.
+- **A key names a jar, a war, or a folder of classes.** A key ending `.jar` is a jar. A key ending
+  `.war` is a web application's own code — what its `WEB-INF/classes` holds, the classes and the
+  resources beside them — and not its `WEB-INF/lib`, which is other people's: `warLibs` names the
+  library jars to read with it, by file name glob (`warLibs: [acme-*.jar]`); a library's class never
+  replaces the application's, nor an earlier library's, and its `META-INF` is not read. Any other key
+  is a folder of compiled classes: one module's `target/classes`, or a project's folder, whose every
+  module's classes are read — except test output below the key (`test-classes`, Gradle's
+  `classes/<language>/test`), which reads only when named as the key itself; where two modules compile
+  one class, the first in path order is read. A war or a folder answers every collection a jar does,
+  with the same properties, and its rows' ids start from the key as given:
+  `apps/shop.war!com.acme.Cache`, `src/shop/target/classes!com.acme.Cache` (a folder key's trailing
+  `/` is dropped, so both spellings give the same ids). In a folder's member keys the archive ends at
+  the LAST `!`. The `artifact` row says which it was: `packaging` is `jar`, `war` or `classes`; a
+  folder's `coordinate` is its project's folder name unless its classes carry a `pom.properties`,
+  and its `sha256` is of the classes, not of any file.
 - **Where a jar may be.** A relative path resolves against the world's `data/` tree, then against
   the declaring realm's own directory — so a realm can ship an example jar — and an absolute path
-  must lie under a root the operator trusts. A key that names no readable jar there yields no rows
-  and a `PRODUCER_ERROR` naming the key; a jar larger than `maxJarMb` (default 128) is refused the
-  same way, never half read.
+  must lie under a root the operator trusts. A key that names no readable jar, war or folder there
+  yields no rows and a `PRODUCER_ERROR` naming the key; a jar or war larger than `maxJarMb` (default
+  128) is refused the same way, never half read — for a war the size is what is read, its classes
+  and the named libraries, and for a folder the size of its class files. A folder is read again when
+  a file in it is added, removed or changed. On an appliance, `embabel data add <file|folder> --to jars`
+  puts one under the world's `data/` and prints the key to read it by.
 - **Filters in the MATCH narrow the read.** An equality, `IN`, `CONTAINS` or list membership on a
   property of the emitted collection is applied before rows reach the graph:
   `(j:Jar {path: $jar})-[:HAS_CALL]->(c:MethodCall {calleeOwner: 'java.lang.System'})` does not
@@ -2340,6 +2358,8 @@ RETURN f.name, a.method, a.access, a.lines
 
 Cost: a jar is read once and kept for later hops of the same and subsequent queries until it
 changes on disk, so the first query against a jar pays for reading it and the rest are lookups. A
+war or a folder costs the same plus copying its classes once each time it is read; a folder is also
+listed once per hop that reaches it, to see whether it changed. A
 whole-jar hop over a large jar is still many rows — tens of thousands of calls in a mid-sized
 library — and is subject to `maxFanoutTotal` like any other; reach those rows through a keyed hop, or
 narrow them in the MATCH.
@@ -2391,7 +2411,10 @@ RETURN c.caller, cs.receiver, cs.arguments, cs.argumentTypes
   `enclosingOwner`, and the numbered `text` of the declaration. Every row carries
   `id`, `sourceKey`, `jarPath` and `anchorKey`, so a span or declaration joins back to its file by
   `sourceKey`.
-- **Where source is looked for, in order.** A `<jar name>-sources.jar` beside the jar; then each root,
+- **Where source is looked for, in order.** A `<jar name>-sources.jar` beside the jar — for a war,
+  `<war name>-sources.jar` beside the war; for a folder of classes, the project it was built in, read
+  as a source tree (the folder above `target` or `build`: `shop/target/classes` finds
+  `shop/src/main/java/com/x/Cache.java`; a project folder named as the key is itself the tree); then each root,
   in the order declared — a `-sources.jar` named as a root, a `<jar name>-sources.jar` inside a root
   folder, the folder itself as a source tree, or a git repository. Paths resolve as a jar path does:
   the world's `data/` tree, an operator-trusted root, the declaring realm's own directory. In a tree a
