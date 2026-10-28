@@ -3519,6 +3519,32 @@ authority:
 `sampling` declares no temperature. Current models ignore a sampling temperature or reject one, so a
 host sets none; a `temperature` an agent file still declares is ignored.
 
+> **Open question: what `realms: []` means.** The table says what an omitted `realms` reaches, the
+> realm that ships the agent, but not what an empty list reaches: no realm, or every realm the world
+> has. A focus already says an empty `realms` means no realm skills. Shinar, a host built against
+> this spec, reads `[]` as no realm and an omitted field as the shipping realm (its decision D271,
+> which closed its limitation L329). Options: `[]` reaches no realm, as for a focus; `[]` reaches
+> every realm in the world; or `[]` is a validation error, so the author says which they meant.
+
+> **Open question: whether `builtins` covers only the host's own tools.** The table says `builtins`
+> keeps the host's own tools and that `realms` governs a realm's tools. It does not say what happens
+> to the tools an agent runtime brings with it, such as a coding agent's shell and file editing, when
+> a host runs the conversation on such an agent. Shinar narrows only the tools it serves itself, and
+> records that the agent's own tools are left alone, behind the agent's own permission asks, even
+> under `builtins: false` (D271, L329). Options: state that `builtins` governs only the tools the
+> host serves, and the runtime's own tools are out of its reach; or extend `builtins` to them, so a
+> host must turn off what a category does not keep, or refuse to run the agent on that runtime.
+
+> **Open question: what `views`, `memory`, `attachments`, `images` and `apps` keep.** The table
+> names eleven categories and defines none. Most read plainly enough for a host to place its tools,
+> but these five leave real choices open: whether `views` runs a realm's saved views or also writes
+> them, whether `memory` is the speaker's memory, the agent's, or both, whether `attachments` and
+> `images` are the files a person sends or files the agent makes, and whether `apps` runs a realm's
+> apps or builds new ones. Shinar maps the other six categories onto its tools and keeps nothing for
+> these five, with a warning on the agent file, since it has no tools it could place in them (D271,
+> L329). Options: define each category by what its tools do; define each by a list of reference
+> tools; or leave them to the host and require it to report which categories it honours.
+
 #### Scope it to the job
 
 An agent's conversation SHOULD reach the fewest tools its job needs, and a realm SHOULD name its
@@ -3550,6 +3576,26 @@ one of those categories; the skills `skills` names; and the few a host keeps on 
 world's own APIs, not a host tool or skill that belongs to no named category. A host SHOULD report the tool surface each turn
 was offered, so an author can check it, and an author SHOULD check it before judging how the agent
 behaves: an agent that misbehaves with tools it should not have is a scoping defect first.
+
+> **Open question: which tools every conversation keeps.** The paragraph above names "the few a host
+> keeps on every conversation" by example, its notes and progress reporting, but does not list them,
+> so an author cannot tell what `builtins: false` with `realms: []` still leaves. Shinar keeps, on
+> every conversation, the tools that list what the conversation may call and that read and stop its
+> own runs, and also the tools that reach a realm, each of which refuses a realm the conversation is
+> not bound to (D271, L329). Options: the spec lists the kept tools by purpose and a host keeps
+> nothing else; each host decides and reports them with the turn's tool surface; or the kept tools
+> become a category of their own that `builtins: false` can drop.
+
+> **Open question: how categories apply when namespaces are reached only through scripts.** On some
+> hosts the model reaches a host namespace only by writing a script that calls
+> `gateway.<namespace>.*`. A category then could apply in two places, the script tool and the
+> namespaces a script may call, and the spec does not say how they combine. Shinar places each host
+> namespace in a category, lets a script call only the namespaces of the named categories, and keeps
+> the script tools only with `code`, so a category whose tools are all namespaces gives nothing
+> without `code`; it warns on the agent file when that happens (D271, L329). Options: `code` keeps
+> the script tools and every other category only filters what a script may call, as Shinar does;
+> naming any such category also keeps the script tools, limited to its namespaces; or a category
+> covers only tools offered to the model directly, and a script reaches every host namespace.
 
 **Who can be talked to.** Only an agent that may work: signed, with a sponsor, active, not off duty,
 and in a world that is not halted. A host refuses a conversation with any other agent and says
