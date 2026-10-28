@@ -1,0 +1,100 @@
+# Would this realm load? `realm_validate`, as a required check on a realm repository — including on
+# pull requests from forks, which can reach neither a running appliance nor its MCP door.
+#
+# It runs the validator that ships in the appliance server image, so the answer is the one an
+# appliance at that image would give. Nothing is fetched from any source the realm declares, no
+# secret is needed, and the checkout is mounted read-only.
+#
+#   # .github/workflows/validate.yml in a realm repository
+#   on: [push, pull_request]
+#   jobs:
+#     realm:
+#       uses: embabel-worlds/realm-spec/.github/workflows/validate-realm.yml@main
+#       with:
+#         with: embabel-worlds/realm-code-model embabel-worlds/realm-java-code
+#
+# Then mark the `realm / validate` check required in the repository's branch protection.
+
+name: Validate realm
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: The realm's directory in the calling repository.
+        type: string
+        default: .
+      with:
+        description: >-
+          Realms installed beside it, whose types and producers it builds on — space- or
+          newline-separated. Each is `owner/repo`, `owner/repo@ref`, or `./dir` in the calling
+          repository.
+        type: string
+        default: ''
+      image:
+        description: The appliance server image whose validator decides.
+        type: string
+        default: ghcr.io/embabel/assistant:latest
+      strict:
+        description: Fail on warnings as well as errors.
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: realm
+          persist-credentials: false
+
+      # Inputs reach the shell as environment, never spliced into the script: a value from a
+      # caller's workflow is data.
+      - name: Check out the realms it is validated beside
+        id: beside
+        env:
+          WITH: ${{ inputs.with }}
+        run: |
+          set -euo pipefail
+          mkdir -p beside
+          mounts=() args=() i=0
+          for spec in $WITH; do
+            name="${spec%@*}"; name="${name%/}"; name="${name##*/}"
+            case "$spec" in
+              ./*|../*)
+                src="$GITHUB_WORKSPACE/realm/$spec"
+                [ -d "$src" ] || { echo "::error::--with $spec is not a directory in this repository"; exit 2; }
+                ;;
+              */*)
+                repo="${spec%@*}"; ref=""; [ "$repo" != "$spec" ] && ref="${spec#*@}"
+                src="$GITHUB_WORKSPACE/beside/$i-$name"
+                git clone --quiet --depth 1 ${ref:+--branch "$ref"} "https://github.com/$repo.git" "$src"
+                ;;
+              *) echo "::error::'$spec' is neither owner/repo[@ref] nor ./dir"; exit 2 ;;
+            esac
+            mounts+=(-v "$src:/with/$i/$name:ro"); args+=(--with "/with/$i/$name"); i=$((i + 1))
+          done
+          {
+            printf 'mounts=%s\n' "${mounts[*]:-}"
+            printf 'args=%s\n' "${args[*]:-}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Validate
+        env:
+          IMAGE: ${{ inputs.image }}
+          REALM_PATH: ${{ inputs.path }}
+          STRICT: ${{ inputs.strict && '--strict' || '' }}
+          MOUNTS: ${{ steps.beside.outputs.mounts }}
+          ARGS: ${{ steps.beside.outputs.args }}
+        run: |
+          set -euo pipefail
+          src="$(cd "$GITHUB_WORKSPACE/realm/$REALM_PATH" && pwd)"
+          name="$(basename "$src")"
+          # MOUNTS and ARGS are built above from directory names alone, so word-splitting them is safe.
+          # shellcheck disable=SC2086
+          docker run --rm --entrypoint realm-validate -v "$src:/realms/$name:ro" $MOUNTS \
+            "$IMAGE" "/realms/$name" $ARGS $STRICT

@@ -1,0 +1,44 @@
+# validate-realm.yml against two fixture realms: one that loads only beside the other passes when
+# given it, and is refused without it — so the check is neither vacuous nor wrong.
+#
+# Run by hand, naming the image: the validator ships in the appliance server image, and this is how
+# a new image is checked against the workflow before realm repositories rely on it.
+
+name: Test validate-realm
+
+on:
+  workflow_dispatch:
+    inputs:
+      image:
+        description: The appliance server image whose validator decides.
+        default: ghcr.io/embabel/assistant:latest
+
+permissions:
+  contents: read
+
+jobs:
+  passes-beside-its-dependency:
+    uses: ./.github/workflows/validate-realm.yml
+    with:
+      path: .github/fixtures/validate-realm/realm-widgets
+      with: ./.github/fixtures/validate-realm/realm-things
+      image: ${{ inputs.image }}
+      strict: true
+
+  refused-without-it:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: The same realm alone names the producer it cannot find, and exits 1
+        env:
+          IMAGE: ${{ inputs.image }}
+        run: |
+          set -uo pipefail
+          docker run --rm --entrypoint realm-validate \
+            -v "$PWD/.github/fixtures/validate-realm/realm-widgets:/realms/realm-widgets:ro" \
+            "$IMAGE" /realms/realm-widgets | tee report.txt
+          status=${PIPESTATUS[0]}
+          [ "$status" -eq 1 ] || { echo "::error::expected exit 1, got $status"; exit 1; }
+          grep -q "unknown producer 'thingsByKey'" report.txt || { echo "::error::the missing producer was not named"; exit 1; }
