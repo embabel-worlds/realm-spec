@@ -1612,6 +1612,22 @@ seeded, so a `cypher:` source reading it never sees an empty graph. `scheduled` 
 registered and removed with the realm. `manual` runs it only when asked. A run is always in the
 background; a second trigger while one is running is reported, not queued.
 
+**Asking for a run.** Any source, whatever its trigger, runs now when the user whose world installed the
+realm asks: `realm_sync_documents` (realm, and optionally one source) over MCP, or from an app through
+the app runtime's gateway, `gateway.realms.realmSyncDocuments({realm, source})`. It is the user's own
+world, read with the user's own scoping, so no developer mode is needed, and only new or changed
+documents are embedded. An app that records something a source reads — a project to index, a page to
+keep — asks for the run straight after, rather than leaving the record unread until the next schedule:
+
+```js
+await gateway.repository.createEntry({ type: 'IndexedProject', data: { key } });
+await gateway.realms.realmSyncDocuments({ realm: 'polyglot-code', source: 'code-declarations' });
+```
+
+The run's progress (`RUNNING`, with `records`, `processed`, `landed`, `ingested`) and outcome are under
+`documentSources` in `realm_status`, which an app reads as `gateway.realms.realmStatus({realm})`; an app
+declares both namespaces in its manifest (`"namespaces": ["repository", "realms"]`).
+
 **Pruning** removes documents this source holds that no record produced, and only after a COMPLETE
 run: an empty read or a failed record deletes nothing, because "the source returned nothing" and "the
 source is gone" are indistinguishable from the host's side.
