@@ -496,7 +496,7 @@ absence.
 | `sparql` | a **SPARQL 1.1 endpoint** (Wikidata, UniProt, an enterprise triplestore) queried with an authored SELECT template; the whole key batch lands in one `VALUES` clause (§5.14) | the anchor key, serialized into the query's `{{keys}}` token; rows echo it under `keyVar` |
 | `cypher` | a **remote openCypher graph** (Neo4j, Memgraph, Neptune — any engine speaking Bolt or openCypher-over-HTTP) queried with an authored read query; structurally read-only, governed by the shared `governance:` grammar (§5.15) | the anchor key batch, bound to `$keys`; rows echo it via the query's own RETURN |
 | `jar` | a **Java jar's classes**, read from the jar when a query reaches it — packages, types, fields, methods, field accesses and calls, with source lines; nothing ingested or stored (§5.18) | a jar path, or `<jar path>!<value>` for a property the producer selects `by` |
-| `source` | the **source a jar was compiled from** — files, spans of lines, declarations, call sites and local variables — read from a `-sources.jar`, a folder or a git commit when a query reaches it (§5.19) | a jar row's `sourceKey` or `spanKey` |
+| `source-tree` | a **project's source in fourteen languages**, parsed when a query reaches it — files, declarations with their annotations, imports, name-matched calls and the type names each file uses, in the standard model's code columns, and any syntax a realm's own query captures (§5.21) | a project's location: an https git URL (`@ref` optional) or a folder |
 | `stacktrace` | the **Java stack trace in a piece of text** — its throwables and frames, each frame naming the jar that compiled its class with that jar's keys (§5.20) | the text: a pasted trace, or a log event's `content` |
 | `files` | the world's **local files**, walked live under `data/` roots — one row per file, per line (`unit: line`) or per log event (`unit: event`, §5.20.1) | the owner key; free-text terms with `emit: search` |
 | `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
@@ -2237,7 +2237,8 @@ RETURN f.name, a.method, a.access, a.lines
 **The contract:**
 
 - **`emit` is the collection, `by` is the selector.** `emit` is one of `artifact`, `packages`,
-  `types`, `fields`, `methods`, `accesses`, `calls`. With `by` absent (or `jarPath`) the key is a jar
+  `types`, `fields`, `methods`, `accesses`, `calls`, `casts`, `methodBodies`. With `by` absent (or
+  `jarPath`) the key is a jar
   path and every row of that collection is returned. With any other `by` the key is
   `<jar path>!<value>`, and the rows are those whose `by` property equals `value`, or — for a list
   property such as a type's `interfaces` — contains it. A `by` that is not a property of the
@@ -2253,7 +2254,8 @@ RETURN f.name, a.method, a.access, a.lines
   `Owner.name(parameter types)`, constructors are `<init>` and a static initializer `<clinit>`.
 - **Only the jar's own classes are rows.** A supertype, field or callee outside the jar (the JDK,
   another library) is a name on the row that refers to it — `superclass`, `fieldOwner`,
-  `calleeOwner` — never a row of its own; `internal: false` marks those references. A field's
+  `calleeOwner` — never a row of its own; `internal: false` marks those references. A call row says
+  `resolution: exact`: bytecode names the method the runtime calls (§5.21). A field's
   `container` (`map`, `collection`, `array`, `threadlocal`, `reference`, `none`) is decided by its
   declared type and, for a type in the jar, that type's own supertypes down to the JDK.
 - **Generics are read from the class files.** A field carries `genericType`, its declared type with
@@ -2267,7 +2269,7 @@ RETURN f.name, a.method, a.access, a.lines
   class that supplies each: the type itself, an ancestor in the jar, a JDK ancestor, or
   `java.lang.Object` — identity. They are absent for an interface, and when an ancestor in another
   library would decide.
-- **Rows carry the keys a source producer selects on** (§5.19). Types, fields, methods, calls and
+- **Rows carry the keys a jar's source is read by** (§5.19). Types, fields, methods, calls and
   accesses carry `sourcePath` — the package path and the source file the class file records
   (`com/x/Cache.java`; a nested class shares its outer class's file) — and `sourceKey`,
   `<jar path>!<sourcePath>`. Methods, calls and accesses also carry `spanKey`,
@@ -2283,11 +2285,70 @@ RETURN f.name, a.method, a.access, a.lines
 - **An access or a call is grouped by its target.** A method that reads a field on six lines is one
   `READ` row with six `lines`; a `WRITE` is an assignment. Adding to a collection held in a field is
   a `READ` of the field plus a call (`put`, `add`) in the same method.
+- **What the program casts at run time: `casts`.** One row per `checkcast` and `instanceof`
+  instruction in the jar's own method bodies, never grouped: `kind` (`cast` or `instanceof`),
+  `targetType` (binary name, an array as `T[]`; `targetTypeId` reaches the type when it is in the
+  jar, `internal` says so), `targetElementType` (the type without its brackets) and `isArray`;
+  `method`, the `methods` key of the method the instruction was written in, with `methodId`,
+  `methodOwner` and `methodName`; `line`, the source line from debug information; and `ordinal`, its
+  place among the method's casts and instanceofs, from 1. `key` is
+  `<method key> <kind> <targetType> #<ordinal>`. A cast inside a lambda belongs to the method the
+  lambda is written in, as a call or access there does, and `lambda` names the compiled lambda
+  (`lambda$parse$0`); `inSyntheticMethod` marks every cast the compiler placed in a method of its
+  own making. A row carries `sourceKey` and, with a line, `spanKey` `<sourceKey>#<line>#<word>`,
+  where the word is the target's simple name (`Entry` for `Map$Entry`, `int` for `int[]`).
+- **How a method's code branches: `methodBodies`.** One row per compiled method body — abstract
+  and native methods have none — counting what the compiler emitted: `branches` (every conditional
+  jump: `if`, `&&`, `||`, `?:`, a loop's test, a null check), `backEdges` (jumps to earlier code: one
+  per loop, as compiled), `switches` (switch instructions), `handlers` (distinct exception
+  handlers) and `catchAnyHandlers` (those catching anything: `finally`, `synchronized`), `casts`,
+  `instanceofs`, `instructions`, and `line`, `lastLine` and `lineSpan` from the line table.
+  `method` names the `methods` key the body belongs to — a lambda body (`isLambda`) belongs to
+  the method it is written in, so selecting `by: method` returns a method's own body and one per
+  lambda in it; sum them for the method as written. `key` is the
+  body's own: the method's key, a lambda's compiled name, or for a bridge (`isBridge`), which shares
+  its method's key, `<method key> returns <type>`. A synthetic accessor has no `method`.
+- **Bytecode counts are not source counts.** Both collections read what the compiler wrote, and a
+  reader comparing them with the source should expect:
+  - casts the source never wrote: a generic method's erased result (`String s = list.get(0)` is a
+    `checkcast String`), a bridge's argument, a pattern match (`o instanceof Foo f` is an
+    `instanceof` and a `cast`), an enum's `values()` (a cast of the cloned array), a Kotlin
+    smart cast;
+  - no row for what source calls a conversion: widening and narrowing between primitives
+    (`(int) aLong`), boxing and unboxing are other instructions, not casts;
+  - a switch on a string is two switch instructions (one on the hash code, one on the position)
+    plus an `equals` branch per label; a switch on an enum reads a synthetic lookup array first; a
+    pattern switch is an `invokedynamic` that picks the case, a switch on its answer, and a cast
+    per typed case;
+  - `&&`, `||`, `?:` and `assert` are branches; `for`, `while` and `do` compile to one back edge
+    each, and a `continue` that jumps back to a loop's test is another;
+  - `finally` code is copied into every exit path, so its branches and casts count once per copy;
+  - a compiler other than javac (kotlinc, scalac, a bytecode weaver) makes different choices, and
+    Kotlin's inlined functions report line numbers past the end of the file, which stretch
+    `lastLine` and `lineSpan`.
+- **A key names a jar, a war, or a folder of classes.** A key ending `.jar` is a jar. A key ending
+  `.war` is a web application's own code — what its `WEB-INF/classes` holds, the classes and the
+  resources beside them — and not its `WEB-INF/lib`, which is other people's: `warLibs` names the
+  library jars to read with it, by file name glob (`warLibs: [acme-*.jar]`); a library's class never
+  replaces the application's, nor an earlier library's, and its `META-INF` is not read. Any other key
+  is a folder of compiled classes: one module's `target/classes`, or a project's folder, whose every
+  module's classes are read — except test output below the key (`test-classes`, Gradle's
+  `classes/<language>/test`), which reads only when named as the key itself; where two modules compile
+  one class, the first in path order is read. A war or a folder answers every collection a jar does,
+  with the same properties, and its rows' ids start from the key as given:
+  `apps/shop.war!com.acme.Cache`, `src/shop/target/classes!com.acme.Cache` (a folder key's trailing
+  `/` is dropped, so both spellings give the same ids). In a folder's member keys the archive ends at
+  the LAST `!`. The `artifact` row says which it was: `packaging` is `jar`, `war` or `classes`; a
+  folder's `coordinate` is its project's folder name unless its classes carry a `pom.properties`,
+  and its `sha256` is of the classes, not of any file.
 - **Where a jar may be.** A relative path resolves against the world's `data/` tree, then against
   the declaring realm's own directory — so a realm can ship an example jar — and an absolute path
-  must lie under a root the operator trusts. A key that names no readable jar there yields no rows
-  and a `PRODUCER_ERROR` naming the key; a jar larger than `maxJarMb` (default 128) is refused the
-  same way, never half read.
+  must lie under a root the operator trusts. A key that names no readable jar, war or folder there
+  yields no rows and a `PRODUCER_ERROR` naming the key; a jar or war larger than `maxJarMb` (default
+  128) is refused the same way, never half read — for a war the size is what is read, its classes
+  and the named libraries, and for a folder the size of its class files. A folder is read again when
+  a file in it is added, removed or changed. On an appliance, `embabel data add <file|folder> --to jars`
+  puts one under the world's `data/` and prints the key to read it by.
 - **Filters in the MATCH narrow the read.** An equality, `IN`, `CONTAINS` or list membership on a
   property of the emitted collection is applied before rows reach the graph:
   `(j:Jar {path: $jar})-[:HAS_CALL]->(c:MethodCall {calleeOwner: 'java.lang.System'})` does not
@@ -2296,6 +2357,8 @@ RETURN f.name, a.method, a.access, a.lines
 
 Cost: a jar is read once and kept for later hops of the same and subsequent queries until it
 changes on disk, so the first query against a jar pays for reading it and the rest are lookups. A
+war or a folder costs the same plus copying its classes once each time it is read; a folder is also
+listed once per hop that reaches it, to see whether it changed. A
 whole-jar hop over a large jar is still many rows — tens of thousands of calls in a mid-sized
 library — and is subject to `maxFanoutTotal` like any other; reach those rows through a keyed hop, or
 narrow them in the MATCH.
@@ -2306,18 +2369,24 @@ each with the properties every language's rows carry; a realm declares its langu
 (`JavaMethod` with `parents: [Method]`) over its own producers, as memory systems are children of
 `Memory` (§6.8). A query naming a parent is answered by every language with a join.
 
-### 5.19 `source` — the source a jar was compiled from
+### 5.19 `source-tree` with `from: jar` — the source a jar was compiled from
 
-A `source` producer reads source files where they are, when a query reaches them, keyed by what a
+The `source-tree` kind (§5.21) with `from: jar` reads a jar's source; the `source` kind that did before
+is retired: a producer file that still writes `kind: source` does not load, and the realm reports it as a
+problem naming the file.
+Change `kind: source` to `kind: source-tree, from: jar` and `emit: callsites` to `emit: calls`: keys,
+ids and columns are as they were.
+
+A `from: jar` producer reads source files where they are, when a query reaches them, keyed by what a
 `jar` row (§5.18) already carries. Nothing is ingested; the rows are transient like any fetch.
 
 ```yaml
-- { name: javaSourceFile,  kind: source, emit: files,        roots: [src] }               # key: a sourceKey
-- { name: javaSourceSpan,  kind: source, emit: spans,        roots: [src], context: 6 }   # key: a spanKey
-- { name: javaDeclaration, kind: source, emit: declarations, roots: [src] }               # sourceKey or spanKey
-- { name: javaCallSites,   kind: source, emit: callsites,    roots: [src] }               # key: a spanKey
-- { name: javaLocals,      kind: source, emit: locals,       roots: [src] }               # sourceKey or spanKey
-- { name: upstream,        kind: source, emit: spans,
+- { name: javaSourceFile,  kind: source-tree, from: jar, emit: files,        roots: [src] }             # key: a sourceKey
+- { name: javaSourceSpan,  kind: source-tree, from: jar, emit: spans,        roots: [src], context: 6 } # key: a spanKey
+- { name: javaDeclaration, kind: source-tree, from: jar, emit: declarations, roots: [src] }             # sourceKey or spanKey
+- { name: javaCallSites,   kind: source-tree, from: jar, emit: calls,        roots: [src] }             # key: a spanKey
+- { name: javaLocals,      kind: source-tree, from: jar, emit: locals,       roots: [src] }             # sourceKey or spanKey
+- { name: upstream,        kind: source-tree, from: jar, emit: spans,
     roots: [ { git: "https://github.com/acme/acme", ref: "v{version}" } ] }
 ```
 
@@ -2335,9 +2404,11 @@ RETURN c.caller, cs.receiver, cs.arguments, cs.argumentTypes
   word the key expects appears on them — and `inRange`. `declarations` returns, for a `sourceKey`,
   every type, field, constructor, method and initializer the file declares, or for a `spanKey` the
   innermost one around the line: `kind`, `name`, binary `owner`, `fromLine` / `toLine`, `signature`,
-  `modifiers`, `annotations`, `javadoc`, and for a member its numbered `text`. `callsites` returns the
+  `modifiers`, `annotations` (names), `annotationText` (each in full, as written), `javadoc`, and for
+  a member its numbered `text`. `calls` returns the
   calls on a `spanKey`'s line whose method (or, for a constructor, class) is the key's word: `receiver`,
-  `receiverType`, `arguments`, `argumentTypes`, `argumentTypesResolved`, `enclosing`. `locals` returns,
+  `receiverType`, `arguments`, `argumentTypes`, `argumentTypesResolved`, `enclosing`, and
+  `resolution`: `type` when the receiver's static type is known, else `name` (§5.21). `locals` returns,
   for a `sourceKey`, every local variable the file declares, or for a `spanKey` those of the method,
   constructor or initializer around the line: `kind` (`local`, `for`, `foreach`, `resource`,
   `pattern`), `name`, `line`, `declaredType` as written, `isVar`, `isFinal`, `initializer`,
@@ -2345,7 +2416,10 @@ RETURN c.caller, cs.receiver, cs.arguments, cs.argumentTypes
   `enclosingOwner`, and the numbered `text` of the declaration. Every row carries
   `id`, `sourceKey`, `jarPath` and `anchorKey`, so a span or declaration joins back to its file by
   `sourceKey`.
-- **Where source is looked for, in order.** A `<jar name>-sources.jar` beside the jar; then each root,
+- **Where source is looked for, in order.** A `<jar name>-sources.jar` beside the jar — for a war,
+  `<war name>-sources.jar` beside the war; for a folder of classes, the project it was built in, read
+  as a source tree (the folder above `target` or `build`: `shop/target/classes` finds
+  `shop/src/main/java/com/x/Cache.java`; a project folder named as the key is itself the tree); then each root,
   in the order declared — a `-sources.jar` named as a root, a `<jar name>-sources.jar` inside a root
   folder, the folder itself as a source tree, or a git repository. Paths resolve as a jar path does:
   the world's `data/` tree, an operator-trusted root, the declaring realm's own directory. In a tree a
@@ -2357,9 +2431,9 @@ RETURN c.caller, cs.receiver, cs.arguments, cs.argumentTypes
   the same rows come back whatever the tag later points at. Only https URLs are accepted, held to the
   same address rule as any fetched URL; a repository needing credentials is refused, not waited on.
   The first read of a commit lists its files; a file's content is fetched the first time it is read.
-- **Declarations and call sites need a syntax tree.** They answer for Java source; a file in another
-  language answers `files` and `spans`, and these two emits return nothing for it with a
-  `PRODUCER_ERROR` warning saying so, as does a file that does not parse. An argument's type is
+- **Declarations, call sites and locals need a syntax tree.** They answer for Java source; a file in
+  another language answers `files` and `spans`, and these emits return nothing for it with a
+  `PRODUCER_ERROR` warning saying so. A file with syntax errors answers around them. An argument's type is
   resolved from the file alone — `new X(…)`, a literal, a cast, a parameter, a local declared before
   the call, a field of an enclosing type — through the file's own types, single-type imports,
   `java.lang` and the file's package. A type only another file could explain is returned as written
@@ -2427,7 +2501,7 @@ RETURN f.exception, f.className, f.method, f.line, d.text
   A frame a jar compiled carries `jarPath`, `inJar: true`, `javaTypeId`, `sourceKey` and — when it
   names a file and a line — `spanKey` and `methodAtKey` (the key of the jar's `by: at`: the method
   the line was in, §5.18), spelled exactly as that jar's own rows spell them (§5.18), so
-  it joins to the jar's types and the source producer's spans and declarations (§5.19) with no
+  it joins to the jar's types and the spans and declarations of its source (§5.19) with no
   translation. A frame no jar compiled (the JDK, a library not mounted, a generated proxy) is still a
   row, with `inJar: false` and none of those keys. A jar root that cannot be found is a
   `PRODUCER_ERROR` warning.
@@ -2465,6 +2539,168 @@ the next — so a logged exception is one row however many lines its trace takes
   Logback/Log4j, time-level-logger, timestamp-then-level, java.util.logging and level-first layouts are tried in turn.
 - **Matching.** Under `emit: search` or a `content CONTAINS` filter, the term is judged against the
   whole event. A file is read up to `contentCapKb`; events past it are not returned.
+
+### 5.21 `source-tree` — a project's source in any of fourteen languages
+
+A `source-tree` producer reads a project's source files in TypeScript (and TSX), JavaScript (and JSX),
+Python, Go, Rust, C, C++, C#, Ruby, PHP, Kotlin, Scala, Swift and Java, parsing each with that
+language's grammar when a query reaches it. Nothing is ingested. Java has emits of its own besides,
+which name types by binary name and say what the file alone shows about types (below), and the kind
+also reads the source a jar was compiled from (`from: jar`), with the rows of §5.19.
+
+```yaml
+- { name: pyDeclarations, kind: source-tree, emit: declarations, languages: [python] }
+- { name: allFiles,       kind: source-tree, emit: files }                 # every language
+- { name: goCalls,        kind: source-tree, emit: calls, languages: [go], maxFileKb: 256 }
+- { name: javaMetrics,    kind: source-tree, emit: captures, languages: [java], query: queries/java-metrics.scm }
+```
+
+```cypher
+// Which handler serves a route, whatever the language: decorators, annotations and attributes alike
+MATCH (p:CodeProject {key: 'https://github.com/acme/shop'})-[:DECLARES]->(d:SourceDeclaration)
+WHERE any(a IN d.annotationText WHERE a CONTAINS '/items/{id}')
+RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
+```
+
+**The contract:**
+
+- **The key is a project's location**: an https git URL, optionally `@ref` (a commit, tag or branch;
+  the default branch without one), read at the commit it resolves to; or a folder under the world's
+  `data/` tree, an operator-trusted root, or the folder the operator mounted for project keys. A git
+  project is read once per commit and kept; a folder is read afresh for each fetch. A tag or branch,
+  the default branch included, is resolved to its commit at most once a minute, so a pushed commit is
+  read by the first fetch a minute after it.
+- **Five emits, each row in the columns of a standard-model parent** (and a sixth, `captures`, below), so a realm's language children
+  of those parents (`PythonDeclaration` under `SourceDeclaration`) carry them under the same names as
+  Java's:
+  - `files` (`Source`): `root`, `path`, `language`, `lines`, `sha256`, `commit` (git), `url` (on a
+    host with a file view), `parsed`, and `errors` — the number of syntax errors the file's tree holds.
+    Error recovery keeps everything around a broken region, so a file with errors still answers.
+  - `declarations` (`SourceDeclaration`): each class, interface, struct, enum, trait, module,
+    namespace, `impl`, function, method, constructor, field, variable and constant the language
+    has: `kind`, `name`, `owner` (the enclosing types, outermost first, `.`-joined; a Go receiver or
+    C++'s `Order::total` names its type explicitly), `fromLine` / `toLine`, `signature` (up to the body,
+    on one line, without annotations), `javadoc` (the doc comment above it, or a docstring), the
+    numbered `text` of a non-type declaration (at most 400 lines), `annotations` (the names of its
+    decorators, annotations or attributes) and `annotationText` (each in full).
+  - `imports` (`SourceImport`): `imported` (what it imports from: a module, package, path or header),
+    `names` (what it brings in, in source order; empty for a whole module), `alias`, `isStatic` (false).
+  - `calls` (`CallSite`): `method` (the called name), `receiver` (what it is called on, as written),
+    `arguments` (each as written), `enclosing` (the function or method it is in — for a call inside a
+    decorator or attribute, the declaration it decorates), `receiverType` and `argumentTypes` (empty:
+    syntax does not say) and `resolution`, always `name`.
+  - `references` (`SourceReference`): each name used where a type goes — a parameter's, field's or
+    return type, a base class or interface, a generic argument, an annotation, a constructor call — as
+    `name` (the last segment, as written), `enclosing` (the innermost declaration it is used in: a
+    field's type is used in the field; empty at the top level) and `resolution`, always `name`. A
+    declaration's own name is not a reference (`class Order` does not use `Order`), nor is a generic
+    parameter inside the declaration that declares it (`T` in `class Box<T>`). A built-in type
+    (`string`, `int`) is a reference like any other; join to the project's declarations to keep the
+    project's own.
+  Every row carries `id`, `sourceId` (its file's `id`), `path`, `language`, `line`, `url`, `project`
+  and `anchorKey`.
+- **`id` names a row where it was read, not what it is.** It holds the project as read
+  (`host/repo@<commit>` for a repository) and the row's line and column, so it changes with every commit
+  and whenever the code above it moves. It is the key to join rows of one read (`enclosingId = d.id`).
+  To keep anything about a declaration from one read to the next — a document named after it, a stored
+  note — name it by the project key, `path`, `kind`, `owner` and `name`, numbering the second and later
+  of one name in a file by line; and leave `text`'s line numbers out of anything compared across reads.
+- **A call or a reference is matched by name.** `resolution: name` says the callee or type is only
+  known by its name: any function or type of that name may be the one meant. Present such a row as
+  "calls something named `save`" or "uses a type named `Order`", never as a resolved edge; where two
+  of the project's types share a name, say so. Java's rows say `exact` (from bytecode, §5.18) or `type` (the receiver's
+  static type is known, §5.19).
+- **`languages` narrows what is read** to the named languages (empty reads them all). A name no
+  language has is refused with a `PRODUCER_ERROR` warning listing the languages there are.
+- **`captures` runs the realm's own query.** `query:` names a tree-sitter query file (`.scm`) in the
+  realm, relative to its root, and `languages:` names the one language whose grammar it is written
+  against. Each node the query captures is one row: `capture` (the capture's name, without `@`),
+  `nodeType` (the grammar's name for the node, `cast_expression`), `text` (the node's text, whitespace
+  collapsed, at most 200 characters), `line` / `column` / `toLine` / `toColumn` (where its first and
+  last characters are), `match` (an id shared by the captures of one match, so a cast and its
+  `@cast.type` are read together), `pattern` (the pattern's index in the query, from 0), and the
+  innermost declaration it is in: `enclosingId` (that declaration's `declarations` row `id`, so
+  `WHERE c.enclosingId = d.id` joins them), `enclosing` (its name) and `enclosingKind` (empty at the top
+  level). A node two patterns capture under one name is one row. Text predicates (`#eq?`, `#not-eq?`,
+  `#match?`, `#any-of?`) are applied.
+
+  ```scheme
+  ; queries/java-metrics.scm
+  (if_statement) @if
+  [(for_statement) (enhanced_for_statement) (while_statement) (do_statement)] @loop
+  (cast_expression type: (_) @cast.type) @cast
+  ```
+
+  ```cypher
+  // Ifs per method, longest first; commented-out code is a comment node, so it never counts
+  MATCH (p:CodeProject {key: $project})-[:CAPTURES]->(c:JavaCapture {capture: 'if'})
+  RETURN c.path, c.enclosing, count(*) AS ifs ORDER BY ifs DESC
+  ```
+
+  Refused with a `PRODUCER_ERROR` warning and no rows: a query file the realm does not have, one with
+  a character outside ASCII (tree-sitter would silently lose its end; the warning names the line), and
+  one that does not compile against the grammar (the warning gives tree-sitter's row and column).
+  Refused when the realm is loaded: `query:` on another emit, `captures` without `query:`, a `query:`
+  that leaves the realm (`..`, a leading `/`), and `captures` naming other than one language. A file
+  capturing more than `maxCaptures` nodes (default 10000, at most 100000) answers its first
+  `maxCaptures` and is reported. Captures are not kept: each fetch parses the files again.
+- **Each file is bounded.** A file larger than `maxFileKb` (default 512, at most 4096) is not read; a
+  file that takes longer than `parseTimeoutMs` (default 2000, at most 60000) to parse is abandoned;
+  past `maxFiles` (default 20000) source files the rest are not read. Each is a `PRODUCER_ERROR`
+  warning naming the file, never a half-read file. A key that names no readable project is a warning
+  with the reason.
+- **What is not read.** Directories a build or package manager writes (`node_modules`, `target`,
+  `build`, `out`, `.git`, …) are skipped. Generated files are read like any other.
+
+- **Java's own emits, by binary name.** A name is resolved as the file resolves it, from the file
+  alone: written qualified, a type the file declares (`pkg.Outer$Inner`), a single-type import,
+  `java.lang`, or (with no on-demand import that could supply it) the file's own package. Where an
+  on-demand import could, the name stays as written and the row says it is unresolved.
+  - `types`: each class, interface, enum, record and annotation type a project declares outside a
+    method or anonymous class — `name` (binary), `simpleName`, `packageName`, `kind`, `extends` and
+    `implements` (resolved), `annotations` (resolved), `annotationText`, `modifiers`, `isTopLevel`,
+    `line`, `lastLine`, `module` (the Maven module whose `pom.xml` directory holds the file; `''` for
+    the root), `link`.
+  - `members`: each field (one per variable), constructor and method of those types — `owner`
+    (binary), `name`, `kind`, `signature`, `type` (a field's element type, resolved), `returnType`,
+    `parameters`, `parameterTypes` (resolved), `annotations`, `modifiers`, and the declaration columns
+    (`fromLine`, `toLine`, `text`, `javadoc`, `annotationText`). Id: `<project>!<owner>#<name>(<parameter types>)`.
+  - `annotations`: each annotation written on a type, member or parameter, with its attributes as
+    written — `name`, `qualifiedName` (null where the file cannot say), `attributes` (`name=value`),
+    `value`/`values`, `text`, `targetKind`, `targetId`, `targetName`, `owner`.
+  - `imports` of a Java file carry, beside every language's columns, `name`, `isStatic`, `isWildcard`
+    and `packageName`.
+  - `configs`: every key of the project's `.properties` and YAML files, flattened to a dotted path
+    (`server.ssl.enabled`, `servers[0].url`), with `value` as written, `document` (of a multi-document
+    YAML file, from 0), `fileName`, `module` and `line`. YAML is composed, never constructed.
+  - `projectFiles`: every file of the project, whatever its language — `path`, `fileName`,
+    `extension`, `module`, `link`.
+- **`from: jar`: the source a jar was compiled from.** The key is what a `jar` row (§5.18) carries: a
+  `sourceKey` (`<jar path>!com/x/Cache.java`) or a `spanKey` (`…#<line>#<name>`). The file is looked
+  for beside the jar as a `-sources.jar`, then under `roots:` in order, as §5.19 says, with §5.19's
+  emits, columns and ids: `files`, `spans` (`context`, default 6), `declarations`,
+  `calls` (the calls on the key's line, with `receiverType`, `argumentTypes`,
+  `argumentTypesResolved` and `resolution: type` where the receiver's static type is known) and
+  `locals`. `maxFileKb` defaults to 1024 for jar keys. A file in another language answers `files` and
+  `spans`, with a warning for the rest; a file with syntax errors answers around them.
+
+  ```yaml
+  - { name: javaSourceSpan,  kind: source-tree, from: jar, emit: spans, roots: [src], context: 6 }   # key: a spanKey
+  - { name: javaCallSitesAt, kind: source-tree, from: jar, emit: calls, roots: [src] }               # key: a spanKey
+  - { name: upstream,        kind: source-tree, from: jar, emit: declarations,
+      roots: [ { git: "https://github.com/acme/acme", ref: "v{version}" } ] }
+  ```
+
+  An argument's type is what the file shows: `new X(…)`, a literal, a cast, a parameter (a method's, a
+  typed lambda's, a catch clause's), a local declared before the call, a field of an enclosing type.
+  A method's return value, an inherited field, a parenthesized expression and a lambda's inferred
+  parameter are unknown (`""`), never guessed. Expressions (`arguments`, `receiver`, `initializer`,
+  a call's `text`) are as written, whitespace collapsed.
+
+Cost: the first query of a git project pays for a shallow, blob-less fetch of the commit and one
+fetch of the language files' contents; each file is parsed once, the first time an emit needs it, and
+kept with the commit. A folder is listed and its files parsed again on each fetch. A repository of a
+few hundred files is read, from a cold git cache, in about ten seconds.
 
 ## 6. Vector edges — semantic joins in depth
 

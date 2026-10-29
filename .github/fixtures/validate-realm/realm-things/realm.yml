@@ -1,0 +1,3 @@
+name: things
+description: Fixture for validate-realm.yml. Declares Thing and the producer that fetches it.
+version: 0.1.0

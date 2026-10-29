@@ -781,7 +781,7 @@ Producer `kind`s:
 | `generative` | **GENERATES** the edge (resumably) rather than reading it — an LLM's world knowledge (`SIMILAR_TO`, `IN_INDUSTRY`) or a code function | pluggable generator (`llm` \| `function`); keeps generating; resolves each answer onto the type spine; provenance-stamped |
 | `aggregate` | **REDUCES** an anchor's connected neighborhood to ONE node (fan-IN) — e.g. a per-principal or per-organization summary distilled from many rows | gathers via a scoped graph read; delegates the reduction to an existing LLM aggregation (`synthesize`/`summarize`/…); TTL-cache = periodic refresh |
 | `jar` | a **Java jar's classes**, read from the jar when a query reaches it — types, fields, methods, field accesses, calls | `emit:` the collection, `by:` the row property the key selects on; no ingestion, nothing stored — see [Virtual Cypher §5.18](./VIRTUAL_CYPHER.md#518-jar--a-java-jars-classes-as-a-keyed-source) |
-| `source` | the **source a jar was compiled from** — files, spans, declarations, call sites | `emit:`, `roots:` (folders, `-sources.jar`s, `{git, ref}`); keyed by a jar row's `sourceKey` / `spanKey` — see [Virtual Cypher §5.19](./VIRTUAL_CYPHER.md#519-source--the-source-a-jar-was-compiled-from) |
+| `source-tree` with `from: jar` | the **source a jar was compiled from** — files, spans, declarations, call sites, locals | `emit:`, `roots:` (folders, `-sources.jar`s, `{git, ref}`); keyed by a jar row's `sourceKey` / `spanKey` — see [Virtual Cypher §5.19](./VIRTUAL_CYPHER.md#519-source-tree-with-from-jar--the-source-a-jar-was-compiled-from) |
 
 > **Naming:** `kind: remote` is the current spelling for an externally-backed repository; `kind: api` is accepted as a back-compat alias and still works in existing realms.
 
@@ -1271,7 +1271,7 @@ Two consequences follow from the fact that a reference is an INLINE of the body,
 | `name` | yes | What it is run and matched by. A node view may NOT be named like a label the world already holds — matching that label anywhere, including inside other views, would silently come to mean "the nodes this view selects". |
 | `cypher` | yes | The body. Standard Cypher, parsed by the real parser; there is no `DEFINE VIEW` statement and no subquery form. |
 | `description` | no | What it answers, for the Views list and for a model choosing between views. |
-| `params` | no | Declared bind values, each with a `type` (`string`, `int`, `number`, `float`, `double`, `boolean`, `date`), a `description`, and ideally a `default` so the view stays runnable bare. One value each: a view needing a list reads it inside its own body rather than taking `IN $p`. |
+| `params` | no | Declared bind values, each with a `type` (`string`, `int`, `number`, `float`, `double`, `boolean`, `date`), a `description`, and ideally a `default` so the view stays runnable bare. A param with no default must be supplied, unless it declares `required: false`: then an invocation may omit it and it is bound to `null` (so `WHERE $p IS NULL OR x.k = $p` skips the filter). An explicit `null` argument is accepted for any param — it takes the default when one is declared, and is bound as `null` otherwise. `default: null` alone does not make a param optional; declare `required: false`. One value each: a view needing a list reads it inside its own body rather than taking `IN $p`. |
 | `outputLabel` | inferred | The type a node view's rows are. **Inferred** when the body returns a single bare node variable, which is why most views never declare it. REQUIRED on a `materialized` view, where there is nothing to infer from until the body runs. |
 | `materialized` | no | `false` (default) expands the body at query time, always fresh. `true` commits the result and reads the cache until the TTL expires — the interactive query then does no producer calls at all. |
 | `ttl` | no | Cache lifetime for a materialized view (`30m`, `2h`, `1d`). Default `1h`. Ignored when regular. |
@@ -1601,6 +1601,7 @@ sources:
       # sourceModifiedAt: "{{ edition }}"#   the version token; see below for the default
       sourceKind: bible                  # the store, generically; defaults to the realm name
       tags: [bible, kjv]                 # stamped on every document and chunk
+    # extractEntities: false             # skip the per-document entity pass; see below (default true)
     sync:
       trigger: on-install                # on-install | scheduled | manual
       schedule: "0 0 3 * * SUN"          # six-field cron, host zone, for `scheduled`
@@ -1635,6 +1636,14 @@ background; a second trigger while one is running is reported, not queued.
 **Pruning** removes documents this source holds that no record produced, and only after a COMPLETE
 run: an empty read or a failed record deletes nothing, because "the source returned nothing" and "the
 source is gone" are indistinguishable from the host's side.
+
+**Entities.** Like any ingested document, each one a source lands is read once more after it is
+stored, by a model that finds the people, organizations and other entities it mentions and links the
+document to the ones the graph already holds: one model call per document landed. A source whose
+records already *are* graph entities — code declarations, a catalogue read from `reference/` — gains
+nothing from that pass, so it declares `extractEntities: false` and its documents are stored,
+chunked and embedded with no model call. The default is `true`, and a world that has turned the pass
+off for all documents keeps it off whatever a source declares.
 
 **Status.** Each run's outcome — `COMPLETE`, `PARTIAL` (some records failed; retried next trigger),
 `EMPTY` (no records; nothing pruned), `FAILED` (with the reason) — is recorded per world and reported
@@ -4637,6 +4646,65 @@ pre-typed, not pre-sent, so the question stays the user's to edit. `surface` kee
 Resolution order is the same as `views/`: world config tiers (`config/hints/`) first, then
 each installed realm's `hints/`, one parse failure costing that file — recorded against
 `realms/<name>` where its author will look — never the rest.
+
+## Validating a realm in CI
+
+`realm_validate` answers "would this load?" inside a running appliance. The same checks run with no
+appliance at all, so a realm repository can make them a **required check** — including on pull
+requests from forks, which can reach neither an appliance nor its MCP door. They cover what
+`realm_validate` covers: `realm.yml`, types and their parents, joins, producers and the governance
+their source can honour, views, rules, apps, side files, and the handler build.
+
+The validator ships in the appliance server image, `ghcr.io/embabel/assistant`, as a second command.
+The image you validate with is the appliance whose verdict you get, so pin the tag your users run
+when it matters; `latest` follows releases.
+
+**A realm that builds on other realms** names them. A realm that extends `realm-code-model`'s types,
+or joins through `realm-java-code`'s producers, does not load alone, and is not judged alone: each
+realm given as a dependency counts as installed beside it — its types and producers, not its own
+problems. The default world's types are always known, as they are in every world.
+
+### The reusable workflow
+
+```yaml
+# .github/workflows/validate.yml
+name: Validate
+on: [push, pull_request]
+jobs:
+  realm:
+    uses: embabel-worlds/realm-spec/.github/workflows/validate-realm.yml@main
+    with:
+      with: embabel-worlds/realm-code-model embabel-worlds/realm-java-code
+      # path: .            the realm's directory in this repository
+      # image: ghcr.io/embabel/assistant:<tag>
+      # strict: true       fail on warnings too
+```
+
+Then mark **`realm / validate`** required under the repository's branch protection. `with` takes
+`owner/repo`, `owner/repo@ref` (a branch or tag), or `./dir` in the same repository, separated by
+spaces or newlines. The workflow needs no secret and only `contents: read`; the checkout and every
+dependency are mounted read-only.
+
+### The same check anywhere else
+
+```bash
+docker run --rm --entrypoint realm-validate \
+  -v "$PWD:/realms/my-realm:ro" \
+  -v "$PWD/../realm-code-model:/with/realm-code-model:ro" \
+  ghcr.io/embabel/assistant:latest /realms/my-realm --with /with/realm-code-model
+```
+
+With the appliance CLI installed, `embabel realm validate . --with ../realm-code-model` runs the same
+image at the appliance's own version, with nothing running.
+
+| Option | Meaning |
+|---|---|
+| `--with <dir>` | a realm installed beside this one; repeatable |
+| `--json` | the report as JSON: `realm`, `ok`, `passed`, `errors`, `warnings`, `notes`, `problems[]` with `severity`, `message`, `suggestion` and `location` (`file`, `path`, `line`, `column`) |
+| `--strict` | fail on warnings as well as errors |
+
+Exit status `0` passes, `1` does not (an error, or a warning under `--strict`), and `2` could not
+validate — a directory that does not exist, or a check that itself failed. A note never fails.
 
 ## Installation
 

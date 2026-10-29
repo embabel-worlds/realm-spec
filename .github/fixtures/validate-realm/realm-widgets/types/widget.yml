@@ -1,0 +1,10 @@
+- name: Widget
+  description: A widget.
+  properties:
+    id: { identity: true }
+    thingKey: "The thing it is made of."
+
+# A join into the other realm, declared with joins only: declarations of one type name merge.
+- name: Thing
+  virtualJoins:
+    - { anchorLabel: Widget, relationship: MADE_OF, keyField: thingKey, recordKeyField: key, producer: thingsByKey }

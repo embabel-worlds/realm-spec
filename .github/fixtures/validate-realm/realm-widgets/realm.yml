@@ -1,0 +1,3 @@
+name: widgets
+description: Fixture for validate-realm.yml. Joins into realm-things, so it loads only beside it.
+version: 0.1.0
