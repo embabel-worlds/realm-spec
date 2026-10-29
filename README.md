@@ -1584,6 +1584,8 @@ sources:
     sync:
       trigger: on-install                # on-install | scheduled | manual
       schedule: "0 0 3 * * SUN"          # six-field cron, host zone, for `scheduled`
+      # watch:                           # a cheap read that changes when the records may have; see below
+      #   cypher: MATCH (e:Edition) RETURN e.id AS edition, e.publishedAt AS at
       prune: true                        # remove documents no record produces any more
 ```
 
@@ -1611,6 +1613,31 @@ has changed since, or when its last run did not complete — after the realm's `
 seeded, so a `cypher:` source reading it never sees an empty graph. `scheduled` runs it on its cron,
 registered and removed with the realm. `manual` runs it only when asked. A run is always in the
 background; a second trigger while one is running is reported, not queued.
+
+**Watching for changes.** A source whose records are expensive to read but rarely change declares
+`sync.watch`: a `cypher:` read, cheap to run, whose rows change whenever the records may have — a
+project's commit, an edition's date. The host reads it about once a minute for every world that has
+the realm installed and loaded, and runs the source when the rows differ from those of its last
+COMPLETE run, so a change is picked up within a minute or two whatever the trigger. A scheduled or
+`on-install` run whose watch is unchanged ends there, reading nothing else: it is reported as
+`UNCHANGED` and leaves the last run's outcome in place. A run that is asked for (below), a changed
+declaration, and a last run that did not complete always read every record. A watch that cannot be
+read changes nothing and is tried again at the next check. The watch is only a trigger: each record's
+version token still decides what is embedded, so a watch that changes more often than the records
+costs a read, never an embedding.
+
+```yaml
+    sync:
+      trigger: on-install
+      watch:
+        cypher: |                        # one row per project: changes when a commit lands
+          MATCH (ip:IndexedProject)-[:AT]->(v:ProjectVersion)
+          RETURN ip.key AS project, v.version AS version
+      prune: true
+```
+
+`realm_status` reports, beside a watched source's last run, `checkedAt`: when a watch last found it
+current.
 
 **Asking for a run.** Any source, whatever its trigger, runs now when the user whose world installed the
 realm asks: `realm_sync_documents` (realm, and optionally one source) over MCP, or from an app through

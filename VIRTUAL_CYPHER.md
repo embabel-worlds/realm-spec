@@ -2570,7 +2570,8 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
   project is read once per commit and kept; a folder is read afresh for each fetch. A tag or branch,
   the default branch included, is resolved to its commit at most once a minute, so a pushed commit is
   read by the first fetch a minute after it.
-- **Five emits, each row in the columns of a standard-model parent** (and a sixth, `captures`, below), so a realm's language children
+- **Five emits, each row in the columns of a standard-model parent** (and a sixth, `captures`, and a
+  seventh, `version`, below), so a realm's language children
   of those parents (`PythonDeclaration` under `SourceDeclaration`) carry them under the same names as
   Java's:
   - `files` (`Source`): `root`, `path`, `language`, `lines`, `sha256`, `commit` (git), `url` (on a
@@ -2599,6 +2600,12 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
     project's own.
   Every row carries `id`, `sourceId` (its file's `id`), `path`, `language`, `line`, `url`, `project`
   and `anchorKey`.
+- **`version` says whether the project changed, without reading it.** One row per project key:
+  `project` (as read), `commit` (a repository's, the default branch or `@ref` resolved as above) and
+  `version` — the commit, or for a folder a digest of every file's path, size and modification time.
+  No file is read or parsed, so it is cheap enough to ask every minute; it is what a `documents`
+  source watches (README, `sync.watch`) to re-read a project only when a commit lands. A folder's
+  `version` moves when a file is added, removed or rewritten, even with the same bytes.
 - **`id` names a row where it was read, not what it is.** It holds the project as read
   (`host/repo@<commit>` for a repository) and the row's line and column, so it changes with every commit
   and whenever the code above it moves. It is the key to join rows of one read (`enclosingId = d.id`).
