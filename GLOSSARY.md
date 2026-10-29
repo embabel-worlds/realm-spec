@@ -139,9 +139,29 @@ every adopted consumer has checkpointed past may be reclaimed by the host.
 
 ## Source and dependency identity
 
+**Definition import**: a permitted import evaluated as part of `realm.ts`, before admission.
+It supplies declaration data, not permission to execute a handler or access host capabilities.
+
 **Realm source**: `realm.ts` and its captured definition imports. The evaluated default object
 is the authored declaration; no YAML or manifest is generated from it. YAML-only realms are
-legacy and retain their existing loading behavior.
+legacy and follow the [source selection and migration rules](TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility).
+
+**Module digest**: SHA-256 of the actual module bytes. Resolution, verification and operator
+admission use this identity regardless of local filename or download location.
+
+**Publisher**: a party or application that makes a realm or module available. Under the
+[Realm Publishing Protocol](PUBLISHERS.md), a publisher is an application exposing a manifest
+and the operations it describes, from which a world builds a realm. Publisher identity is
+separate from a module digest, version label or download location; those do not prove it.
+
+**Registry**: an operator-configured source of dependency module bytes, selected by name
+or as the default when `from` is absent. Resolution verifies the declared digest. A registry
+need not provide name/version lookup, identify a publisher or grant execution permission.
+
+**Calling kind**: the contract used to invoke a dependency module, such as `sqlite`,
+`pure-compute` or `string-method`. The operator's allowlist determines it for the module name
+and digest. A declaration may request a matching kind or omit `kind` to use that module's
+kind. If none can be determined, the dependency is refused before any call executes.
 
 **Realm version**: the author's semantic compatibility label. It is not an integrity check,
 a publisher identity, an SDK version or a target specification revision.
@@ -149,11 +169,12 @@ a publisher identity, an SDK version or a target specification revision.
 **Module version**: an exact dependency label of one to three numeric components. It is not
 necessarily a semantic version and is never a substitute for the module's SHA-256 digest.
 
-**Module digest**: SHA-256 of the actual module bytes. Resolution, verification and operator
-admission use this identity regardless of local filename, registry or URL.
-
 **Captured realm identity**: the captured files' paths, executable bits and content digests.
 Moving or renaming a file creates a new revision even when its bytes have not changed.
+
+**Source composition**: assembling one realm's definition from local definition imports.
+The resulting declaration shares one captured realm identity and authority. It does not
+import another realm or compose the installed graph.
 
 **Installation revision**: the host's identity for an installed capture and its admission
 state. A source URL or realm version cannot replace it in an authorization decision.

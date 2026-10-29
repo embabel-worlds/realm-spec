@@ -9,7 +9,8 @@ a realm repository commits no generated declaration files.
 This document specifies the observable declaration contract. The
 [composition guide](REALM_COMPOSITION.md) teaches how to assemble it. A realm's version is its
 own compatibility label, not a host contract version or a module digest. This specification,
-not an SDK's acceptance rules, decides what a declaration means.
+not an SDK's acceptance rules, decides what a declaration means. Source and dependency terms
+follow the [glossary](GLOSSARY.md#source-and-dependency-identity).
 
 Most examples below use `execution: "captured"`. A captured realm runs from a verified copy
 the owner has admitted, with separately approved capabilities. A conventional realm omits
@@ -26,7 +27,7 @@ in the two profiles. A host must refuse a declaration in the wrong profile, nami
 | `realm.ts` only | Evaluate it and validate its resulting declaration. |
 | `realm.ts` plus `realm.yml` or legacy declaration folders | Use only the evaluated TypeScript declaration. Report the ignored declaration paths, whether they agree or conflict. Do not merge them or fill absent TypeScript fields from them. |
 | Invalid or unsupported `realm.ts` plus valid YAML | Refuse the TypeScript declaration with its diagnostic. Never fall back to YAML. |
-| No `realm.ts` | Keep reading the legacy `realm.yml` and its folders exactly as before, including committed `dist/` and `dependencies/manifest.json`. No migration is required. |
+| No `realm.ts` | Read the legacy `realm.yml` and its folders, including committed `dist/` and `dependencies/manifest.json`, subject to capability-specific migrations such as the [retired `source` producer kind](VIRTUAL_CYPHER.md#519-source-tree-with-from-jar--the-source-a-jar-was-compiled-from). No TypeScript migration is required. |
 
 The precedence rule includes adjacent handler and dependency manifests and stale generated
 declarations. It does not discard resources explicitly referenced by `realm.ts`, such as SQL,
@@ -45,10 +46,24 @@ Definition imports may reference captured, realm-relative TypeScript or JavaScri
 and exact `#` subpath mappings in the realm's `package.json` `imports` object. These mappings
 must resolve to relative files inside the realm. A `tsconfig.json` path alias alone does not
 declare a runtime mapping. No import may escape the captured realm, including through a
-symlink. Type-only imports are erased and confer no runtime capability. A host may offer
-documented, versioned authoring helpers; it must refuse unsupported bare package imports,
-host built-ins, remote imports and unresolved imports rather than install or fetch packages.
-An authoring helper has the same evaluation restrictions as local definition code.
+symlink. Type-only imports are erased and confer no runtime capability.
+
+The host provides `@embabel/realm-types` version `0.1.0` for definition imports without a
+`package.json` or a declared package dependency. The bundled version guarantee is exactly
+`0.1.0`; it does not imply support for other versions. Authors may import the package root
+or an existing source file as `@embabel/realm-types/<file>.ts`, for example
+`@embabel/realm-types/handlers.ts` or `@embabel/realm-types/types.ts`. Subpaths must stay
+inside that package; an absent source file is refused. An explicit `package.json`
+`dependencies` entry for `@embabel/realm-types` takes precedence for the root and its
+subpaths. Its version comes from `package-lock.json`, and it passes the same package lock
+and integrity checks as other declared packages; failure never falls back to the bundled
+helper. Editor checks use the matching SDK version.
+
+A host may offer other documented, versioned authoring helpers and locked package imports.
+It must refuse unsupported bare package imports, host built-ins, remote imports and
+unresolved imports. Package declarations do not grant arbitrary package installation or
+network access during definition evaluation. An authoring helper or imported package has
+the same evaluation restrictions as local definition code.
 
 Evaluation must be deterministic and free of external side effects. It may construct values
 with functions, loops and object spread. It may not read files except by the permitted import
@@ -70,12 +85,10 @@ unpaired surrogates in the text fields of goals, triggers, producers, lenses, wa
 pipes, view references, apps, credentials and API entries. This validation applies regardless
 of SDK checks.
 
-**Implementation status, 2026-10-27:** direct TypeScript reading exists, but complete import
-confinement, deterministic evaluation and the source precedence above have not all been
-established by conformance evidence. In particular, older loaders can still consult adjacent
-manifests. Do not treat those behaviors as permission to depend on ambient files or stale
-declarations. A host that cannot safely evaluate a definition must refuse it. Support for
-arbitrary npm validators or package resolution is not implied.
+A host that cannot safely evaluate a definition must refuse it. Definition evaluation uses
+only permitted imports and explicitly referenced resources. Adjacent legacy declarations
+cannot supply missing fields or override the evaluated object. Arbitrary npm validators
+and unrestricted package resolution are outside this contract.
 
 ### SDK assistance (non-normative)
 
@@ -858,7 +871,7 @@ source does not change admission, dispatch, state identity or permission.
 | `module` | Required human-readable module name, `[a-z0-9][a-z0-9-]*`. It labels the dependency and its operator policy. |
 | `version` | Required exact version, one to three dot-separated numbers. No range, `latest` or moving tag. This grammar is not full SemVer. |
 | `sha256` | Required SHA-256 of the module bytes, exactly 64 lowercase hexadecimal characters. One digest per dependency for now. |
-| `kind` | Required for new declarations; `[a-z][a-z0-9-]{0,63}`. The calling contract requested, such as `sqlite`, `pure-compute` or `string-method`. The allowlist, not this claim, determines permitted behavior. Unknown or incompatible kinds refuse the dependency before a call executes. |
+| `kind` | Optional; when present, `[a-z][a-z0-9-]{0,63}`. The [calling kind](GLOSSARY.md#source-and-dependency-identity) requested, such as `sqlite`, `pure-compute` or `string-method`. When omitted, the host takes the calling kind from the operator-allowed module identified by `module` and `sha256`. If that module does not determine a calling kind, the dependency is refused with `NOT_ALLOWED` before any call executes. An explicit unknown or incompatible kind is also refused with `NOT_ALLOWED`; the declaration never widens the allowlist. |
 | `methods` | Optional record of method signatures, with `args` and `returns`. It narrows what may be called; it never widens the allowlist. SQLite uses its fixed API and must omit this field. |
 | `from` | Source string or one-tag object, described below. Omission selects the operator's default registry source. |
 | `license` | Optional license identifier or expression describing the module. |
@@ -911,11 +924,10 @@ file or separate list to maintain. Legacy YAML realms keep loading
 inference and module policy remain intact. This is legacy compatibility, not an alternate
 source declaration for a TypeScript realm.
 
-**Implementation status, 2026-10-27:** digest-addressed byte sources, verification and
-per-dependency admission exist. The complete `from` parser, named registry selection,
-install-time URL sourcing and explicit declared-kind validation above are the required
-contract, not a claim that all current hosts enforce them. Older readers can ignore added
-fields. A host advertising this contract must enforce them or refuse the unsupported source.
+A host validates the declared source and any explicit calling kind, verifies the module
+bytes and admits each dependency separately. It refuses an unsupported source explicitly
+and never substitutes another source or silently ignores its fields. A refused dependency
+does not prevent unrelated dependencies from being admitted.
 
 ### Dependency examples
 

@@ -1,6 +1,6 @@
 ---
 name: realm-authoring
-description: Author or extend an Embabel realm — a git repo of declarative capabilities (actions, types, APIs, virtual-join producers/RemoteRepositories, MCP servers, commands, webhooks, event sources, event handlers, skills, personalities, apps) that a host installs into a world. Activate for any request to create/build/scaffold/extend a realm, add a capability to a realm (a new action, type, API, producer, virtual join, verb, webhook, event source, event handler/reaction, skill, command), wire a new integration as a realm, or understand the realm format. The full contract is the spec at the repo root (README.md) — this skill is the map; read the named section before writing a file.
+description: Author or extend an Embabel realm, a git repo of declarative capabilities (actions, types, APIs, virtual joins that fetch remote records, MCP servers, commands, webhooks, event sources, event handlers, skills, personalities, apps) that a host installs into a world. Activate for any request to create/build/scaffold/extend a realm, add a capability to a realm (a new action, type, API, producer, virtual join, verb, webhook, event source, event handler/reaction, skill, command), wire a new integration as a realm, or understand the realm format. The full contract is the spec at the repo root (README.md); this skill is the map; read the named section before writing a file.
 ---
 
 # Authoring an Embabel realm
@@ -9,7 +9,8 @@ description: Author or extend an Embabel realm — a git repo of declarative cap
 as needed. The host reads it directly. Do not generate or commit YAML or manifests from it.
 Start with [Composing a realm](../../REALM_COMPOSITION.md) and the
 [TypeScript contract](../../TYPESCRIPT_REALMS.md). Existing YAML realms remain readable
-unchanged and receive no new YAML features. The directory recipes below describe that legacy
+under the [legacy compatibility and migration rules](../../TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility)
+and receive no new YAML features. The directory recipes below describe that legacy
 format and existing capability semantics; they are not a second declaration to create beside
 `realm.ts`. A realm contains no JVM bytecode, host configuration or user credentials.
 
@@ -83,7 +84,7 @@ checkout is mounted.
 | a voice/persona | `personalities/` | "`personalities/`" |
 | a scoped chat surface | `focuses/` | "`focuses/`" |
 
-## Virtual joins + RemoteRepositories (the on-demand path)
+## Virtual joins that fetch remote records (the on-demand path)
 
 For large/volatile external collections, don't mirror — **virtual-join** them: declare
 `virtualJoins:` on the type and a **producer** (a Repository over the source) in

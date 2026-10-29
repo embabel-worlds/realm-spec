@@ -7,8 +7,8 @@ may be imported and merged; see [Composing a realm](REALM_COMPOSITION.md). The h
 the evaluated record directly, without YAML or decorator generation.
 
 YAML and decorator declarations below describe existing legacy realms. They remain readable
-unchanged and receive no new YAML features. In a realm with `realm.ts`, those legacy
-declarations are ignored under the [source selection rules](TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility).
+under the capability-specific migration rules and receive no new YAML features. In a realm
+with `realm.ts`, those legacy declarations are ignored under the [source selection rules](TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility).
 The static class-reference guarantees below apply to legacy decorators, not string references
 in a `realm.ts` object. The host checks those references after evaluation.
 

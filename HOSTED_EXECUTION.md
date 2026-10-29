@@ -11,8 +11,8 @@ which shows each declaration in `realm.ts` form and links back to the sections h
 
 Hosts read `realm.ts` directly under the [definition evaluation rules](TYPESCRIPT_REALMS.md#definition-evaluation).
 The entire transitive definition import graph is subject to those rules before admission.
-Handler isolation does not make unrestricted definition evaluation safe. Complete confinement
-and deterministic evaluation have not yet been demonstrated for every host.
+Handler isolation does not make unrestricted definition evaluation safe. A host must enforce
+confinement and deterministic evaluation before admitting the declaration, or refuse it.
 
 File-form declarations below describe legacy compatibility. They do not require generating
 or committing files from `realm.ts`, and do not add features to YAML. When both forms are

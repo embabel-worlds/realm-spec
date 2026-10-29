@@ -183,8 +183,10 @@ the normative source, import and precedence rules, and [Composing a realm](REALM
 for complete examples. No tool converts it to YAML or manifests, and no generated declaration
 files are committed.
 
-YAML realms are legacy and remain supported unchanged, including their committed `dist/`
-and `dependencies/manifest.json`. YAML receives no new features. When `realm.ts` is present,
+YAML realms are legacy and remain supported, including their committed `dist/` and
+`dependencies/manifest.json`, subject to capability-specific migrations. In particular,
+producers using `kind: source` must follow the [`source-tree` migration](VIRTUAL_CYPHER.md#519-source-tree-with-from-jar--the-source-a-jar-was-compiled-from).
+YAML receives no new features. When `realm.ts` is present,
 its evaluated value supplies the whole declaration; adjacent legacy declarations are reported
 and ignored, even if they differ. Invalid TypeScript never falls back to YAML.
 
@@ -4145,7 +4147,7 @@ Prompt contributions — optional content **appended to every chat system prompt
 
 > **⚠️ Tax on every chat turn.** Bytes you add here are paid by every user, every turn, even when they're not invoking your realm. Hosts enforce a soft size ceiling (Embabel's reference host: 1024 bytes/realm, configurable via `assistant.realm-loader.prompt-max-bytes`); over-budget realms still load but the host surfaces a warning in the world problems list.
 >
-> **Treat `prompts/` as a pointer, not a manual.** Tell the LLM the capability *exists* and where to find the routing detail. Put the actual workflow examples in a [Skill](#skills--skill-descriptors), which the LLM activates on demand only when relevant — paid only when used.
+> **Treat `prompts/` as a pointer, not a manual.** Tell the LLM the capability *exists* and where to find the routing detail. Put the actual workflow examples in a [Skill](#skills), which the LLM activates on demand only when relevant, so its content is paid for only when used.
 
 ### Recommended shape
 
