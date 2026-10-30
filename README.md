@@ -1450,6 +1450,23 @@ at a cap gives you a subset that systematically excludes the present. Only the r
 needs the whole partition, and partial fetching cannot be made safe by narrowing. This mismatch is
 the single best predictor that a collection wants `strategy: mirror` rather than `live`.
 
+It is not a verdict on its own. When every question is bounded by a partition the source DOES fetch
+by (one firm's record, a date window), a live read takes that partition whole and narrows on the
+other axes locally, over a complete set. Say so by naming the partition as `filterableAtSource`
+names it:
+
+```yaml
+partition: firmId                 # the fetch key, named as filterableAtSource names it
+queriedBy: [firmId, isFormerRepresentative]
+filterableAtSource: [firmId]      # the register cannot filter the flag; it reads a firm whole
+sync: { strategy: live }
+```
+
+The platform warns about `strategy: live` only when an unfiltered axis is bounded by no partition
+the source fetches by, so each question would need the whole collection. Whether one partition fits
+a read is the producer's page budget, reported per read as truncation. Mirror when partitions
+outgrow it, or when questions must cross partitions.
+
 **`watermarkFilterable`.** A record may CARRY a last-updated timestamp without the source being able
 to FILTER on it. The first permits incremental refresh; the second forces a full re-walk with a local
 diff. Assume the wrong one and a day of changes vanishes silently. Declare it.
