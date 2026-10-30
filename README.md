@@ -1811,6 +1811,17 @@ realm-hubspot/
 
 Use this when the upstream provider has stopped publishing OpenAPI specs (or never did), or when you want to pin a specific subset of operations and types without depending on a moving public URL. HTTP(S) and `file://` URLs work too — the relative-path mode is just the most ergonomic for vendored specs.
 
+**A realm's producers call the realm's own APIs.** A producer's `operation:` names an operation by
+its bare id, and another installed realm may ship an operation of the same id — two realms each
+vendoring Wikipedia's page summary both expose `pageSummary`. A producer declared by a realm resolves
+to the operation that realm's own `apis/` (or handlers) supply, wherever the other realm's sits, so
+each realm's fetches go out through its own entry, with its own headers and credentials. Give the
+API entry a `name` of the realm's own (`bible_wikipedia_summary`): API names are unique in a world,
+operation ids need not be. Only a producer whose realm supplies no such operation — or a
+world-authored producer, which belongs to no realm — can land on another realm's copy; the host
+warns about that once, and a conversation bound to both realms refuses that fetch, naming both
+candidates.
+
 ### Auth
 
 Four auth modes plus the implicit headers-only path:
