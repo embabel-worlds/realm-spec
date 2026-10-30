@@ -579,10 +579,14 @@ without the allowance:
 - a total beyond twice `maxPages`, cursor paging, and a walk whose page one reports no total stop at
   `maxPages`;
 - a total that under-reports the book extends the walk past `maxPages` only as far as the page that
-  total named, and a full page there still warns.
+  total named, plus the confirming page when that total is an exact multiple of `size`. That
+  confirming page may return the rest of the book: if it comes back short, the answer is complete
+  with no warning. The warning is raised only when the last page the walk may read is still full.
 
 A cost quote prices each call to a producer that declares `total` at up to twice `maxPages` pages,
-so a quote never under-states the pages a walk may take.
+so a quote never under-states the pages a walk may take. Pages requested together after page one
+all count toward `apiCalls`, including pages read past the point where the walk stopped, whose
+records are discarded.
 
 Example: `paging: { style: page, param: page, size: 50, maxPages: 5, total: meta.total }`.
 
@@ -593,6 +597,8 @@ Example: `paging: { style: page, param: page, size: 50, maxPages: 5, total: meta
 | 250 | 5 | 250 | `PARTIAL_RESULT` (`TRUNCATED`) |
 | 500 | 10 | 500 | `PARTIAL_RESULT` (`TRUNCATED`) |
 | 1,100 | 5 | 250 | `PARTIAL_RESULT` (`TRUNCATED`) |
+| 300, source holds 320 | 6 full, then 1 of 20 | 320 | none |
+| 300, source holds 400 | 7 full | 350 | `PARTIAL_RESULT` (`TRUNCATED`) |
 
 The **LLM-backed** kinds (`generative`'s `generator:`, `aggregate`'s `reduce:`, `extract`'s `extract:`) take optional
 per-edge tuning — `role:`, a portable, world-defined model role id such as `chat_cheap`; **never a
