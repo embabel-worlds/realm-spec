@@ -264,12 +264,15 @@ RETURN t.name,
         <tr><td><code>score(text, rubric)</code></td><td>one number 0–1</td></tr>
         <tr><td><code>holds(text, claim)</code></td><td>true / false / null</td></tr>
         <tr><td><code>relevant(text, criterion)</code></td><td>only the matching items</td></tr>
+        <tr><td><code>relevant(node, criterion)</code></td><td>the matching <b>nodes</b> — they flow on through <code>WITH</code>/<code>UNWIND</code></td></tr>
         <tr><td><code>argmax(key, text, criterion)</code></td><td>the winner</td></tr>
         <tr><td><code>render(text[, instruction])</code></td><td>prose keeping every item, in order, hedges intact</td></tr>
         <tr><td><code>correlate(x, y)</code></td><td>Pearson r with CI + <code>detectable</code> — <b>arithmetic, no model call</b></td></tr>
         <tr><td><code>regress([x1, …], y, label)</code></td><td>OLS fit: r², named betas, above/below-prediction rows — <b>deterministic</b></td></tr>
       </table>
       <div class="rule never"><b>never</b><span><code>ORDER BY score(...)</code> — an aggregation is finalized after ordering, so it cannot be ordered by.</span></div>
+      <div class="rule care"><b>nodes</b><span><code>relevant</code>, <code>classify</code>, <code>holds</code>, <code>score</code> take a node too: the model reads its labels, properties and their declared descriptions. A kept node is one of the group's own — the model cannot cite anything it was not shown.</span></div>
+      <div class="rule care"><b>per group</b><span>The criterion may be an expression of the grouping key: <code>WITH i, relevant(c, 'the same problem as: ' + i.summary) AS tracked</code>. Reading an aggregated variable there is refused.</span></div>
     </section>
     <section data-tags="cluster aggregations llm">
       <h2>cluster — groups you can count</h2>
@@ -296,6 +299,70 @@ RETURN d.title, ai.classify(d, 'urgency')</code></pre>
         <tr><td>steer a fetch</td><td><code>{ai: {hint: '…'}}</code> on the edge</td></tr>
       </table>
       <div class="rule care"><b>note</b><span>Non-deterministic and fail-open: a model error keeps rows rather than dropping them.</span></div>
+    </section>
+      </div>
+    </div>
+  </details>
+  <details class="theme" open data-theme-tags="text projected pipeline writes identity">
+    <summary class="theme-head">
+      <span class="theme-name">From text, and one query as a pipeline</span>
+      <span class="theme-lede">Project a typed shape out of prose, build on it, ask the spine for keys — all in ordinary Cypher.</span>
+      <span class="theme-count"></span>
+    </summary>
+    <div class="theme-body">
+      <div class="grid">
+    <section data-tags="text projected llm">
+      <h2>ai.fromText — a graph out of prose</h2>
+      <p class="lede">The pattern is the shape; its labels come from realm types marked <code>projected: true</code>, and their descriptions are what the model reads.</p>
+      <pre><code>CALL ai.fromText($email,
+  '(p:Attendee)-[:RAISED]-&gt;(i:Issue),
+   (p)-[:WORKS_FOR]-&gt;(a:CustomerAccount)')
+  YIELD p, i, a
+RETURN p.name, i.summary, a.name</code></pre>
+      <table>
+        <tr><th>A variable in the pattern…</th><th>is</th></tr>
+        <tr><td>already bound</td><td>an <b>anchor</b> — attached to, never created</td></tr>
+        <tr><td>of a projected type</td><td><b>created</b> for this run only</td></tr>
+        <tr><td>of a world type</td><td><b>resolved</b> by its spine — never invented</td></tr>
+      </table>
+      <div class="rule must"><b>true</b><span>Nothing it creates is stored or seen by another run.</span></div>
+      <div class="rule care"><b>model</b><span>Role <code>vc_extraction</code>; one call may name another role: <code>ai.fromText(t, pattern, {role: 'chat_best'})</code> — a role, never a model.</span></div>
+      <div class="rule care"><b>said</b><span>Declined (a freemail sender), unresolved and ambiguous come back as <code>PROJECTION_*</code> warnings — never as a silent empty.</span></div>
+    </section>
+    <section data-tags="pipeline writes projected">
+      <h2>One query is a pipeline</h2>
+      <p class="lede"><code>CREATE</code>/<code>MERGE</code> of projected types write the run's scratch: the rest of the query sees them, nothing else does. Read-only means read-only <i>with respect to the store</i>.</p>
+      <pre><code>CALL ai.fromText($notes, '(t:Attendee)-[:RAISED]-&gt;(i:Issue),
+  (t)-[:WORKS_FOR]-&gt;(a:CustomerAccount)') YIELD t, i, a
+WITH DISTINCT i, a
+MATCH (a)-[:HAS_CASE]-&gt;(c:SupportCase)
+WHERE c.status IN ['open','pending']
+WITH i, relevant(c, 'the same problem as: ' + i.summary) AS tracked
+UNWIND tracked AS tc
+CREATE (i)-[:TRACKED_BY]-&gt;(tc)
+WITH count(*) AS linked
+MATCH (t2:Attendee)-[:RAISED]-&gt;(untracked:Issue)
+WHERE NOT EXISTS { (untracked)-[:TRACKED_BY]-&gt;() }
+RETURN untracked.summary, t2.name</code></pre>
+      <div class="rule never"><b>never</b><span>A world type created, or an edge between two stored nodes — every written relationship has a projected end.</span></div>
+      <div class="rule care"><b>names</b><span>Fresh names across stages (<code>tc</code>, <code>t2</code>, <code>untracked</code>): a name dropped and rebound, or reused across <code>CALL {}</code> bodies, is refused.</span></div>
+      <div class="rule care"><b>limit</b><span>A judgement after a <code>CREATE</code> that a later clause reads is refused; one only returned at the end may read what the statement wrote.</span></div>
+    </section>
+    <section data-tags="identity join">
+      <h2>canonicalize — ask the spine for a key</h2>
+      <p class="lede">A spine's <code>normalize</code> is the one definition of "the same entity". Never re-normalise by hand: <code>split(url,'//')[1]</code> misses <code>www.</code> and the join silently drops rows.</p>
+      <pre><code>MATCH (i:LagoInvoice)
+MATCH (a:CustomerAccount {accountKey:
+  canonicalize(i.customerUrl, 'CustomerAccount')})
+RETURN a.name</code></pre>
+      <table>
+        <tr><th>Call</th><th>Returns</th></tr>
+        <tr><td><code>canonicalize(v, 'Spine')</code></td><td>the key, or <code>null</code></td></tr>
+        <tr><td><code>canonicalize(n)</code></td><td>the key from the node's <code>hub:</code> property</td></tr>
+        <tr><td><code>canonicalization(v, 'Spine')</code></td><td><code>{key, outcome, rule}</code> — <code>ok</code> / <code>excluded</code> / <code>invalid</code></td></tr>
+      </table>
+      <div class="rule must"><b>true</b><span>Same normalisation as <code>hub:</code> — a query and a hub can never disagree.</span></div>
+      <div class="rule care"><b>note</b><span>Reads nothing: it says what the key would be, not that the entity exists.</span></div>
     </section>
       </div>
     </div>
