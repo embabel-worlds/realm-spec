@@ -4612,6 +4612,19 @@ or joins through `realm-java-code`'s producers, does not load alone, and is not 
 realm given as a dependency counts as installed beside it — its types and producers, not its own
 problems. The default world's types are always known, as they are in every world.
 
+**A property a query reads that no type declares is a warning** — an error under `strict`. Every
+view, lens script, type `examples:` query, `sources.yml` query, and the Cypher or `{prop: …}` map a
+type or join description shows is read for `n.prop`, `n {.prop}` and `(n:Label {prop: …})` on a
+node of a declared type. The property counts as declared when that type or any of its ancestors or
+descendants declares it — in this realm, a dependency, or the default world — when a producer
+feeding the type names it (`compute:`, `project:`, the join's `recordKeyField`, a `brings:` child's
+`id` and `project:`), when a DERIVE head stamps it, or when it is the node's `id`, its `content`, or an
+`ai_`-prefixed value. A map in a description may pin a join's anchor by its `keyField` instead. A
+node whose label no type gives properties, whose type extends one not installed beside it, or whose
+name is rebound (`UNWIND … AS n`, `… AS n`) is not judged. Declare what the rows carry: an
+undeclared property is missing from the schema a model writes Cypher from, and is never coerced to a
+type. A deployment can switch the check off as `realm-undeclared-properties`.
+
 ### The reusable workflow
 
 ```yaml
