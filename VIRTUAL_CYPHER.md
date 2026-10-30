@@ -823,6 +823,45 @@ Two things that are NOT a join mechanism, however tempting: seeding the same key
 realms (it works until the second customer), and a per-producer rewrite that normalizes one side to
 match the other's spelling (it encodes realm B's format inside realm A).
 
+#### 5.4.4 `canonicalize()` — the spine as a function
+
+A spine's `normalize` is the single definition of "the same entity", and `hub:` applies it to a
+property. When a query holds a raw value that is not on a `hub:` property — an invoice's customer
+URL, a sender's address, a parameter — it must not normalize the value itself:
+`split(i.customerUrl, '//')[1]` strips the scheme and nothing else, so `https://www.Acme.com/` joins
+nothing while the same company's customer record, keyed through `hub:`, joins fine. No error; the
+invoices are simply missing. Ask the spine instead:
+
+```cypher
+MATCH (b:LagoBooks {scope:'all'})-[:HAS_INVOICE]->(i:LagoInvoice)
+MATCH (a:CustomerAccount {accountKey: canonicalize(i.customerUrl, 'CustomerAccount')})
+RETURN a.name, sum(i.amountDueCents) / 100.0 AS owed
+```
+
+| Call | Returns |
+|---|---|
+| `canonicalize(value, 'Spine')` | the spine's key for a raw value — `'Priya <priya@Northwind-Traders.example>'` → `'northwind-traders.example'`, `'https://www.Acme.com/'` → `'acme.com'` — or `null` |
+| `canonicalize(n)` | for a node whose type marks a property `hub: <Spine>`, the key from the first such property that has a value; for a node of the spine type itself, its own key |
+| `canonicalization(value, 'Spine')` | `{key, outcome, rule}` — `outcome` is `ok`, `excluded` (the spine's `exclude:` refused it, e.g. a freemail address) or `invalid` (it fails `require:`, e.g. no dot); `rule` names the spine |
+
+**It is the same normalisation `hub:` applies, not a second copy** — a query and a `hub:` property can
+never disagree about a value.
+
+**`null` means "not an identity for this spine"** and nothing else. When the reason matters — telling
+a declined personal address from a malformed one — ask `canonicalization`.
+
+**It reads nothing and claims nothing.** No lookup, no model: `canonicalize` says what the key *would
+be*, not that an entity with that key exists. Existence is the `MATCH` that uses it.
+
+**Refused before anything is fetched**, as an invalid query: a spine name that is not a string
+literal; an unknown spine; a type that is not a spine; the one-argument form on a type with no
+`hub:`; a value that is not a string, a parameter, or a property of a matched node. In the
+property form the node's label must be written in the statement (`MATCH (i:LagoInvoice)`), and a
+list-valued property reads `null`.
+
+**Spines are per world.** A realm-declared spine (§5.4.1) is visible to queries in the world it is
+installed in, and unknown elsewhere.
+
 ### 5.5 Graph-cached aggregates — `cache: {kind: graph}`
 
 For an `aggregate` producer, `cache: {kind: graph}` makes **the committed graph itself the cache
