@@ -3920,6 +3920,64 @@ An appliance that predates `projected:` reads a type file strictly and refuses t
 loading the type as an empty world type; keep projected types in a file of their own if the realm must also
 load on older appliances.
 
+### 7.9 Writing projected types inside a query — one query is a pipeline
+
+A query may `CREATE` and `MERGE` projected types (§7.8), and `SET` what it made. The writes land in
+the run's scratch: the rest of the same query sees them, as Cypher's read-your-writes promises, no other
+run ever does, and nothing reaches the store. "Read-only" on the query surfaces means read-only **with
+respect to the store**.
+
+That is what makes one ordinary query a pipeline: project text, build on it, read what was built.
+
+```cypher
+CALL ai.fromText($notes, '(t:Attendee)-[:RAISED]->(i:Issue), (t)-[:WORKS_FOR]->(a:CustomerAccount)')
+  YIELD t, i, a
+WITH DISTINCT i, a
+MATCH (a)-[:HAS_CASE]->(c:SupportCase) WHERE c.status IN ['open', 'pending']
+WITH i, relevant(c, 'the same problem as: ' + i.summary) AS tracked
+UNWIND tracked AS tc
+MATCH (tc:SupportCase)
+CREATE (i)-[:TRACKED_BY]->(tc)
+WITH count(*) AS linked
+MATCH (t2:Attendee)-[:RAISED]->(untracked:Issue)
+WHERE NOT EXISTS { (untracked)-[:TRACKED_BY]->() }
+RETURN untracked.summary, untracked.severity, t2.name, t2.role
+```
+
+`Attendee` and `Issue` are projected types with no stored instances, so `MATCH (untracked:Issue)` reads
+exactly what this run made — the label is the isolation. Steps can also be written as unit subqueries,
+each run in order:
+
+```cypher
+CALL { CALL ai.fromText($email, '(t:Attendee)-[:RAISED]->(i:Issue)') YIELD t RETURN count(*) AS projected }
+CALL { MATCH (i:Issue) … CREATE (i)-[:TRACKED_BY]->(c) RETURN count(*) AS linked }
+MATCH (u:Issue) WHERE NOT EXISTS { (u)-[:TRACKED_BY]->() } RETURN u.summary
+```
+
+**What may be written** — anything else is refused before the query runs, with the rule it broke:
+
+| Write | Allowed when |
+|---|---|
+| `CREATE` / `MERGE` a node | every label on it is a projected type |
+| `CREATE` / `MERGE` a relationship | it is declared under `relationships:` on a projected type (§7.8), so one end is always projected — never an edge between two stored nodes |
+| `SET` / `REMOVE` | on elements this run created |
+| `DELETE` | of elements this run created; never of stored ones |
+
+- **World types are never created.** `CREATE (:CustomerAccount …)` is refused in a query exactly as
+  `ai.fromText` resolves a world type instead of inventing one.
+- **Declared properties only.** A property set on a projected node must be declared on its type; a
+  required property left `null` raises a `PROJECTION_INCOMPLETE` warning naming the row, rather than
+  being admitted silently.
+- **`MERGE` on a projected type is keyed construction** — one node per distinct key, how a query collapses
+  duplicates.
+- **Relationship ends are checked by label**, so write the label where the variable came from a list:
+  `UNWIND tracked AS tc MATCH (tc:SupportCase) CREATE (i)-[:TRACKED_BY]->(tc)`.
+- **Use fresh names across stages.** A name dropped by a `WITH` and bound again by a later `MATCH`, or
+  reused across `CALL {}` bodies, is refused (§4) — hence `untracked` and `t2` above.
+- **A model call may not read what the same statement wrote.** `ai.*` judgements and reductions over
+  elements created earlier in the *same* statement are refused for now; split the work so the judgement
+  reads stored or projected-by-`ai.fromText` elements, as above.
+
 ---
 
 ## 8. Views — a saved query used as a label
