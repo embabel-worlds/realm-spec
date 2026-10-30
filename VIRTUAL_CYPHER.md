@@ -4568,8 +4568,8 @@ The planner budgets producer calls against it and, when a query can't fit, emits
 **advice** (push a predicate, add a `LIMIT`, narrow the anchor) rather than silently over-calling.
 
 **Bounds (per statement):** the caps above are declared per join and bound what a query asks of a
-SOURCE. Two further bounds belong to the statement itself and bound what it may spend in the engine.
-Neither is declared in a realm, neither can be raised from a query, and either one stopping a
+SOURCE. Three further bounds belong to the statement itself and bound what it may spend in the engine.
+None is declared in a realm, none can be raised from a query, and any one stopping a
 statement is reported as a refusal of kind `BUDGET_EXCEEDED` carrying the limit it exceeded and the
 unit that limit is in:
 
@@ -4577,6 +4577,14 @@ unit that limit is in:
   exceeds it returns nothing and is told which of the two causes is its own: a pattern with nothing
   to anchor it, or too many node sets matched at once, where the candidate space is the product of
   them even though each set is labelled.
+- a **records** bound, counted in fetched records: how many records the statement's fetches may
+  bring into the graph it runs on, across all its stages and `UNION` branches (200,000 unless the
+  host sets another). A fetched record is in the graph before any aggregation or `LIMIT` reads it, so
+  `count(*)` over every call site of a large project brings every call site in; a statement past the
+  bound returns nothing and is told to fetch fewer. A filter on the fetched node's own properties or
+  on parameters — in its property map or in the `WHERE` that reaches it (`WHERE c.method IN
+  $methods`, `WHERE d.path STARTS WITH $dir`) — is applied before records are brought in, and is the
+  lever; so is reading the source in parts, one statement per part. An aggregation or a `LIMIT` is not.
 - a **time** bound, counted in milliseconds, off unless the host sets one. It is a **backstop**, not
   a second way to say the same thing: work is counted in match steps, and a statement whose cost
   lies somewhere those are not charged — a filter evaluated per candidate over a wide match is the
@@ -4585,10 +4593,9 @@ unit that limit is in:
   bound is told what is usually true of one that does, which is that it is unbounded in a shape the
   other bound cannot see.
 
-A host that sets no time bound has only the work bound, which is the behaviour every deployment had
-before the time bound existed. Where a host does set one, it is a property of the deployment and not
+A host that sets no time bound has only the work and records bounds. Where a host does set one, it is a property of the deployment and not
 of the query: the same statement may be answered on one appliance and declined on another, and a
-realm cannot tell which from its own files. **So a realm must not rely on either bound as control
+realm cannot tell which from its own files. **So a realm must not rely on any of these bounds as control
 flow.** They exist to make a runaway statement fail loudly and diagnosably instead of spinning; a
 query whose correctness depends on being stopped is a query to rewrite, by narrowing the match
 before filtering it — anchoring it, or staging the joins with `WITH` and aggregating as you go.
@@ -4615,7 +4622,7 @@ showed can never be spent unasked. A warm anchor costs nothing. A query that mea
 (`{ai: {materialize: true}}`) or runs as a background job.
 
 **A bound that stops the run is `BUDGET_EXCEEDED`.** A statement that exceeds the graph engine's
-work or row budget, or a rule set that exceeds `maxRounds` or `maxPairs` (§13.7), is refused with
+work, row or records budget, or a rule set that exceeds `maxRounds` or `maxPairs` (§13.7), is refused with
 `BUDGET_EXCEEDED`, naming the limit and its unit, and returns nothing: never a partial set presented
 as complete. A statement budget is fixed and cannot be raised from a query. The refusal names the
 levers: aggregate earlier, add a `LIMIT`, narrow the `MATCH`, filter before sorting.
