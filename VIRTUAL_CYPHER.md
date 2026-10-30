@@ -3875,6 +3875,14 @@ yielded do not enter the query's scope. An anchor is not yielded — it is alrea
   question for caching, even when it lands on the same model.
 - **Not in raw mode.** A raw-mode statement (the openCypher conformance surface) treats `ai.fromText` as an
   unknown procedure.
+- **Where it may be called.** At the top level of a statement, or inside a `CALL { … }` subquery — a unit
+  subquery (whose projection the rest of the statement, later subqueries included, can read), or an
+  importing one (`CALL { WITH m … }`, reading each outer row's text with that row's anchors). A subquery no
+  row reaches reads no text. Refused, each for a reason: inside `EXISTS {}`, `COUNT {}` or `COLLECT {}`
+  (there is no point before the clause to read the inputs at); inside `OPTIONAL CALL {}` (a row that
+  projects nothing would have to survive); inside `CALL {} IN TRANSACTIONS` (it commits as it goes, and a
+  projection is never committed); inside `CALL (x) {}` (write it `CALL { WITH x … }`); and after a write
+  anywhere earlier in the statement (put the call before the first write).
 
 **Declaring local types.** A type `ai.fromText` may create is a realm type marked `projected: true`; its
 relationships are declared on it with `relationships:`:
