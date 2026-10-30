@@ -3785,7 +3785,11 @@ yielded do not enter the query's scope. An anchor is not yielded — it is alrea
 - **Cached and priced.** The same text, pattern, declarations and model are not asked twice. Texts not
   already projected are counted against the query's model-call limit before any is asked (§9); over it,
   the query is refused `TOO_EXPENSIVE` rather than truncated. At most 200 distinct texts per call.
-- **The model is a role's** (`vc_execution`, remappable per world with `llmRoles`), never a fixed model.
+- **The model is a role's**: `vc_extraction` (remappable per world with `llmRoles`; where nothing maps it, it
+  resolves as `vc_execution` does), or the role one call names with a third argument,
+  `ai.fromText(text, pattern, {role: 'chat_best'})`. The option takes a ROLE only: a name that is not a role
+  this world knows is refused, and a model name is refused as one. A call naming a role is a different
+  question for caching, even when it lands on the same model.
 - **Not in raw mode.** A raw-mode statement (the openCypher conformance surface) treats `ai.fromText` as an
   unknown procedure.
 
