@@ -1657,7 +1657,11 @@ declares both namespaces in its manifest (`"namespaces": ["repository", "realms"
 
 **Pruning** removes documents this source holds that no record produced, and only after a COMPLETE
 run: an empty read or a failed record deletes nothing, because "the source returned nothing" and "the
-source is gone" are indistinguishable from the host's side.
+source is gone" are indistinguishable from the host's side. Nor does a read that says part of the
+source could not be read — a project whose repository could not be fetched, a source that refused its
+key or was unreachable: the run is `PARTIAL`, names what was not read, and keeps every document it
+held, so the source answering again re-embeds nothing. A watched source does not re-read every minute
+while that part stays unreadable; its watch changes when it can be read again, and the source runs.
 
 **Entities.** Like any ingested document, each one a source lands is read once more after it is
 stored, by a model that finds the people, organizations and other entities it mentions and links the
