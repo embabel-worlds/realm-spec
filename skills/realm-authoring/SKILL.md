@@ -1,15 +1,18 @@
 ---
 name: realm-authoring
-description: Author or extend an Embabel realm — a git repo of declarative capabilities (actions, types, APIs, virtual-join producers/RemoteRepositories, MCP servers, commands, webhooks, event sources, event handlers, skills, personalities, apps) that a host installs into a world. Activate for any request to create/build/scaffold/extend a realm, add a capability to a realm (a new action, type, API, producer, virtual join, verb, webhook, event source, event handler/reaction, skill, command), wire a new integration as a realm, or understand the realm format. The full contract is the spec at the repo root (README.md) — this skill is the map; read the named section before writing a file.
+description: Author or extend an Embabel realm, a git repo of declarative capabilities (actions, types, APIs, virtual joins that fetch remote records, MCP servers, commands, webhooks, event sources, event handlers, skills, personalities, apps) that a host installs into a world. Activate for any request to create/build/scaffold/extend a realm, add a capability to a realm (a new action, type, API, producer, virtual join, verb, webhook, event source, event handler/reaction, skill, command), wire a new integration as a realm, or understand the realm format. The full contract is the spec at the repo root (README.md); this skill is the map; read the named section before writing a file.
 ---
 
 # Authoring an Embabel realm
 
-A realm is a **git repo** named `realm-*` containing only declarative files (YAML) and
-optional hand-authored TypeScript handlers — **no JVM bytecode, no host config, no user
-credentials**. The host clones it into a world and wires its contents in. The
-authoritative contract is `README.md` (the spec) in this repo; this skill routes you to
-the right section and flags the easy mistakes.
+`realm.ts` is the preferred realm definition format, assembled from local definition files
+as needed. The host reads it directly. Do not generate or commit YAML or manifests from it.
+Start with [Composing a realm](../../REALM_COMPOSITION.md) and the
+[TypeScript contract](../../TYPESCRIPT_REALMS.md). Existing YAML realms remain readable
+under the [legacy compatibility and migration rules](../../TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility)
+and receive no new YAML features. The directory recipes below describe that legacy
+format and existing capability semantics; they are not a second declaration to create beside
+`realm.ts`. A realm contains no JVM bytecode, host configuration or user credentials.
 
 ## First decision: WHICH AUTHORING PATH ARE YOU ON?
 
@@ -40,12 +43,12 @@ checkout is mounted.
 
 ## Second decision: declarative or handlers?
 
-- **Start declarative.** If a YAML capability (an `actions/` step, a `types/` type, an
+- **Start declarative.** If a declaration (an `actions/` step, a `types/` type, an
   `apis/` OpenAPI entry, a `producers/` virtual join) expresses it, use that — no build
   step, the host's planner reasons over it directly.
 - **Reach for `src/` TypeScript handlers** only when there are invariants YAML can't hold:
   revision/optimistic-lock guards, multi-call orchestration, shaping a rich API into
-  idiomatic methods, or giving a type *behaviour* (verbs). Handlers and YAML mix freely.
+  idiomatic methods, or giving a type *behaviour* (verbs). Handlers are separate from the realm definition.
 
 ## The pieces (read the spec section before writing one)
 
@@ -66,7 +69,7 @@ checkout is mounted.
 | a named, parameterized ANSWER a caller runs by name | `views/` | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
 | query the graph from a code_mode script or skill | `gateway.kg.query` | "CypherScript" |
 | query the graph from a WASM HANDLER | `ctx.gateway.cypher.query` | "CypherScript" and "Captured realms" |
-| a CAPTURED realm written in TypeScript (`defineRealm`) | `realm.ts`, built by `realm-synth` | TYPESCRIPT_REALMS.md, and "Captured realms" below |
+| a CAPTURED realm written in TypeScript (`defineRealm`) | `realm.ts`, read directly by the host | TYPESCRIPT_REALMS.md, and "Captured realms" below |
 | hand-authored gateway methods / **verbs** | `src/api/*.ts` + `tests/` | "`src/` and `tests/`" |
 | prove the answer surface survives the author | `tests/questions.yml` + `tests/verify.sh` | "`tests/`" — REQUIRED once anything takes words from a person |
 | an MCP server (last resort — prefer `apis/` for anything API-backed) | `mcp/` | "`mcp/`" |
@@ -81,7 +84,7 @@ checkout is mounted.
 | a voice/persona | `personalities/` | "`personalities/`" |
 | a scoped chat surface | `focuses/` | "`focuses/`" |
 
-## Virtual joins + RemoteRepositories (the on-demand path)
+## Virtual joins that fetch remote records (the on-demand path)
 
 For large/volatile external collections, don't mirror — **virtual-join** them: declare
 `virtualJoins:` on the type and a **producer** (a Repository over the source) in
@@ -600,19 +603,17 @@ approval.
 ## Captured realms: producers, graph reads, apps and proposals
 
 A captured realm runs from a copy the owner admitted, and every capability is its own owner
-approval. Write it as one `realm.ts` with `defineRealm` and let `realm-synth` generate the files
-and the handler types (`--types .embabel/realm.d.ts`);
+approval. Write `realm.ts`, importing definition fragments as needed;
 [TypeScript realms](../../TYPESCRIPT_REALMS.md) is the full contract, with the owner's approval
 steps at the end. Use `defineRealm` in place of `satisfies Realm`: under it, a goal, producer,
-lens, channel or consumer naming a handler the realm does not declare is a compile error. Synth
+lens, channel or consumer naming a handler the realm does not declare is a compile error. The host
 refuses an undeclared handler everywhere a realm names one: a goal, producer, `dataPipes`
 consumer, app, lens, channel or consumer. A realm with no `handlers` block declares none, so
 every handler name in it is refused. An undeclared goal `input` or `output` type is a warning,
 since another realm may declare it; if nothing does, the host drops the goal.
 
-Check the realm against the host it will run on with `--profile reference-wasm` (or a JSON
-profile for another host). It warns about conventional `actions`, `events` and `webhooks` in a
-captured realm, which the reference host does not load, and refuses `layers`.
+Validate with the host's published profile. The reference captured profile does not execute
+conventional `actions`, `events` or `webhooks`, and refuses `layers`.
 
 **A captured producer is a handler.** No `kind`, no `operation`, no `args`, no `cache`:
 
@@ -646,14 +647,14 @@ producers: {
   after the fetch. Say so in the target type's description, so nobody assumes they are cheap.
 - If the handler's input schema has `additionalProperties: false`, list the page and pushdown
   arguments in `properties`, or the host refuses the producer at bind time. List them in
-  `properties` anyway: the generated `<Verb>Input` type only has the fields the schema declares.
+  `properties` anyway: the SDK's inferred input type only has the fields the schema declares.
 - A query reaches the target only along a join from a bound anchor. `MATCH (i:Incident)` on its
   own is refused; `MATCH (s:Service {serviceId: $id})-[:HAS_INCIDENT]->(i)` works. One
   producer's target can anchor the next producer's join, so chain them where a source is keyed
   on another source's records.
 - Limits per fetch: 256 keys, 1 MiB of output, 1,024 rows across all pages. No result cache.
 
-**Graph reads are `ctx.gateway.cypher.query`, under their own approval.** The generated types
+**Graph reads are `ctx.gateway.cypher.query`, under their own approval.** The SDK's inferred types
 type API and GraphQL namespaces and `ctx.gateway.channel`, and leave `ctx.gateway.cypher` as
 `unknown`, so give it a type in the handler:
 
@@ -683,15 +684,15 @@ const { rows } = await (ctx.gateway as unknown as CypherGateway).cypher.query({
 
 **Browser apps run sandboxed with no network.**
 
-- Declare each page under `apps` with the handlers it may call; synth refuses a handler the
+- Declare each page under `apps` with the handlers it may call; the host refuses a handler the
   realm does not declare. The page reaches the realm only through `realm.call(handler, args)`.
 - **One `realm.call` at a time.** A second call while one is waiting rejects at once, so `await`
   each call before the next. Every refusal rejects with the same message; show one plain error.
 - No `fetch`, sockets, remote scripts, styles, images or fonts. Bundle everything; declare CSS
   and JS under `resources` (`apps/<page>.assets/`) and embed images and fonts as `data:` URLs.
 - The host operator sets the size limits. The defaults are 10 MiB for the page, 16 resources,
-  and 10 MiB for one resource and for all of them together, and synth refuses an app past them.
-  For a host with larger limits, raise synth's with `--app-limit 32MiB` or the per-limit flags.
+  and 10 MiB for one resource and for all of them together, and the host refuses an app past them.
+  Use the target host's published limits for authoring checks.
   Otherwise stay well under them.
 
 **Write through a proposal, never directly.** `ctx.writePropose({ version: 1, kind, target,

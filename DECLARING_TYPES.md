@@ -2,17 +2,67 @@
 
 **Spec version: 0.1.0**
 
-Normative. A realm declares its types in **YAML** or in **TypeScript**. Both forms carry the
-same facts and produce the same behaviour; this document specifies both and states what is
-guaranteed about each.
+Normative. New realms declare types in the `types` record of `realm.ts`. Definition fragments
+may be imported and merged; see [Composing a realm](REALM_COMPOSITION.md). The host reads
+the evaluated record directly, without YAML or decorator generation.
 
-Neither is deprecated. Choose by what your realm already needs: a realm that ships only
-types and reference data needs no build and should use YAML; a realm that already compiles
-TypeScript gets a compiler's help by declaring there too.
+YAML and decorator declarations below describe existing legacy realms. They remain readable
+under the capability-specific migration rules and receive no new YAML features. In a realm
+with `realm.ts`, those legacy declarations are ignored under the [source selection rules](TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility).
+The static class-reference guarantees below apply to legacy decorators, not string references
+in a `realm.ts` object. The host checks those references after evaluation.
 
-See `LABELS_AND_COMPOSITION.md` for what a label *means* once declared.
+See [Labels and composition](LABELS_AND_COMPOSITION.md) for what a label means once declared.
 
----
+## TypeScript object declarations
+
+```ts
+import type { Realm } from '@embabel/realm-types'
+
+export default {
+  name: 'movie-ratings',
+  version: '1.0.0',
+  types: {
+    MovieRating: {
+      visibility: 'public',
+      properties: {
+        imdbId: { identity: true, description: 'The rated film id.' },
+        rating: { type: 'int', validation: [{ rule: 'range', min: 1, max: 10 }] },
+      },
+    },
+  },
+} satisfies Realm
+```
+
+The record key is the label. `properties` is a record keyed by property name. A string value
+is shorthand for a property's description; an object can declare `description`, `type`
+(`string`, `int`, `number`, `boolean`), `identity`, `required`, `cardinality`, `validation`,
+`values`, `metadata`, `annotatable` and `annotationVersion`. `parents` names ancestor labels.
+`visibility: 'internal'` corresponds to legacy `internal: true`; absent visibility is public.
+Internal types are omitted from public discovery, not exempt from authorization.
+
+`cardinality` names `OPTIONAL`, `ONE`, `LIST` or `SET`. It describes value multiplicity;
+it does not grant write access. Complete precedence with `required` and `identity`, and
+the portable `values` enumeration protocol, are not yet specified here.
+
+### Property validation
+
+`validation` is part of the declared property, for example
+`validation: ["nonEmpty", { rule: "range", min: 1, max: 10 }]`.
+A string names a rule; an object names it in `rule` and supplies its parameters. These are
+property rules, separate from handler input/output JSON Schema. The host retains them with
+the type declaration. Existing extraction behavior enforces `oneOf` on a target property:
+a record violating the declared vocabulary is dropped before persistence, as described in
+[extraction](VIRTUAL_CYPHER.md#56-typed-extraction--kind-extract-lazy-entities).
+The complete rule vocabulary, `nonEmpty` and `range` parameter/default semantics, unknown-rule
+behavior and enforcement across other write paths are not yet specified or established by
+the available host evidence. Declaring a rule must not be presented as proof that every
+write path enforces it. Authors needing a guaranteed handler boundary must also use the
+[handler schema profile](README.md#me-captured-handler-schema-profile).
+
+## Legacy declarations
+
+The rest of this document describes the supported legacy type forms.
 
 ## 1. The two forms
 
@@ -83,7 +133,7 @@ The class name is the label. `@Node()` marks the class as a declared type.
 
 ```ts
 @Node({ description: "A film, keyed by IMDb id.", userAnchor: false, partial: false })
-export class Movie extends Entity { … }
+export class Movie extends Entity { /* Other members omitted. */ }
 ```
 
 `description`, `userAnchor`, `partial` and `internal` mean exactly what the YAML keys of the
@@ -96,7 +146,7 @@ Ancestors are `extends`. Capability labels are the declaration-merged interface:
 
 ```ts
 @Node()
-export class Trust extends Organisation { … }
+export class Trust extends Organisation { /* Other members omitted. */ }
 export interface Trust extends Watchable {}
 ```
 
@@ -199,7 +249,7 @@ its target. Both produce the same traversable edge. Write it where it reads bett
 ```ts
 @Retrieval({ operation: "omdb.getMovie", nameFrom: "title",
              fieldMap: { imdbId: "imdbID", title: "Title" } })
-export class Movie extends Entity { … }
+export class Movie extends Entity { /* Other members omitted. */ }
 ```
 
 `fieldMap` maps the source's own field names onto this type's. `nameFrom` chooses the
@@ -221,13 +271,13 @@ mistakes in it. A realm authored in YAML can, and reports them as loading proble
 
 ---
 
-## 5. Where each form is available
+## 5. Where each legacy form is available
 
 **YAML** — always. A realm needs no build to declare types.
 
 **TypeScript** — where the realm already compiles TypeScript. Declarations live beside the
-handlers they belong to. A single-file realm that ships handlers without a build cannot
-declare types this way; use YAML.
+handlers they belong to. These decorator declarations need their existing build path. New source realms use the
+`types` record in `realm.ts`, including realms with no handlers or build.
 
 **Requirement — do not declare the same type twice.** A type declared in both forms is a
 realm authoring error. Split by type, not by fact: `Movie` in one form, `MovieRating` in the

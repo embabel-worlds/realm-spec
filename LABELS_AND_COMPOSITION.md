@@ -240,3 +240,16 @@ once per entity.
 property and behaviour inheritance, host parents excluded, cross-realm capability labels,
 specificity and ambiguity, the global label namespace, navigable results, `$`/`#` argument
 sources, walk bounds.
+
+
+## Definition imports and realm boundaries
+
+The graph composition above does not import code from another realm. Splitting one
+`realm.ts` across local definition files is [source composition](REALM_COMPOSITION.md),
+with the same captured identity and authority as a one-file definition. A dependency's
+`from: { realm: ... }` source is reserved and currently refused as
+`DEPENDENCY_SOURCE_NOT_SUPPORTED_YET`, naming the dependency. A future source tag may
+define consent and digest pinning without changing local, registry or URL sources.
+No shared label, inherited method or imported definition grants another realm's credentials,
+handlers or module permissions. Explicit cross-realm code imports, cycles and update policy
+remain to be specified independently of shared graph labels.
