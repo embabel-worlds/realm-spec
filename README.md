@@ -203,6 +203,7 @@ tags:
 | `tags` | No | Free-text keywords, for finding the realm. They are not its category. |
 | `maturity` | No | The author's own readiness claim: `experimental`, `beta`, `stable` or `deprecated`. Absent means the realm makes no claim — which is **not** a claim of being finished. See [Maturity](#maturity). |
 | `host` | No | Execution host for the Realm's Functions: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
+| `optionalLabels` | No | Labels this realm's views read but do not need: each owned by a companion realm that may be absent, and read only under `OPTIONAL MATCH`. See [Optional labels](#optional-labels--reading-a-companion-realm-that-may-be-absent). |
 
 ### Icons
 
@@ -1259,6 +1260,51 @@ Two consequences follow from the fact that a reference is an INLINE of the body,
 like an existing label; an argument the view never reads; a fractional number for an `int` parameter;
 and a label in the body that is a near miss for one the realm knows (`GitHubIsue` beside
 `GitHubIssue`), reported at the view's file and line.
+
+**A label nothing installed declares is reported.** A view reading a label that no installed realm
+declares — as a type, a parent, a derived label, a join's anchor, a `projected: true` type or another
+view's output — is reported on its realm, which reads `degraded`, and a run of it carries an
+`UNOWNED_LABEL` warning: a plain MATCH over such a label can never return a row, and an empty answer
+from it means "not installed", not "no data".
+
+### Optional labels — reading a companion realm that may be absent
+
+Some views are built to answer on their own realm alone and to read MORE when a companion realm is
+installed: realm-odoo's meeting briefing fills in each customer's ultimate owner from Diffbot when
+realm-diffbot (and the bridge realm that joins it in) is present, and leaves that column empty when
+not. The realm says so in `realm.yml`:
+
+```yaml
+# realm.yml
+optionalLabels:
+  - DiffbotOrganization   # realm-diffbot's; joined in by realm-odoo-enrichment
+```
+
+and its views read the label only under `OPTIONAL MATCH`:
+
+```cypher
+MATCH (b:OdooBook)-[:HAS_MEETING]->(m:OdooMeeting)-[:MEETING_WITH]->(c:OdooCustomer)
+OPTIONAL MATCH (c)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)
+RETURN c.name AS customer, d.ultimateParentName AS ultimateOwner
+```
+
+**Guarantee — an awaited label is a note, not a defect.** While no installed realm declares it, the
+host reports the views as able to read more once a realm declaring the label is installed. That is a
+note: the realm stays `active`. A run of such a view carries `OPTIONAL_LABEL_ABSENT` in place of
+`UNOWNED_LABEL`, saying the rows are whole and the columns read through the label are absent, not
+known to be empty.
+
+**Guarantee — the declaration is checked against the Cypher.** A label is honoured as optional only
+in a view that reads it nowhere but inside `OPTIONAL MATCH` clauses (their `WHERE`, and subqueries
+written there, included). A view that also reads it in a plain `MATCH` cannot answer without it, so
+it is reported as unowned, and the report says the declaration did not apply. A body the host cannot
+parse honours nothing.
+
+**Neither half is enough alone.** An `OPTIONAL MATCH` without the declaration is still reported:
+whether an absent optional side is harmless is the author's knowledge, not the query's — `OPTIONAL
+MATCH (a)-[:TRACKED_AS]->(k:CrmAccount) … WHERE crmRecords = 0` answers "every account is missing from
+the CRM" when `CrmAccount` is merely unowned. Declare a label optional only when its absence leaves
+columns empty and changes no row.
 
 ## `lenses/`
 

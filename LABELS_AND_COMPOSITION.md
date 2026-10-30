@@ -171,6 +171,11 @@ declares carry its label. A shared or host type a realm merely enriches through 
 join (`Person`, `Organisation`) is never stamped, so the qualified form cannot silently mean
 "the subset this realm happened to mint".
 
+**A realm may read a label it does not own, and say it does not need it.** A view may read
+another realm's label. When that realm is a companion the author expects may be absent, the realm
+lists the label under `optionalLabels:` in `realm.yml` and reads it only under `OPTIONAL MATCH`; the
+host then reports its absence as a note rather than a defect. See [Optional labels](README.md#optional-labels--reading-a-companion-realm-that-may-be-absent).
+
 The realm label is inert unless used: bare-label queries, hierarchies (§2) and capability
 composition (§3) behave identically with or without it. Vocabulary conventions still apply —
 prefer a qualified specific type name (`UkPlace`) with a shared parent (`Place`) over coining
