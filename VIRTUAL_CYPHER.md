@@ -3936,7 +3936,6 @@ WITH DISTINCT i, a
 MATCH (a)-[:HAS_CASE]->(c:SupportCase) WHERE c.status IN ['open', 'pending']
 WITH i, relevant(c, 'the same problem as: ' + i.summary) AS tracked
 UNWIND tracked AS tc
-MATCH (tc:SupportCase)
 CREATE (i)-[:TRACKED_BY]->(tc)
 WITH count(*) AS linked
 MATCH (t2:Attendee)-[:RAISED]->(untracked:Issue)
@@ -3970,13 +3969,17 @@ MATCH (u:Issue) WHERE NOT EXISTS { (u)-[:TRACKED_BY]->() } RETURN u.summary
   being admitted silently.
 - **`MERGE` on a projected type is keyed construction** — one node per distinct key, how a query collapses
   duplicates.
-- **Relationship ends are checked by label**, so write the label where the variable came from a list:
-  `UNWIND tracked AS tc MATCH (tc:SupportCase) CREATE (i)-[:TRACKED_BY]->(tc)`.
+- **Relationship ends are checked by type, and a variable is typed by where it came from.** `tc` above
+  has no label written, but it was unwound from `relevant(c, …)` over `SupportCase` nodes, so it is a
+  `SupportCase` and `TRACKED_BY` is admitted. A variable fed from a parameter or a literal list has no
+  such origin and is refused; write the label (`MATCH (x:SupportCase)`) if you need one.
 - **Use fresh names across stages.** A name dropped by a `WITH` and bound again by a later `MATCH`, or
   reused across `CALL {}` bodies, is refused (§4) — hence `untracked` and `t2` above.
-- **A model call may not read what the same statement wrote.** `ai.*` judgements and reductions over
-  elements created earlier in the *same* statement are refused for now; split the work so the judgement
-  reads stored or projected-by-`ai.fromText` elements, as above.
+- **A model call may not feed the rest of a statement from what that statement wrote.** A judgement or
+  reduction written after a `CREATE`, whose result a later clause reads, is refused rather than run early.
+  One whose result is only returned at the end is computed after the statement and may read what it
+  made. Elements projected by `ai.fromText` are not "written" in this sense — the query above judges
+  stored cases and links projected issues to them.
 
 ---
 
