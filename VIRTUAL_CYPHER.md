@@ -3779,6 +3779,108 @@ Being a list of maps, `clusters[0].size` is addressable — which is what lets a
 filter the rows it came from. Prefer `themes` when only the recurring topics matter and membership
 does not; prefer `cluster` for "what groups are in these, and how big is each".
 
+### 7.8 `ai.fromText` — project a typed graph shape out of text
+
+```cypher
+MATCH (a:CustomerAccount)-[:HAS_CASE]->(c:SupportCase)-[:HAS_MESSAGE]->(m:SupportMessage)
+WHERE c.status IN ['open', 'pending'] AND m.fromCustomer
+CALL ai.fromText(m.body, '(m)-[:NAMES]->(k:Competitor)') YIELD k
+RETURN k.name AS competitor, count(DISTINCT a) AS accounts
+```
+
+**Means:** "read this text, and give me the elements of this shape that it states" — as graph elements
+the rest of the query matches, filters, joins and counts like any other. Standard procedure-call syntax,
+so it works wherever a query runs: views, DERIVE rule bodies, handlers, `kg_query`.
+
+**The pattern** is a string literal: directed single hops of one type, at most one label per node, no
+inline properties, in one connected piece. Each variable is one of three things:
+
+| Variable | What happens |
+|---|---|
+| no label (bound earlier in the query) | an **anchor**: what the text projects attaches to it; it is never created |
+| a **projected** type | **created** for this run only, typed by its declaration |
+| a **world** type | **resolved, never invented**: the text's mention is matched through the type's spine; a miss is reported |
+
+**YIELD** names the pattern variables the call binds (`YIELD k`, `YIELD i AS issue`). Variables not
+yielded do not enter the query's scope. An anchor is not yielded — it is already bound. `YIELD *`,
+`YIELD … WHERE` and `OPTIONAL CALL` are refused; filter in a following `WITH … WHERE`.
+
+**Guarantees:**
+
+- **Nothing is stored.** Created elements exist for the run that made them and no other: graph counts are
+  identical before and after, and a run never sees another run's projection.
+- **Typed before anything is asked.** Every label and relationship in the pattern must be declared (below);
+  an undeclared one, a world type with no spine or no description, or a pattern that creates nothing is
+  refused before any text is read or any model call is made.
+- **A row reaches only what its own text projected.** One extraction per distinct text; two rows with the
+  same text share it.
+- **Cardinality is the declaration's.** A relationship declared `many: false` attaches at most one target per
+  source; when the text gives several, none is attached and the outcome is reported as ambiguous.
+- **Provenance.** Every created element carries `sourceSpan` (the words it was read from) and `extractedBy`
+  (the model role and model that read it).
+- **Outcomes are not collapsed into empty.** A world mention its type's identity policy refuses (a freemail
+  address on a domain-keyed spine) is reported `PROJECTION_DECLINED`; one that matches no stored entity,
+  `PROJECTION_UNRESOLVED`; several candidates where one is allowed, `PROJECTION_AMBIGUOUS` — each a warning on
+  the result. A value outside a declared closed set is dropped and reported `UNPARSEABLE_ANSWER`. A text that
+  states nothing is an empty answer; a model call that fails refuses the query with a retryable
+  `SOURCE_UNAVAILABLE`, never an empty one.
+- **Resolution is spine-only for now.** A world-type mention resolves through its type's spine key
+  (`normalize`, `require`, `exclude`) and nothing else: a company named only by name is unresolved.
+- **Cached and priced.** The same text, pattern, declarations and model are not asked twice. Texts not
+  already projected are counted against the query's model-call limit before any is asked (§9); over it,
+  the query is refused `TOO_EXPENSIVE` rather than truncated. At most 200 distinct texts per call.
+- **The model is a role's**: `vc_extraction` (remappable per world with `llmRoles`; where nothing maps it, it
+  resolves as `vc_execution` does), or the role one call names with a third argument,
+  `ai.fromText(text, pattern, {role: 'chat_best'})`. The option takes a ROLE only: a name that is not a role
+  this world knows is refused, and a model name is refused as one. A call naming a role is a different
+  question for caching, even when it lands on the same model.
+- **Not in raw mode.** A raw-mode statement (the openCypher conformance surface) treats `ai.fromText` as an
+  unknown procedure.
+
+**Declaring local types.** A type `ai.fromText` may create is a realm type marked `projected: true`; its
+relationships are declared on it with `relationships:`:
+
+```yaml
+- name: Attendee
+  projected: true
+  description: Someone from the customer's side, in a meeting or an email.
+  properties:
+    name: "Full name, as written."
+  relationships:
+    RAISED:    { to: Issue, many: true, description: "Problems this person raised." }
+    WORKS_FOR: { to: CustomerAccount, many: false, description: "The customer account they work for." }
+
+- name: Issue
+  projected: true
+  description: A problem the customer raised, not a request or a wish.
+  properties:
+    summary:  "One line: what is wrong, in the customer's words."
+    severity: { type: string, enum: [high, medium, low], description: "How much it blocks them." }
+
+- name: Competitor
+  projected: true
+  description: A rival product the customer names.
+  properties:
+    name: "Its name, as written."
+  relationships:
+    NAMES: { from: SupportMessage, many: true, description: "A competitor named in the message." }
+```
+
+Rules, each refused at load as an error against the declaring realm:
+
+- A projected type has a description, and every property has one — the model reads them.
+- It has no producer, join, population, spine, parent, method or lifecycle, and no join targets it; nothing
+  persists it. It may not reuse a world type's name, and may not declare `sourceSpan` or `extractedBy`.
+- A relationship names exactly one of `to:` (this type is the source) or `from:` (this type is the target —
+  how an edge from a world type is declared without editing that type), a description, and a type this world
+  declares. `many` defaults to `true`.
+- `relationships:` on a type that is not projected is refused.
+- `enum: [...]` on a property is the `values:` shorthand for a closed set.
+
+An appliance that predates `projected:` reads a type file strictly and refuses the whole file, rather than
+loading the type as an empty world type; keep projected types in a file of their own if the realm must also
+load on older appliances.
+
 ---
 
 ## 8. Views — a saved query used as a label
