@@ -3599,6 +3599,14 @@ RETURN i.summary, tc.subject, e.name
   comprehension), and any structured result (`correlate`, `regress`, `cluster`, `argmax`). Re-binding the
   matched name itself (`UNWIND tracked AS c` after matching `c`) is refused with a request to use a new
   name.
+- **Inside a subquery.** A judgement may sit inside a unit `CALL { … }`, `OPTIONAL CALL { … }` or
+  `CALL () { … }`, nested at any depth — the groups are read over the rest of that body. So a plan whose
+  steps are unit subqueries can judge in one step what an earlier step projected. Refused, each for a
+  reason and before any model call: an importing body (`CALL { WITH x … }`, `CALL (x) { … }` — a node
+  grouped under two outer rows could collect different values and keep only one answer); inside
+  `EXISTS {}`, `COUNT {}` or `COLLECT {}` (no clause boundary to read the groups up to); inside
+  `CALL {} IN TRANSACTIONS` or any other braces; and a judging body that writes and runs more than once
+  (later runs would form groups the judgement never saw).
 
 #### What the arguments mean
 
