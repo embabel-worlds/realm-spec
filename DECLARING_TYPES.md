@@ -194,6 +194,12 @@ YAML form has no way to say this.
 join under the TARGET type naming its anchor; TypeScript declares it on the ANCHOR naming
 its target. Both produce the same traversable edge. Write it where it reads better.
 
+### 3.4a Projected types — local types `ai.fromText` creates
+
+`projected: true` marks a type as local: created only by `ai.fromText`, never stored, backed by nothing,
+and the only kind of type that declares `relationships:` of its own. The YAML form and its rules are in
+VIRTUAL_CYPHER.md §7.8.
+
 ### 3.5 Retrieval
 
 ```ts
