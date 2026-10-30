@@ -3346,13 +3346,13 @@ RETURN summarize(n.description, 'what is newest and most important') AS digest
 | `summarize(text [, instruction])` | prose | a neutral overview |
 | `render(text [, instruction])` | prose | the same items as prose — all of them, in order, hedges kept |
 | `synthesize(text, goal)` | prose | a goal-directed answer (argues toward `goal`) |
-| `classify(text, labels)` | one label | exactly one label from the closed set `'a,b,c'` |
+| `classify(item, labels [, rubric])` | one label | exactly one label from the closed set `'a,b,c'` |
 | `extract(text, what)` | list | the distinct things asked for (deduped) |
 | `themes(text [, focus] [, count])` | list | the recurring cross-item topics (labels only) |
 | `cluster(text [, k])` | list of maps | semantic groups, each with a COUNTED size and examples |
-| `score(text, rubric)` | number 0–1 | one terminal ordinal judgment of the whole group |
-| `holds(text, question)` | boolean or null | a three-valued verdict on a claim |
-| `relevant(text, criterion)` | list | only the items matching a subjective criterion |
+| `score(item, rubric)` | number 0–1 | one ordinal judgment of the whole group |
+| `holds(item, question)` | boolean or null | a three-valued verdict on a claim |
+| `relevant(item, criterion)` | list | only the items matching a subjective criterion — over nodes, the group's own nodes |
 | `argmax(key, text, criterion)` | winner payload | the best candidate under a comparative rubric |
 | `correlate(x, y)` | map | the Pearson correlation of two numeric expressions: `{r, n, dropped, ci, detectable}` |
 | `regress([x1, …], y, label)` | map | a least-squares fit of `y` on the predictors: fit quality, per-predictor strengths, and the rows most above and most below their prediction, one list per direction |
@@ -3527,6 +3527,40 @@ What this costs, and the one rule it imposes:
 Grouping follows Cypher's own rules: the non-aggregated keys of the clause define the groups, so
 `WITH t, summarize(n.description, …)` is one digest per `t` over all its `n`s — not one per `n`.
 
+#### Judging nodes, not only text
+
+`relevant`, `classify`, `holds` and `score` accept a NODE variable as their item, not only a property:
+
+```cypher
+MATCH (i:Issue)<-[:RAISED]-(:Attendee)-[:WORKS_FOR]->(:CustomerAccount)-[:HAS_CASE]->(c:SupportCase)
+WHERE c.status IN ['open', 'pending']
+WITH i, relevant(c, 'the same problem as: ' + i.summary) AS tracked
+UNWIND tracked AS tc
+MATCH (tc)-[:ASSIGNED_TO]->(e:Engineer)
+RETURN i.summary, tc.subject, e.name
+```
+
+- **The model reads each node whole**: its labels, its properties, and what the world's types declare
+  they mean — the `description` of the type and of each property (§ types). A `status: pending` is shown
+  with its declared meaning, so a description written for query authors is read by the judge too; an
+  undeclared type is shown with its labels and properties alone. Who may see a node (its scoping
+  properties) and embeddings are never shown.
+- **`relevant` over nodes keeps the group's own nodes.** The result is a subset of the nodes the group
+  matched — the model can only keep what it was shown, by its position in what it was shown — so it can be
+  `UNWIND`ed, traversed from and re-matched like the nodes it came from, and it is scoped as they were.
+  A group whose candidates were all rejected keeps an empty list. A group that could not be judged is
+  never an empty list: its cell is null with the reason in the result, or — where a later clause reads
+  the kept nodes — the query fails and says so, since an answer built on a silently missing group would
+  look complete.
+- **Projected in the final `RETURN`**, the kept nodes come back as nodes.
+- **A node is longer than a title**, and the cost check prices what is shown: a reduction over nodes is
+  quoted on the size of the nodes as rendered, and a query over the inline limit is refused before it
+  runs, never cut down to fit.
+- What does NOT flow on: kept nodes from a variable that no node pattern bound (an `UNWIND`ed list, a
+  comprehension), and any structured result (`correlate`, `regress`, `cluster`, `argmax`). Re-binding the
+  matched name itself (`UNWIND tracked AS c` after matching `c`) is refused with a request to use a new
+  name.
+
 #### What the arguments mean
 
 Every signature above splits its arguments the same way, and getting the split wrong is the most
@@ -3541,8 +3575,18 @@ common authoring error:
   answer can say WHICH item won and not merely what the winning text said. Every other function in the
   table accumulates exactly one.
 - **Every argument after the accumulated ones is a LITERAL string** — the instruction, goal, labels,
-  what, focus, rubric, criterion, question. A row expression there is not evaluated per row (there is
-  nothing to evaluate it against once the group is reduced), so write the words themselves.
+  what, focus, rubric, criterion, question — with one exception, below. A row expression there is not
+  evaluated per row (there is nothing to evaluate it against once the group is reduced), so write the
+  words themselves.
+- **The exception: a judgement's criterion may read the GROUPING KEY.** `relevant`'s criterion,
+  `classify`'s rubric, `holds`' question and `score`'s rubric may be an expression over the clause's
+  grouping keys — `WITH i, relevant(c, 'the same problem as: ' + i.summary) AS tracked` asks one question
+  per issue. It is evaluated once per group, from that group's keys only. An expression that reads a
+  variable the clause aggregates over (`relevant(c, 'like ' + c.title)` grouped by `i`) is REFUSED before
+  the query runs: it has a different value on every row of the group, and none of them is the group's. A
+  group whose criterion evaluates to null is not judged — its cell is null and the result says why —
+  because no criterion would keep everything. `classify`'s label set is always a literal: it is the
+  closed set every group's answer is checked against.
 - **Optional arguments are POSITIONAL but type-disambiguated.** `themes(text [, focus] [, count])`
   reads a NUMERIC argument as the topic count and a string as the focus, in whichever order they
   arrive — `themes(n.title, 5)` and `themes(n.title, 'risks', 5)` both mean what they look like.
