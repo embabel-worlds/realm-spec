@@ -554,13 +554,51 @@ pages remain, and fetches them **concurrently** rather than one after another �
 costs about one page's latency instead of 29. Everything a serial walk promises still holds:
 records come back in page order, a pushed-down `LIMIT` stops at the same page, a page that fails
 ends the walk there with the pages before it and a warning, `maxPages` still caps and still warns
-when it cuts, and the declared `cost.rate` still paces every call. Without `total` (or when the
+when it cuts (except as the known-total allowance below extends it), and the declared `cost.rate` still paces every call. Without `total` (or when the
 page does not carry it) the walk is serial, because it cannot know how many pages there are until
 a short one arrives. Cursor paging is always serial.
 
 ```yaml
 paging: { style: page, param: page, size: 25, maxPages: 200, total: data.meta.all_count }
 ```
+
+**A known total may finish the list past `maxPages`.** When page one of a page-number or offset
+walk reports its `total`, and the pages that total needs (cut to a pushed-down `LIMIT`) exceed
+`maxPages` but not twice `maxPages`, the walk reads on to the end of the book, or to the page that
+satisfies the `LIMIT`, instead of stopping at `maxPages`. A walk knows a book has ended only when a
+page comes back short or empty, so in this extended range a total that is an exact multiple of
+`size` costs one more, empty, page, still within twice `maxPages`, and the answer is complete with
+no warning. Where that empty page would pass twice `maxPages`, every row is still read but the
+answer keeps its "may be incomplete" warning. Everything else keeps `maxPages` and its warning as
+without the allowance:
+
+- a book that fits within `maxPages` pages gets no extra page, so a full last page at `maxPages`
+  still warns;
+- a `LIMIT` met on a full page that is the walk's last allowed page still warns, so a `LIMIT`-ended
+  walk is not guaranteed warning-free;
+- a total whose pages, cut to a pushed-down `LIMIT`, still exceed twice `maxPages`, cursor paging,
+  and a walk whose page one reports no total stop at `maxPages`;
+- a total that under-reports the book extends the walk past `maxPages` only as far as the page that
+  total named, plus the confirming page when that total is an exact multiple of `size`. That
+  confirming page may return the rest of the book: if it comes back short, the answer is complete
+  with no warning. The warning is raised only when the last page the walk may read is still full.
+
+A cost quote prices each call to a producer that declares `total` at up to twice `maxPages` pages,
+so a quote never under-states the pages a walk may take. Pages requested together after page one
+all count toward `apiCalls`, including pages read past the point where the walk stopped, whose
+records are discarded.
+
+Example: `paging: { style: page, param: page, size: 50, maxPages: 5, total: meta.total }`.
+
+| Source reports | Pages read | Returned | Warning |
+|---|---|---|---|
+| 270 | 6 | 270 | none |
+| 300 | 6 full, then 1 empty | 300 | none |
+| 250 | 5 | 250 | `PARTIAL_RESULT` (`TRUNCATED`) |
+| 500 | 10 | 500 | `PARTIAL_RESULT` (`TRUNCATED`) |
+| 1,100 | 5 | 250 | `PARTIAL_RESULT` (`TRUNCATED`) |
+| 300, source holds 320 | 6 full, then 1 of 20 | 320 | none |
+| 300, source holds 400 | 7 full | 350 | `PARTIAL_RESULT` (`TRUNCATED`) |
 
 The **LLM-backed** kinds (`generative`'s `generator:`, `aggregate`'s `reduce:`, `extract`'s `extract:`) take optional
 per-edge tuning — `role:`, a portable, world-defined model role id such as `chat_cheap`; **never a
@@ -4700,7 +4738,7 @@ is classified and surfaced as a warning on the result:
 | `PRODUCER_ERROR` (`FETCH_FAILURE`) | a timeout, a missing gateway tool, a non-auth error | the source could **not** be reached — *not* "no data". Fix the integration. |
 | `PRODUCER_ERROR` (`RATE_LIMITED`) | the source throttled the call (an HTTP 429) | the source is up and the credentials are fine — the result is **unanswered, not empty**. Ask again shortly, or pin a specific entity so fewer calls are needed. Never "reconnect". |
 | `PRODUCER_ERROR` (`AUTH_EXPIRED`) | a 401 / "token expired" / `EXPIRED_AUTHENTICATION` | the OAuth token has **expired** — reconnect to refresh. The empty result is because the source rejected the call. |
-| `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit `maxPages` with a still-full last page; a call budget ran out mid-fan-out; a join's `maxFanoutTotal` held part of what a fetch answered out of the graph; a declared floor or gate dropped records | the fetch **succeeded but is incomplete** — the source has more. *Not* a failure. The detail says which cause, because the fixes differ: raise the cap, narrow the anchor set, or simply ask again (a budgeted run keeps its completed work and resumes rather than restarting). |
+| `PARTIAL_RESULT` (`TRUNCATED`) | pagination hit its page cap (`maxPages`, or up to twice that when page one reported the total) with a still-full last page; a call budget ran out mid-fan-out; a join's `maxFanoutTotal` held part of what a fetch answered out of the graph; a declared floor or gate dropped records | the fetch **succeeded but is incomplete** — the source has more. *Not* a failure. The detail says which cause, because the fixes differ: raise the cap, narrow the anchor set, or simply ask again (a budgeted run keeps its completed work and resumes rather than restarting). |
 | `PARTIAL_RESULT` (`TRUNCATED`) | a `singlePage` producer (one whose listing declares paging it cannot walk) returned any records | the source **may have more**: the producer cannot tell the API's default first page from the whole listing, so the warning appears even when nothing is missing. Raising `maxPages` or asking again cannot change it; declare `paging:` so the listing can be walked, or read a listing that returns its whole collection. |
 | `PARTIAL_RESULT` (`NOT_FOUND`) | the source answered a definitive 404 for one key of a fan-out | that key **does not exist** — as opposed to "we could not find out", which is `FETCH_FAILURE`. The answer is short by exactly the named keys; the source is not down, and the other keys' rows are good. |
 | `PARTIAL_RESULT` (`DERIVED_LOWER_BOUND`) | a DERIVE rule set concluded while the facts its rules read were themselves incomplete (another diagnostic fired, or a demand went unmet) | membership and any aggregate over it are a **lower bound, not a total**. The fixpoint is correct over what was materialized and says nothing about what was not — a rule body cannot fetch (§13.6). Not a failure, and not "nothing was derived". |

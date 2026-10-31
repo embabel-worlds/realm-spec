@@ -1058,7 +1058,7 @@ paging: { style: cursor, size: 100, maxPages: 10, cursorParam: after, cursorPath
 | `param` / `sizeParam` | `page` / `per_page` | Page-number arg, and the page-size arg. |
 | `startPage` | 1 | Page-number style only: first non-negative page number sent to the source. Set `0` for zero-based APIs. |
 | `size` | 100 | Records per page (set to the endpoint's max). |
-| `maxPages` | 5 | Hard cap on pages fetched, independent of page numbers. `startPage: 0, maxPages: 2` fetches pages 0 and 1. |
+| `maxPages` | 5 | Hard cap on pages fetched, independent of page numbers. `startPage: 0, maxPages: 2` fetches pages 0 and 1. For page-number or offset paging, a `total` reported on page one may extend it up to twice `maxPages` (VIRTUAL_CYPHER §5.3). |
 | `cursorParam` / `cursorPath` | `after` / — | Cursor style only: request arg + JSONPath to the next cursor. `startPage` is ignored. |
 
 Omitting `startPage` preserves one-based requests (`1, 2, …`). A negative value is invalid. For either starting convention, a short page ends the walk normally; a full final page at `maxPages` reports the existing truncation warning.
