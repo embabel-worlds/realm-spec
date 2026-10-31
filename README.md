@@ -22,6 +22,12 @@ application declare its own types, lookups, verbs and identity bridges, so a wor
 its URL alone, with no realm authored by hand. [PUBLISHERS.md](PUBLISHERS.md) says how an Embabel
 world maps a publisher onto Virtual Cypher and code mode.
 
+**Asking for a result without writing the steps?** [Planning](VIRTUAL_CYPHER.md#16-planning-ask-for-the-result-not-the-steps)
+takes a goal — the final query, or a question in English — and a deterministic planner chooses the
+realm's views and DERIVE rules that reach it, compiled to one ordinary query that is shown before it
+runs and pinned once saved. A view becomes a step by making a named, described fact; a view may declare
+its `goal:` instead of its `cypher:`.
+
 ---
 
 ## Repository convention
@@ -1249,7 +1255,8 @@ Two consequences follow from the fact that a reference is an INLINE of the body,
 | Field | Required | Description |
 |---|---|---|
 | `name` | yes | What it is run and matched by. A node view may NOT be named like a label the world already holds — matching that label anywhere, including inside other views, would silently come to mean "the nodes this view selects". |
-| `cypher` | yes | The body. Standard Cypher, parsed by the real parser; there is no `DEFINE VIEW` statement and no subquery form. |
+| `cypher` | yes, unless `goal` | The body. Standard Cypher, parsed by the real parser; there is no `DEFINE VIEW` statement and no subquery form. |
+| `goal` | no | In place of `cypher`: the final read query only. The world plans the views and rules that reach it, and pins the compiled statement per world. A realm ships `goal:` alone — a shipped `compiled:` or `plan:` is a validation error. See [Virtual Cypher §16.10](VIRTUAL_CYPHER.md#1610-goal-views--a-saved-answer-whose-steps-are-planned). |
 | `description` | no | What it answers, for the Views list and for a model choosing between views. |
 | `params` | no | Declared bind values, each with a `type` (`string`, `int`, `number`, `float`, `double`, `boolean`, `date`), a `description`, and ideally a `default` so the view stays runnable bare. A param with no default must be supplied, unless it declares `required: false`: then an invocation may omit it and it is bound to `null` (so `WHERE $p IS NULL OR x.k = $p` skips the filter). An explicit `null` argument is accepted for any param — it takes the default when one is declared, and is bound as `null` otherwise. `default: null` alone does not make a param optional; declare `required: false`. One value each: a view needing a list reads it inside its own body rather than taking `IN $p`. |
 | `outputLabel` | inferred | The type a node view's rows are. **Inferred** when the body returns a single bare node variable, which is why most views never declare it. REQUIRED on a `materialized` view, where there is nothing to infer from until the body runs. |

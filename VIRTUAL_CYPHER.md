@@ -3997,6 +3997,9 @@ MATCH (u:Issue) WHERE NOT EXISTS { (u)-[:TRACKED_BY]->() } RETURN u.summary
   made. Elements projected by `ai.fromText` are not "written" in this sense — the query above judges
   stored cases and links projected issues to them.
 
+A caller need not write the steps at all: given only the final `MATCH … RETURN`, a planner chooses them from
+the world's views and rules and compiles them into exactly this shape of unit subqueries (§16).
+
 ---
 
 ## 8. Views — a saved query used as a label
@@ -4064,6 +4067,10 @@ answered quietly wrong:
   would be ignored and the second truncated, so the answer would not be the one asked for. A view
   parameter holds one value: a view that needs a list should read it inside its own query, not as
   `IN $p`.
+
+**A view may declare its answer instead of its body.** `goal:` in place of `cypher:` names the final read
+query only; the world plans the steps that reach it, compiles and pins them, and runs the pinned statement
+(§16.10).
 
 ### 8.2 Output typing — identity preservation is the rule
 
@@ -5704,3 +5711,337 @@ Two limits stay, and they are the same in both spellings: the subquery's pattern
 node bound OUTSIDE it, and a position no relationship reaches
 (`EXISTS { MATCH (s)-[:R]->(:T) MATCH (y) }`) must name a label. Each of those is a scan of the
 whole graph rather than a constraint, and holding one position states no scope over a scan.
+
+---
+
+## 16. Planning: ask for the result, not the steps
+
+A query says how to reach an answer. A **goal** says only what the answer is — the final read query,
+written over the facts it needs as if they already existed — and leaves the route to a planner. The route
+is chosen deterministically, by embabel-agent's GOAP condition planner (A\*), from the views and DERIVE
+rules the world already has; models do judgement inside the steps, within typed bounds, and never choose
+the route. A planned query is correct by construction, and reproducible: proven well-formed before it
+runs, and the statement that runs is the one that was reviewed, every time it runs.
+
+That claim has an edge, and the section is precise about where it lies:
+
+| Holds before anything runs | Because |
+|---|---|
+| the plan is well-formed: every fact it reads is made by an earlier step or held by the world | introspection checks each step's needs against what precedes it (§16.2) |
+| it refuses before it spends | planning runs no step, reads no source and calls no model (§16.8) |
+| the same goal over the same world gets the same plan | the planner is deterministic, and two plans of equal cost are reported as a tie, never broken by chance (§16.5) |
+| what runs is what was reviewed | a saved plan is pinned with a fingerprint of every step it chose, and refused as stale when one moves — never silently redone (§16.10) |
+
+What is **not** proven is that a model's judgement inside a step is right. It is bounded (it fills declared
+types, §7.8, and keeps only elements it was shown, §7.7), typed, reported (`PROJECTION_*` and the other
+warnings), cached (§7.6) and priced (§9) — but it is a judgement. "Deterministic planning; bounded, typed
+model calls" is the accurate description. "Fully deterministic" is not.
+
+### 16.1 The model
+
+- **A step is a saved view or a DERIVE rule the world already has** — its own, or one a realm ships. No
+  one writes a step signature: what a step needs and makes is read off its Cypher (§16.2).
+- **A goal is the only thing written.** It is one read-only `MATCH … RETURN` over world labels and the
+  facts steps make — projected labels and relationships (§7.8), derived labels (§13), views' output
+  labels.
+- **The plan compiles to one standard query.** Each chosen view becomes a unit `CALL {}` subquery, in plan
+  order, and the goal comes last:
+
+```cypher
+CALL {
+  CALL ai.fromText($email, '(t:Attendee)-[:RAISED]->(i:Issue), (t)-[:WORKS_FOR]->(a:CustomerAccount)')
+    YIELD t
+  RETURN count(t) AS projected
+}
+CALL {
+  MATCH (li:Issue)<-[:RAISED]-(raiser:Attendee)-[:WORKS_FOR]->(acct:CustomerAccount)-[:HAS_CASE]->(c:SupportCase)
+  WHERE c.status IN ['open', 'pending']
+  WITH li, relevant(c, 'the same problem as: ' + li.summary) AS tracked
+  UNWIND tracked AS tc
+  CREATE (li)-[:TRACKED_BY]->(tc)
+  RETURN count(*) AS linked
+}
+MATCH (raisedBy:Attendee)-[:RAISED]->(untracked:Issue)
+WHERE NOT EXISTS { (untracked)-[:TRACKED_BY]->() }
+RETURN untracked.summary AS issue, untracked.severity AS severity, raisedBy.name AS person
+```
+
+**Nothing is new in Cypher.** The compiled statement is an ordinary Virtual Cypher query, held to every
+rule in this document: `ai.fromText` inside a unit subquery (§7.8, "where it may be called"), a
+reduction over elements inside one (§7.7), writes of projected types into the run's scratch (§7.9). Steps
+communicate through that scratch, never through variables: a later step reads what an earlier one made by
+matching its label. One statement is one run, so what the steps project lives exactly as long as the plan.
+
+A DERIVE rule is a step the statement does not call: its conclusion is evaluated whenever a query reads it
+(§13), so the plan lists it — what it makes, what it needs — and the compiled statement simply reads.
+
+### 16.2 Introspection — what a step needs and makes
+
+| In a view or rule body | Read as |
+|---|---|
+| `CALL ai.fromText(…, '<pattern>')` | **makes** the pattern's projected nodes and relationships, and its resolved world-type edges |
+| `CREATE` / `MERGE` of a projected label, or of a relationship declared on a projected type | **makes** it |
+| `MATCH`, `OPTIONAL MATCH`, `EXISTS {}` or **`NOT EXISTS {}`** over a projected label or relationship | **needs** it |
+| `MATCH` over a world label | nothing — the world provides it |
+| a `derives:` label (§13), a view's `outputLabel` | a **named** output |
+| `$x` read into `ai.fromText` | an input: **text** |
+| `$x` keyed on a spine `L` (`{accountKey: $x}`) or read into `canonicalize(…, 'L')` (§5.4.4) | an input: an **identity** of `L` |
+
+Facts are named `node:Issue` and `edge:Attendee-RAISED->Issue`; a path pattern is the set of its edges.
+The goal is read by the same rules: every fact it reads is a fact the plan must make.
+
+- **`NOT EXISTS` is a need.** The goal above reads `TRACKED_BY` only to test its absence. Counted only
+  positively, a plan that skipped the step making `TRACKED_BY` would type-check, and every issue would come
+  back "untracked" because the edge could never exist.
+- **World labels are free.** The world is always there; a step is never chosen to provide one.
+- **Types say *what*, not *which*.** Two views that both return `CustomerAccount` rows — "at risk", "owes
+  money" — are identical by type, and a planner choosing between them by type would pick wrongly. So
+  planning is over **named facts** only. A view that returns only world labels — including one whose
+  `outputLabel` is a type the world already declares — makes no fact: it is a question, not a step.
+- **What cannot be read is left out, never guessed.** A body the pass cannot type, a view with a parameter
+  that is neither text nor identity and has neither a default nor an input of its name, and a rule set with a param it does not default
+  (which never fires on its own, §13.1) are each left out of planning with a diagnostic naming why.
+- **A goal view is never a step** (§16.10).
+
+### 16.3 What makes a view plannable
+
+The realm author's checklist. A view that meets it becomes a step in every plan that needs what it makes,
+in every world that installs it, with no wiring.
+
+1. **It makes a named fact.** It projects text into projected types (`ai.fromText`), writes a projected
+   type or a declared projected relationship (§7.9), or returns an `outputLabel` that no world type
+   already declares. A DERIVE rule set makes its `derives:` label or relationship.
+2. **Every fact a goal may read has a description.** Projected types and their relationships already must
+   (§7.8); a rule set's `description` describes its `derives:`; a view's `description` describes its
+   `outputLabel`. English mode (§16.9) chooses between facts by these descriptions, and a fact without one
+   is never offered to it.
+3. **Its parameters are typed by use.** Text it reads into `ai.fromText` is a text input; a key it matches
+   on a spine, or canonicalizes onto one, is an identity of that spine. Any other parameter needs a default:
+   without one, the view is left out of every plan whose caller does not supply an input of that name.
+4. **Its names are distinct from every other step's.** The engine refuses a variable reused across `CALL {}`
+   bodies and the statement around them (§4), so a plan cannot combine two steps that share a variable or a
+   `RETURN` column name. The compiler refuses the clash and names it; it never renames, because a rename it
+   chose would be invisible in the pinned query. Choose names that say what they hold — `raisedBy`,
+   `untracked`, `tc` — rather than `n` and `x`.
+5. **It reads what it needs by label.** A step that consumes another's output matches the fact (`MATCH
+   (li:Issue)…`); it cannot receive a variable, because no variable crosses a step boundary.
+
+A realm validates the checklist where it can: a goal view it ships is planned at validation (§16.10), so a
+step that does not make what the goal needs is an error at the goal's line, not a surprise in a world.
+
+### 16.4 Inputs
+
+An input is typed: `{name: {type: 'text' | '<SpineLabel>', value}}` — an email or meeting notes as `text`,
+one entity of a spine (`{type: 'CustomerAccount', value: 'acme.com'}`) as an identity. Binding, against the
+chosen plan's steps and the goal:
+
+- an input named after a parameter binds to it;
+- otherwise a `text` input binds to the one parameter the plan reads into `ai.fromText`, and an identity of
+  `L` to the one parameter a step keys or canonicalizes on spine `L`;
+- two candidate parameters for one input is refused, naming both — and so are two inputs for one
+  parameter, and a text or identity parameter no input binds. Name the input after the parameter to choose;
+- any other parameter takes its declared default.
+
+The compiled plan is one statement, so `$email` read by two steps is one parameter: binding counts names.
+
+### 16.5 Outcomes — none is a guess
+
+| Outcome | Means | Carries |
+|---|---|---|
+| `planned` | the goal is reachable, and one plan is cheapest | `reads` (the facts the goal reads), `steps` in run order — each with `from`, `kind` (`view` or `rule`), `realm`, the facts it `adds` and `requires`, what it `reaches`, whether the statement `runs` it, and its `cost` — the `compiled` statement, the input bindings, and the quote |
+| `unreachable` | some fact the goal reads is made by no step on offer | `missing` — the fact, by name — and the planner's `detail` |
+| `tie` | two plans reach the goal at equal cost | both rival `plans` and the `cost` they share. Make the goal more specific; the planner never picks one |
+| `refused` | the request cannot be planned as made — an untypable goal, an input that binds ambiguously, a plan whose steps do not compile together | `reasons`, each saying what to change |
+| `needsInput` | English mode: the goal is sound, and needs an input nobody supplied | the `goal`, and `needsInput: {type, why}` |
+| `declined` | English mode: no goal this world can reach answers the question | the `reason`, the `missing` facts when that is why, and the last `goal` written |
+
+Any outcome may carry `diagnostics`: the steps left out of planning, and why. An `unreachable` answer is
+also a precise brief: the missing fact names the step — or the realm — the world lacks.
+
+### 16.6 Costing — stored before API before AI
+
+The planner chooses the plan whose steps' costs sum least, so a step's cost is what separates two plans that
+reach the same goal. It is judged from **what the step reaches**, read off its body like everything else:
+
+- a **stored** read — labels whose producers read what the deployment holds, or no producer at all;
+- an **API** — a label or relationship whose producer calls an outside source (§5.3);
+- a **model** — `ai.fromText`, an `ai.*` function or `{ai: …}` directive (§7), a model reduction such as
+  `relevant` (§7.7), or a label whose producer is model-backed (`generative`, `agentic-rag`, `extract`,
+  `aggregate`).
+
+The ordering is the contract: stored < API < model, and one model step outweighs several API steps. A stored
+read is milliseconds and free; an API is a round trip, a rate limit and a source that can be down, but answers
+the same way twice; a model call is seconds, billed per token, and a judgement that can differ between runs.
+So a model step is in a plan only when the goal needs what only a model makes. Presence counts, not number:
+how many calls a run makes is the quote's business (§9), not the planner's.
+
+- **Pluggable.** The cost function is a deployment's to replace. Costs are in 0..1, and a value outside that
+  range is refused, not clamped — a clamped cost would tie plans the function meant to separate. The
+  reference host's default prices a stored read at 0.05, adds 0.2 for an API and 0.7 for a model
+  (informative; the ordering is what is promised).
+- **`reaches` is stated beside `cost`.** A step's `reaches` — `api`, `model`, both, or empty — is read off the
+  step; its `cost` is the installed function's number. A surface labelling a step "AI" reads `reaches`, never
+  the number.
+- **Equal cost is a tie**, reported and never broken (§16.5).
+- **The quote is not the cost.** Each `planned` answer carries the engine's quote for the compiled statement
+  (`modelCalls`, `apiCalls`, `wouldRefuse`), made by reading the graph only. The quote does not price
+  `ai.fromText`: each step it leaves out is listed under `unpriced`, and those calls are priced when the plan
+  runs, and refused there over the limit (§7.8, "Cached and priced").
+
+### 16.7 Scope
+
+**A plan never reaches through a view the caller could not invoke directly.** The steps on offer are the
+views the asking principal may run; a view hidden from them is not named in a diagnostic either. A DERIVE
+rule carries no audience of its own: it is evaluated for any query that reads its conclusion, planned or not
+(§13). A plan runs as the caller, through the path every query takes, so §15's scope and every refusal in
+this document apply to the compiled statement unchanged.
+
+### 16.8 Explain, then run — the `plan` tool and its endpoints
+
+The MCP tool `plan` is offered wherever `kg_query` is:
+
+```
+plan({goal | question, inputs?, run?: false})
+→ {"outcome": "planned", "reads", "steps": [{from, kind, realm, adds, requires, reaches, runs, cost}],
+   "compiled", "inputs": [{input, parameter}], "quote": {modelCalls, apiCalls, wouldRefuse, plan, unpriced},
+   "diagnostics"?}
+   + {"rows", "warnings", "error"?}                         when run is true
+→ {"outcome": "unreachable", "missing", "detail"}
+→ {"outcome": "tie", "plans", "cost"}
+→ {"outcome": "refused", "reasons"}
+   with a question: + {"question", "goal", "worldOnly"}, or "needsInput" / "declined" (§16.9)
+```
+
+Exactly one of `goal` and `question`. `inputs` is an object (or its JSON text) of typed inputs (§16.4).
+
+**Explain first.** With `run: false`, the default, `plan` introspects, plans, compiles and quotes: it runs
+no step, reads no source and calls no model. A caller reads the steps and the quote, then calls again with
+`run: true`, which plans again and executes what that compiled; rows and warnings come back unchanged. A
+goal that reads only stored data needs no plan — it plans to no steps, and `kg_query` answers it directly.
+
+The same answer, field for field, over REST:
+
+```
+POST /api/v1/admin/kg/plan        { "goal" | "question", "inputs"? }   → the tool's answer; never executes
+POST /api/v1/admin/kg/plan/run    { "goal" | "question", "inputs"? }   → the answer, + rows and warnings
+```
+
+Explaining and running are two **routes**, not one route with a flag: a studio that plans as its author
+types calls a route that cannot execute whatever the body says, and a client allow-list can grant it without
+granting the run. The caller is the authenticated principal. Neither or both of `goal` and `question` is a
+400; every planner outcome — `unreachable`, `tie` and `refused` included — is a 200, because each is the
+answer.
+
+### 16.9 English mode — the question writes the goal
+
+```
+question → goal (a final MATCH … RETURN) → plan → compiled query → rows
+           one model call                  no model
+```
+
+`plan({question})` (or a `question` body) hands the question to the same text-to-Cypher generator
+`kg_ask` uses, told the world's schema **and** the facts its steps can make — each with its
+description and what it needs (`text`, an identity) — the facts declared that nothing makes, and the names
+the steps already bind, which the goal must not reuse (§16.3·4).
+
+- **Prefer the world.** When stored or live data answers the question, the goal reads only world labels, and
+  the answer says `worldOnly: true`: no steps, no projection. A goal reads a fact only when the question needs
+  what only a step makes.
+- **Checked without a model.** Each written goal must be one read-only query, typed, with no parameters, over
+  declared labels only — then it is planned exactly as a `goal` would be, with the caller's inputs.
+- **A missing input is a question back.** A goal reachable only from text no one supplied answers
+  `needsInput` (`{type: 'text', why}`), carrying the goal, so supplying the input plans that goal without
+  writing it again.
+- **A goal that cannot be reached is rewritten, then declined.** A fact nothing makes, or a goal that does not
+  compile beside its steps, is sent back to the generator with every reason so far — up to three attempts —
+  and then the answer is `declined`, naming what nothing makes. It is never a guessed answer.
+- **Both layers are shown.** The answer carries the `question`, the `goal` written from it, and the plan made
+  of that goal. Writing the goal is the one model call `run: false` makes. A question with `run: true` writes
+  the goal again; to run exactly what was shown, pass the returned `goal` as `goal`.
+
+A question is not yet a field of a saved view; a view that should keep its answer pins the goal (§16.10).
+
+### 16.10 Goal views — a saved answer whose steps are planned
+
+A view may declare `goal:` in place of `cypher:`. The world plans it, compiles it and pins the result; the
+view then runs that statement like any other view, so everything that runs views — by name, over MCP, in
+lenses, apps and watches — gets it unchanged.
+
+```yaml
+# views/untracked-issues.yml — what a realm ships: the goal, and nothing the server writes
+- name: UntrackedFromEmail
+  description: Issues a customer's email raises that no open support case already tracks.
+  params:
+    email: { type: string, description: "The customer's email, as text." }
+  goal: |
+    MATCH (raisedBy:Attendee)-[:RAISED]->(untracked:Issue)
+    WHERE NOT EXISTS { (untracked)-[:TRACKED_BY]->() }
+    RETURN untracked.summary AS issue, untracked.severity AS severity, raisedBy.name AS person
+```
+
+| Field | Written by | Meaning |
+|---|---|---|
+| `goal` | the author | The final read query, over facts as if they existed. Read by validation's vocabulary, property and query-shape checks as a view's `cypher` is. |
+| `params` | the author | The plan's inputs, typed by use (below). |
+| `compiled` | **the server**, never the author | The statement the goal compiled to — what an invocation runs. |
+| `plan` | **the server**, never the author | What `compiled` was planned from: a fingerprint of the goal text, and each chosen step's name, kind and signature fingerprint. |
+
+**Params are typed by use.** A param a chosen step reads into `ai.fromText` is text; one a step keys or
+canonicalizes on spine `L` is an identity of `L`; one only filtered on is a value bound at invocation. A
+param binds the parameter of **its own name** — the compiled statement keeps the steps' parameter names, so
+binding `email` to a step's `$notes` would be invisible in the pin. A param nothing reads, or one read two
+ways, is refused, naming who reads what. A chosen step's parameter the view does not declare is compiled in as
+that step's default.
+
+**Compile, pin, run.** Saving a goal view plans it as the saving principal, over the steps that principal may
+run, and stores `compiled` and `plan` beside it; the compiled statement is then checked as any view body is.
+Unreachable, tie and refused are save errors — the save names the missing fact, both rival plans, or the
+reasons, and nothing is written. An invocation runs `compiled` and **never plans**.
+
+**Replanning is explicit:** a re-save, the MCP tool `view_replan` (`{name}` → `{ok, compiled}`, or `{ok:
+false, error, details}` naming the missing fact, the rivals or the refusal), or
+`POST /api/v1/admin/kg/views/{name}/replan`. Nothing replans a pinned goal view by itself.
+
+**Stale is refused, never silently redone.** A pin records each chosen step's signature — what it needs,
+makes, names and takes; not its body or cost, which the compiled statement already holds. Every invocation
+checks the pin against the invoking principal's steps:
+
+| Found at invocation | Answer |
+|---|---|
+| the goal was never compiled in this world | refused: not compiled — replan it |
+| the goal text changed since the pin | refused as stale |
+| a pinned step was removed | refused as stale, naming the step |
+| a pinned step's signature changed | refused as stale, naming the step |
+| a pinned step the invoking principal cannot run | refused as stale, without naming it (§16.7) |
+
+Each refusal is the caller's to fix, answered as any invalid view argument is. The views listing carries the
+`goal` and a `goalStatus` — `pinned`, `not compiled`, or `stale: <what moved>` — which is the warning before
+anyone invokes it.
+
+**A goal view is an answer, not a step.** It is never offered to a plan: its compiled statement makes what its
+own steps make, and offering it would tie every plan with itself.
+
+**A realm ships `goal:` alone; pins are per world.** A goal is planned over the steps of the world it runs in —
+every installed realm's views and rules — so the same realm can compile differently in two worlds. A pin
+written back into the realm would ship one world's answer to every other, so each world keeps its own pins,
+written by the server. A world compiles a goal view it has never compiled when it is rebuilt — realm install,
+refresh or removal, world switch, all explicit acts — and never replans one it has already pinned. A view a
+user saves keeps its pin with it, written by the server; clients never edit it.
+
+**Realm validation** plans each shipped goal view over the realm's own views and DERIVE rules, and those of the
+realms validated beside it, read against the projected types, spines and producers they declare:
+
+| Found | Severity |
+|---|---|
+| unreachable, or refused | **ERROR** at the view's `goal` |
+| a shipped `compiled:` or `plan:` | **ERROR** — those fields are the server's |
+| a tie | **WARNING** — validation cannot price the deployment's model reductions, so two plans the installing world tells apart may tie here; the world refuses a real tie when it compiles the view |
+
+Audience is not applied at validation: which steps a principal may plan through is decided per principal,
+when the world compiles.
+
+### 16.11 What is not here yet
+
+A plan today is one statement and answers a question: it reads, projects and judges, and writes only the run's
+scratch. Plans that pause — for a person's approval, or a step that takes hours — and plans that act through
+gated writes are forthcoming, and will be specified when they are built.

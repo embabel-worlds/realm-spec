@@ -367,6 +367,67 @@ RETURN a.name</code></pre>
       </div>
     </div>
   </details>
+  <details class="theme" open data-theme-tags="planning goal views outcomes yaml">
+    <summary class="theme-head">
+      <span class="theme-name">Planning</span>
+      <span class="theme-lede">Write only the final query; the world's own views and rules are the steps, chosen by a deterministic planner and compiled to one ordinary query.</span>
+      <span class="theme-count"></span>
+    </summary>
+    <div class="theme-body">
+      <div class="grid">
+    <section data-tags="planning goal views yaml">
+      <h2>A goal view — the answer, not the steps</h2>
+      <p class="lede"><code>goal:</code> in place of <code>cypher:</code>. The world plans the steps, compiles them to unit <code>CALL {}</code> subqueries ahead of the goal, and pins the result.</p>
+      <pre><code># views/untracked-issues.yml
+- name: UntrackedFromEmail
+  description: Issues a customer's email raises
+    that no open support case already tracks.
+  params:
+    email: { type: string, description: "The email, as text." }
+  goal: |
+    MATCH (raisedBy:Attendee)-[:RAISED]-&gt;(untracked:Issue)
+    WHERE NOT EXISTS { (untracked)-[:TRACKED_BY]-&gt;() }
+    RETURN untracked.summary AS issue, raisedBy.name AS person</code></pre>
+      <div class="rule never"><b>never</b><span>Ship <code>compiled:</code> or <code>plan:</code> in a realm — the server writes them, per world. Validation errors.</span></div>
+      <div class="rule must"><b>true</b><span>An invocation runs the pin and never plans. Replan is explicit: re-save, or <code>view_replan</code>.</span></div>
+      <div class="rule care"><b>stale</b><span>A pinned step removed or changed: refused, naming the step. The views listing shows <code>goalStatus</code>.</span></div>
+      <div class="rule care"><b>validate</b><span>Unreachable is an error at the goal; a tie is a warning.</span></div>
+    </section>
+    <section data-tags="planning outcomes goal">
+      <h2>plan — explain, then run</h2>
+      <p class="lede">Over MCP, or <code>POST /api/v1/admin/kg/plan</code> (never executes) and <code>…/plan/run</code>. Give a <code>goal</code> or a <code>question</code>.</p>
+      <pre><code>plan({goal: "MATCH (raisedBy:Attendee)-[:RAISED]-&gt;(untracked:Issue) …",
+      inputs: {email: {type: "text", value: "…"}},
+      run: false})</code></pre>
+      <table>
+        <tr><th>Outcome</th><th>Carries</th></tr>
+        <tr><td><code>planned</code></td><td>steps (adds, requires, reaches, cost), <code>compiled</code>, quote</td></tr>
+        <tr><td><code>unreachable</code></td><td>the <code>missing</code> fact, by name</td></tr>
+        <tr><td><code>tie</code></td><td>both rival plans — never broken</td></tr>
+        <tr><td><code>refused</code></td><td><code>reasons</code>: what to change</td></tr>
+        <tr><td><code>needsInput</code></td><td>question only: the input's <code>type</code> and <code>why</code></td></tr>
+        <tr><td><code>declined</code></td><td>question only: what nothing makes</td></tr>
+      </table>
+      <div class="rule must"><b>true</b><span><code>run: false</code> runs no step, reads no source, calls no model — a <code>question</code> costs the one call that writes its goal.</span></div>
+      <div class="rule care"><b>cost</b><span>Stored &lt; API &lt; model, from what a step reaches. Pluggable; a cost outside 0..1 is refused, not clamped.</span></div>
+      <div class="rule never"><b>never</b><span>A step through a view the caller could not invoke directly.</span></div>
+    </section>
+    <section data-tags="planning views yaml">
+      <h2>What makes a view plannable</h2>
+      <p class="lede">Nothing declares a step's signature: what it needs and makes is read off its Cypher. A realm author makes sure of four things.</p>
+      <table>
+        <tr><th>Must</th><th>Because</th></tr>
+        <tr><td>make a <b>named</b> fact</td><td>projected types, a declared projected relationship, a <code>derives:</code> label, a new <code>outputLabel</code>. Types say <i>what</i>, not <i>which</i>: world rows alone are a question, not a step</td></tr>
+        <tr><td>describe every fact</td><td>English mode chooses facts by description, and never offers one without</td></tr>
+        <tr><td>type params by use</td><td><code>ai.fromText($x)</code> → text; a spine key or <code>canonicalize</code> → identity; anything else needs a default</td></tr>
+        <tr><td>use distinct names</td><td>variables and <code>RETURN</code> columns across the plan — the compiler refuses a clash, never renames</td></tr>
+      </table>
+      <div class="rule must"><b>true</b><span><code>NOT EXISTS { (x)-[:R]-&gt;() }</code> in a goal is a need: the step that makes <code>R</code> is planned in.</span></div>
+      <div class="rule care"><b>note</b><span>A body the pass cannot type is left out with a diagnostic, never guessed.</span></div>
+    </section>
+      </div>
+    </div>
+  </details>
   <details class="theme" open data-theme-tags="cache cost filters pushdown">
     <summary class="theme-head">
       <span class="theme-name">Narrowing and cost</span>
