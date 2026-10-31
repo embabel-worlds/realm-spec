@@ -200,7 +200,7 @@ tags:
 | `url` | No | Source repository or documentation URL |
 | `icon` | No | An image the realm ships, as a path **relative to the realm root**. See [Icons](#icons). |
 | `category` | No | What the realm is for: one id from the published list of categories. See [Category](#category). |
-| `tags` | No | Free-text keywords, for finding the realm. They are not its category. |
+| `tags` | No | Free-text keywords, for finding the realm. They are not its category. One is spoken for: a realm bringing a child of a shared label carries that label, lowercased. See [Category](#category). |
 | `maturity` | No | The author's own readiness claim: `experimental`, `beta`, `stable` or `deprecated`. Absent means the realm makes no claim — which is **not** a claim of being finished. See [Maturity](#maturity). |
 | `host` | No | Execution host for the Realm's Functions: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
 
@@ -334,6 +334,18 @@ by search and still installable.
 them. Many say how a realm is built (`openapi`, `skills`) rather than what it is
 for, and most are used by one realm only. A realm keeps its tags as search
 keywords; it says what it is for here.
+
+One tag is spoken for, and it is still a search keyword rather than a category:
+a realm that brings a child of a shared label `X` — a type declaring
+`parents: [X]`, where `X` is a label the host's standard model or a vocabulary
+realm already declares (`Memory`, `Todo`, `LogEvent`) — carries the tag `x`,
+lowercased (`memory`, `todo`). A host needs it because the catalogue row of a
+realm that is not installed carries no types, so when somebody asks for another
+system under a label, the tag is the only thing a host can match to find the
+realms that could stand behind it. A realm that omits it is still listed, still
+found by search and still installable; it is just not offered where the label
+is. The convention itself is stated with the labels, in default-world's
+`config/types/README.md` under "Shared labels".
 
 **What a host may do with it** *(informative — the behaviour of the reference
 host, not part of the contract)*: the catalogue carries a realm's `category` only

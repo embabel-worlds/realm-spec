@@ -56,6 +56,19 @@ is declared.
 
 **Guarantee — the chain is transitive.** Declaring one parent is enough; grandparents follow.
 
+**Guarantee — only the contract is inherited; the rest must be restated.** A child inherits what
+the parent's rows promise a reader: the properties, the ancestor labels, and a `lifecycle:` from
+the nearest ancestor that declares one, which then holds the child's rows whichever system fetched
+them. It does NOT inherit `visibility`, `userAnchor`, `description` or an identity property. Those
+are decisions about one type — who may read it, whether it hangs off the user, how a planner routes
+to it, which property is its key — and a parent that fixed them would fix them for every system that
+ever joins it. A child restates each. A child with its own join and no `identity: true` property has
+rows that never materialize, and nothing reports it. The parent's own behaviour follows from this:
+`MATCH (m:Memory) RETURN m` on a parent whose only population is virtual is refused, with a FIX
+naming the edge that reaches a child, because a virtual child's rows exist only when a query reaches
+them through its join; a parent with stored rows of its own (`Todo`) answers the bare form from those
+rows alone, and reaches no virtual child that way.
+
 **Guarantee — behaviours are inherited.** A method declared on `Party` is callable on any
 `Trust`, and receives the trust's own property values.
 
@@ -174,8 +187,13 @@ join (`Person`, `Organisation`) is never stamped, so the qualified form cannot s
 The realm label is inert unless used: bare-label queries, hierarchies (§2) and capability
 composition (§3) behave identically with or without it. Vocabulary conventions still apply —
 prefer a qualified specific type name (`UkPlace`) with a shared parent (`Place`) over coining
-a generic name two realms will fight over; the realm label is the disambiguator of last
-resort, not a licence to collide.
+a generic name two realms will fight over, and prefer a parent that already exists over one you
+declare: first a label the host's standard model declares (`Memory`, `Todo`, `LogEvent` — in
+default-world's `config/types/`, whose README's "Shared labels" section is the contract for what a
+child inherits and owes), then one an installed realm declares (`realm_status` lists them; a
+vocabulary realm such as `realm-code-model` exists to be parented onto), and only then your own,
+in the most general realm that needs it. The realm label is the disambiguator of last resort, not
+a licence to collide.
 
 ---
 

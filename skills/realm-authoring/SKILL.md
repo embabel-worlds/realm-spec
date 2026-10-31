@@ -61,7 +61,7 @@ checkout is mounted.
 | call a GraphQL API from a captured realm | `graphql` in `realm.ts` | TYPESCRIPT_REALMS.md "GraphQL" |
 | a shared IDENTITY other realms attach to (an account, a product, a site) | `types/` `spine:` | Virtual Cypher §5.4.1 — see "Joining OTHER realms" below |
 | attach your records to a spine (yours, another realm's, or Person/Organization) | `types/` `hub:` on the property carrying the key | Virtual Cypher §5.4 |
-| a shared KIND of record (every ticket is a `SupportCase`) | `types/` `parents:` | LABELS_AND_COMPOSITION.md |
+| a shared KIND of record (every memory is a `Memory`; every ticket a `SupportCase`) — join a label that exists before coining one | `types/` `parents:` | LABELS_AND_COMPOSITION.md §2, §5 — and "Joining OTHER realms" Step 1 below |
 | fetch a type **on demand** by traversal | `types/` `virtualJoins:` + `producers/` | "Joining types on demand" (Virtual Cypher) |
 | a named, parameterized ANSWER a caller runs by name | `views/` | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
 | query the graph from a code_mode script or skill | `gateway.kg.query` | "CypherScript" |
@@ -120,7 +120,42 @@ things or one?**
 
 - **Two things → a parent label.** Every helpdesk conversation is a `SupportCase`; two systems'
   tickets are two tickets. Declare `parents: [SupportCase]` and `MATCH (c:SupportCase)` returns
-  them all.
+  them all. The label is the whole value: a view, app or agent written against it is answered by
+  every system that joins it and names none of them, which is what lets a person move off one
+  system without rewriting anything above the label. So find the label before you coin it, in
+  this order:
+
+  1. A label the host's standard model already declares. `Memory` (every memory system), `Todo`
+     (every task list) and `LogEvent` (every log) live in default-world's `config/types/`, and its
+     README's "Shared labels" section is the contract — what `parents:` inherits, what it does not,
+     and the four-rung ladder (Mirror → Compare → Promote → Retire) a shared label earns:
+     https://github.com/embabel-worlds/default-world/blob/main/config/types/README.md#shared-labels.
+     Read it rather than this skill's summary of it.
+  2. A label an installed realm declares. `realm_status` lists each realm's types. A vocabulary
+     realm exists to be parented onto — `realm-code-model` brings `Artifact` / `Dependency`,
+     `Source` / `SourceDeclaration` / `CallSite` and `StackFrame` / `ThrownException`, and every
+     language realm declares children of those (`JavaMethod` is `parents: [Method]`).
+  3. None fits → coin one, in the most general realm that needs it (a vocabulary realm, not a
+     product realm — the label must outlive any one product), named for the kind of record, never
+     for the system that holds it.
+
+  A child owes its parent four things, because the host inherits only the CONTRACT — the
+  properties, the parent's label on every row, a `lifecycle:` from the nearest ancestor declaring
+  one — and treats everything else as a decision about one type:
+
+  - **Restate `visibility`, `userAnchor`, `description` and an `identity: true` property.** None
+    is inherited. A virtual child without its own identity has rows that never materialize, and
+    nothing errors.
+  - **Carry `source` and `status` where the parent's contract has them.** `source` is how one
+    result over `:Memory` says which system answered each row; `status` is how a promoted row
+    leaves plain reads.
+  - **Tag the realm with the lowercased label** (`memory`, `todo`, `code`). An uninstalled realm's
+    catalogue row carries no types, so the tag is what a host matches when it offers "Add a
+    system" under the label — README, "`realm.yml`" → `tags`.
+  - **Keep views over your labels in your realm's `views/`.** A view that reads a label no
+    installed realm declares is a world WARNING, so a view over your child ships with your child;
+    the `<label>_bakeoff` view that compares systems ships with the label (default-world's
+    `memory_bakeoff`).
 - **One thing → a spine.** A CRM customer and a billing customer for the same company are two
   records *about* one account. They must resolve onto one node. `parents:` is WRONG here — it
   produces one `:CustomerAccount` per system with nothing joining them. The host refuses it.
@@ -567,6 +602,11 @@ push.
 - **An identity is a spine; a record is a parent label.** Never `parents:` a spine; never
   normalize a shared key on your own side; always assert a non-zero cross-realm count in
   `tests/verify.sh`. A broken cross-realm join is an empty result, not an error.
+- **Join a label before you coin one.** `Memory`, `Todo`, `LogEvent` first, then whatever
+  `realm_status` shows installed, then your own in the most general realm that needs it. A child
+  restates `visibility`/`userAnchor`/`description`/identity (not inherited), carries the parent's
+  `source`/`status`, keeps its views in its own realm, and its realm carries the lowercased label
+  as a tag. See "Joining OTHER realms" Step 1.
 - **An undeclared filter is a per-anchor fetch.** If your source can filter, say so with
   `pushdown:` — and verify it against the live source, because a rule that renders nothing is
   silently just slow. See "What you DECLARE decides what the engine may do".
