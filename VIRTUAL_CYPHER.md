@@ -576,8 +576,8 @@ without the allowance:
   still warns;
 - a `LIMIT` met on a full page that is the walk's last allowed page still warns, so a `LIMIT`-ended
   walk is not guaranteed warning-free;
-- a total beyond twice `maxPages`, cursor paging, and a walk whose page one reports no total stop at
-  `maxPages`;
+- a total whose pages, cut to a pushed-down `LIMIT`, still exceed twice `maxPages`, cursor paging,
+  and a walk whose page one reports no total stop at `maxPages`;
 - a total that under-reports the book extends the walk past `maxPages` only as far as the page that
   total named, plus the confirming page when that total is an exact multiple of `size`. That
   confirming page may return the rest of the book: if it comes back short, the answer is complete
