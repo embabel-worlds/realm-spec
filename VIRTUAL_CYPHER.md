@@ -4010,8 +4010,10 @@ system; a *view* is a view over the graph (real + virtual) itself. Two kinds, by
 
 - **Regular (inlined).** Expanded at query time — the view's `MATCH … RETURN <var>` body is spliced in and its
   return variable renamed to the outer alias, so `MATCH (c:my_key_accounts)-[:R]->(x)` becomes
-  `MATCH <view body> MATCH (c)-[:R]->(x)`. Always fresh; no storage. (Flat inlining, **not** `CALL {}` — the
-  scope rewriter rejects subqueries.)
+  `MATCH <view body> MATCH (c)-[:R]->(x)`. Always fresh; no storage. Inlining is flat, not a `CALL {}`
+  subquery: the view's members bind the outer alias directly, so the rest of the query traverses from them as
+  from any matched node. (Unit `CALL {}` subqueries are allowed in queries — §4, §16 — a view reference is
+  simply not expanded into one.)
 - **Materialized (cached).** The result nodes are committed and a reference reads the cache instead of
   re-running the body, until a TTL / refresh policy invalidates it. This is the durable sibling of the
   ephemeral `keep(queryId)` option: the expensive fan-out (map) + agentic reduce runs on a **refresh
