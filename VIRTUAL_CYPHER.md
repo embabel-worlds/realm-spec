@@ -61,13 +61,18 @@ the fetch.
 
 ## 2. The execution model
 
-**A Virtual Cypher query never writes.** On every surface that takes a query — asks, views, rule
-bodies, code, captured-realm reads — a write clause anywhere in it (`CREATE`, `MERGE`, `SET`, `REMOVE`,
-`DELETE`, `FOREACH`, `CALL { } IN TRANSACTIONS`, including after a `WITH`) refuses the query before
-anything is fetched or run, naming the clause; a write clause that appears only inside a string,
+**A Virtual Cypher query never writes anything that outlives it.** On every surface that takes a
+query — asks, views, rule bodies, code, captured-realm reads — a write clause anywhere in it (`CREATE`,
+`MERGE`, `SET`, `REMOVE`, `DELETE`, `FOREACH`, `CALL { } IN TRANSACTIONS`, including after a `WITH`)
+that touches a stored or fetched type refuses the query before anything is fetched or run, naming the
+clause. The one write a query may make is to **projected types** (§7.9): nodes of a `projected: true`
+type, and relationships declared on one, created inside the run and gone when it ends — which is how a
+view can be a step that adds a fact for the next (a judged link such as `(:Issue)-[:TRACKED_BY]->`).
+A view whose writes are all projected validates and runs; one that writes anything else is refused at
+load, with the same rule the run applies. A write clause that appears only inside a string,
 comment or map key is data and the query runs. A realm persists changes only through its write
 proposals, never by writing from a query — so nothing a query read from a live source is ever
-stored by that query. The one surface that writes is the annotation surface (§12): a realm and a
+stored by that query. The one surface that writes durably is the annotation surface (§12): a realm and a
 deployment must both opt into it, it takes its own fixed statement shape, and it writes only
 declared annotation properties of REAL nodes — never a fetched record.
 
@@ -5139,11 +5144,11 @@ schema-level engineering could not touch.
 
 ## 11. Determinism and guarantees
 
-- **Read-only.** A user query never writes the graph. Nothing it materializes outlives the run
-  (§2); the sole persisted side effect is a write-through identity **bridge** (a
+- **Read-only.** A user query never writes the graph. Nothing it materializes outlives the run,
+  projected nodes and relationships it creates included (§2, §7.9); the sole persisted side effect is a write-through identity **bridge** (a
   cache of *who* an external identity is, not *what* data they hold). The single, explicitly
   opted-in exception is the dedicated annotation-write surface (§12) — ordinary queries remain
-  read-only and continue to reject mutating clauses.
+  read-only and continue to reject mutating clauses on stored or fetched data.
 - **Scoped, fail-closed.** Every keyed probe goes through the world/context scope rewriter; vector
   searches are filtered by world, context, and access-policy revision at the source. A query can
   never read another context without an explicit authorized bridge, and never another PRINCIPAL's
