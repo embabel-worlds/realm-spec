@@ -163,8 +163,12 @@ outlives the run**:
    Overlapping runs that fetched the same record each keep seeing it for as long as they run, and
    each returns what it would return alone.
 
-   *The one exception:* an identity **bridge** (`writeThrough`) is committed as a warm cache and
-   re-resolved after `refreshAfter` (§5.2).
+   *The exceptions*, each one a declaration the realm makes, never a side effect of asking: an
+   identity **bridge** (`writeThrough`) is committed as a warm cache and re-resolved after
+   `refreshAfter` (§5.2); a canonical spine and its derived edges are written when records of a
+   canonical-bearing type materialize (§5.4); a `cache: {kind: graph}` aggregate commits its result
+   node (§5.5); and an `extract` producer under `cache: {kind: graph}` commits the entities it
+   extracts (§5.6).
 
 ### Evidence when a lookup returns no matching rows
 
@@ -439,8 +443,9 @@ negative cache is recorded on the bridge store, so it rides `writeThrough`: a jo
 
 ### 5.2.1 What a join may make DURABLE, and what it may not
 
-A read query writes nothing durable except an identity bridge. That is the whole of the list, and
-these are the two declarations an author reaches for when they want more.
+A read query writes nothing durable except an identity bridge and the declared exceptions listed in
+§2 (spines, graph-cached aggregates, extracted entities). That is the whole of the list, and these
+are the two declarations an author reaches for when they want more.
 
 **`persist: true` — eager enrichment, and NOT "this fetch, kept."** It is the older form of a
 bridge. A join declaring it is run over **every** anchor of its anchor label on a schedule, and its
