@@ -365,8 +365,8 @@ uncategorised rather than infer one.
 
 ## `actions/`
 
-Me keeps this legacy host configuration outside Realm execution. Use the
-[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for Me Realms.
+A captured host keeps this legacy host configuration outside Realm execution. Use the
+[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for captured Realms.
 
 Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape; the host resolves either a registered short name (e.g. `action`, `goal`) **or a fully-qualified class name** (`com.example.MyCustomActionSpec`) to an `ActionSpec` class on the classpath. Host extensions can use either path.
 
@@ -522,8 +522,8 @@ Actions are deployed to the host's planner on world load.
 
 ## `goals/`
 
-Me keeps this legacy host configuration outside Realm execution. For Me Realms, declare a
-version-1 [captured goal](HOSTED_EXECUTION.md#me-captured-goal-profile) that binds one approved
+A captured host keeps this legacy host configuration outside Realm execution. For captured Realms, declare a
+version-1 [captured goal](HOSTED_EXECUTION.md#captured-goal-profile) that binds one approved
 handler to Realm-declared input and output types; a legacy file of the shape below inside a
 captured Realm is reported and never parsed. See the
 [captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration).
@@ -1215,7 +1215,7 @@ for (const p of busy) {
 }
 ```
 
-`params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below. Virtual Cypher calls are available to a captured handler once the owner separately approves `cypher_query`, following [the captured graph-query profile](HOSTED_EXECUTION.md#me-captured-graph-query-profile).
+`params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below. Virtual Cypher calls are available to a captured handler once the owner separately approves `cypher_query`, following [the captured graph-query profile](HOSTED_EXECUTION.md#captured-graph-query-profile).
 
 A captured handler has no `gateway.ai`: it reaches a model only through the `model` capability, described in [the model call](HOSTED_EXECUTION.md#the-model-call).
 
@@ -1324,7 +1324,7 @@ The host retains the same target and serialized arguments through refresh, reche
 owner World and approval on reads, and disables cache reuse. API calls inside the
 handler require their own operation and credential approvals.
 
-This is independent of the selected sandbox backend. The Me implementation exposes
+This is independent of the selected sandbox backend. The reference host exposes
 it through `/api/v1/lenses/{id}/invoke` and the JSON view endpoint. Add
 `background=true` or `waitSeconds` for deferred execution. Preparation retains the
 selected target and serialized arguments; queued work cannot select a new revision.
@@ -1560,7 +1560,7 @@ The declaration is narrow, and the engine holds it there:
 - **`Public` is opt-in per label and never inferred.** The rewriter's default stays fail-closed at
   PRIVATE, and a label no source in the world declares public is private.
 
-### Me source authority profile
+### Source authority profile
 
 Source contracts are kept per world. The contracts a world's realms declare decide how that world's
 reads are served — which mirror answers, which coverage record judges a partition, what age limit
@@ -2525,7 +2525,7 @@ embabel-realm sync ~/dev/realm-hubspot     # or pass an explicit path
 
 ## World execution and isolation boundary
 
-> **Forward-looking contract.** Current Me commonly derives `worldId` from `user.id` and accepts
+> **Forward-looking contract.** The reference host commonly derives `worldId` from `user.id` and accepts
 > legacy user/workspace scope alternatives. The guarantees below are release gates for multi-world
 > and shared-store deployment, not a description of current isolation.
 
@@ -2991,7 +2991,7 @@ description: "Translates document batches on demand."
 `isolate` is not part of this spec. It is here to state the test every proposed host must pass: if supporting it forces a realm author to change anything beyond `host:`, the design is wrong.
 
 
-### Me captured handler schema profile
+### Captured handler schema profile
 
 The host checks manifest schemas before binding an approved handler, validates input
 before entering its backend, and validates the unwrapped result before returning it.
@@ -3041,11 +3041,11 @@ after output validation. Validation cannot reverse effects the handler already m
 
 ### Captured handler producers
 
-The current Me captured-execution profile excludes producers and virtual joins loaded from live
+The captured-execution profile excludes producers and virtual joins loaded from live
 Realm files. Owner-authored definitions remain available. Producer execution and cache reuse
 retain World and declaration checks; shared cache partitions include both. The legacy Wasm
 producer example demonstrates the compatibility route, not captured resource admission.
-Me also accepts the following captured handler producer profile. Each flat
+A captured host also accepts the following captured handler producer profile. Each flat
 `producers/*.yml` or `.yaml` file contains one version-1 object:
 
 ```yaml
@@ -3070,9 +3070,9 @@ scope and overlay metadata; records cannot supply `userId`, `worldId`, `workspac
 `visibleTo` or `__vc*` properties. Sharing uses an explicit host operation.
 Owner producer names take precedence and suppress conflicting captured joins.
 
-This profile has no caching. A producer may declare [filter pushdown](HOSTED_EXECUTION.md#me-captured-producer-pushdown-profile)
+This profile has no caching. A producer may declare [filter pushdown](HOSTED_EXECUTION.md#captured-producer-pushdown-profile)
 so its handler filters at the source, and the separate
-[paging profile](HOSTED_EXECUTION.md#me-captured-producer-paging-profile) to walk a
+[paging profile](HOSTED_EXECUTION.md#captured-producer-paging-profile) to walk a
 handler's own cursor across multiple calls within one fetch.
 
 ```yaml
@@ -3110,7 +3110,7 @@ A query reaches the producer only by traversing one of its joins from a bound an
 target may anchor another producer's join, so producers chain. Declare a pushdown rule for
 every property the handler can filter on, since a filter left undeclared makes the handler
 fetch everything the key allows. [TypeScript realms](TYPESCRIPT_REALMS.md#producers) shows the
-same producer written with `defineRealm`. Me limits each fetch to
+same producer written with `defineRealm`. The reference host limits each fetch to
 256 keys, 2,048 characters per key, 64 KiB of encoded arguments, 1 MiB of output and
 1,024 rows. It accepts 32 flat declaration files, 8 KiB per file, 64 KiB total and
 eight joins per binding. `page` and `pushdown` are optional; every other field shown is
@@ -3118,16 +3118,16 @@ required. Unknown fields, duplicate names or joins, aliases, tags and undeclared
 profile limits, independent of backend placement.
 
 A handler grant does not grant API or datasource access. Each host call still needs
-its resource approval. Me supports an explicitly approved owned-data query profile:
+its resource approval. A captured host supports an explicitly approved owned-data query profile:
 `gateway.cypher.query({cypher, params})` returns `{rows, warnings, coverage}` and invokes only
 same-installation captured producers. Statements require named owned nodes and a
-final literal LIMIT from 1 to 512. See [hosted execution](HOSTED_EXECUTION.md#me-captured-graph-query-profile)
+final literal LIMIT from 1 to 512. See [hosted execution](HOSTED_EXECUTION.md#captured-graph-query-profile)
 for limits, owner approval and excluded host operations.
 
 ## `mcp/`
 
-Me keeps this legacy host configuration outside Realm execution. Use the
-[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for Me Realms.
+A captured host keeps this legacy host configuration outside Realm execution. Use the
+[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for captured Realms.
 
 MCP server configurations — each file lists Model Context Protocol servers to connect.
 
@@ -4800,13 +4800,13 @@ written permission.
 
 See [NOTICE.md](NOTICE.md) for the full statement of rights.
 
-The Me host also accepts [authenticated external source events](HOSTED_EXECUTION.md#authenticated-source-ingress)
+The reference host also accepts [authenticated external source events](HOSTED_EXECUTION.md#authenticated-source-ingress)
 under the same captured source approval and durable receipt contract.
 
-The Me captured host excludes legacy Realm StepSpecs and MCP subprocess registrations.
+A captured host excludes legacy Realm StepSpecs and MCP subprocess registrations.
 Use captured handlers and their versioned surface bindings; see
 [the migration contract](HOSTED_EXECUTION.md#legacy-executable-migration).
 
-Me host SQL readers and learning use [approved owner targets](HOSTED_EXECUTION.md#approved-sql-callers).
+Host SQL readers and learning use [approved owner targets](HOSTED_EXECUTION.md#approved-sql-callers).
 Legacy datasource YAML does not authorize a connection. The current profile is read-only;
 SQL remains behind Virtual Cypher and typed host operations, outside the guest protocol.

@@ -57,7 +57,7 @@ a record violating the declared vocabulary is dropped before persistence, as des
 The complete rule vocabulary, `nonEmpty` and `range` parameter/default semantics, unknown-rule
 behavior and enforcement across other write paths are not yet specified. Declaring a rule must not be presented as proof that every
 write path enforces it. Authors needing a guaranteed handler boundary must also use the
-[handler schema profile](README.md#me-captured-handler-schema-profile).
+[handler schema profile](README.md#captured-handler-schema-profile).
 
 ## Legacy declarations
 

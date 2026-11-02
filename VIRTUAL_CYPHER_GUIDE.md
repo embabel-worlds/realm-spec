@@ -170,7 +170,7 @@ to a `repo:{value}` qualifier (with a `valuePattern` regex to extract `owner/rep
 The handler receives every value an `=` or `IN` allows as a list of strings under that
 argument, and applies it however its source spells a filter. The graph still runs the `WHERE`,
 so the guarantee above holds unchanged
-([hosted profile](HOSTED_EXECUTION.md#me-captured-producer-pushdown-profile)).
+([hosted profile](HOSTED_EXECUTION.md#captured-producer-pushdown-profile)).
 
 **If your source's query is JSON, not text** — an Odoo domain, an Elasticsearch `bool.filter`, a
 GraphQL `where:` — declare `argPath` + `clause` instead of `qualifier`. The clause is placed in the

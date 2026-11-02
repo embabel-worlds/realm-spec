@@ -199,7 +199,7 @@ checks alone do not establish host enforcement of those rules.
 
 Optional output fields whose value is null are treated as absent before validation when the
 declared field is optional and nonnullable. This tolerance applies to outputs only, as in the
-[handler schema profile](README.md#me-captured-handler-schema-profile). Required fields still
+[handler schema profile](README.md#captured-handler-schema-profile). Required fields still
 must satisfy their schema, and an explicitly nullable field retains null. SDK static types
 may require authors to omit optional values; they do not remove the host's output tolerance.
 
@@ -246,7 +246,7 @@ export const sweep: SweepHandler = async (_input, ctx) => {
 - The verb must be a JavaScript identifier.
 - `input` and `output` are JSON Schema fragments. Left out, each is `{"type": "object"}` in the
   declaration. The host holds them to the
-  [handler schema profile](README.md#me-captured-handler-schema-profile): a bounded subset of JSON
+  [handler schema profile](README.md#captured-handler-schema-profile): a bounded subset of JSON
   Schema, checked before binding, with input validated before the handler runs and output
   validated before the result is released. `$ref`, `pattern`, `format` and `uniqueItems` refuse
   the binding.
@@ -573,7 +573,7 @@ The host checks at load:
 A query sends the secret the owner bound to the credential and is refused while nothing is bound.
 The host-side rules, including the checks on each
 supplied value and on the response, are in the
-[captured GraphQL operation profile](HOSTED_EXECUTION.md#me-captured-graphql-operation-profile).
+[captured GraphQL operation profile](HOSTED_EXECUTION.md#captured-graphql-operation-profile).
 
 ## Channels
 
@@ -774,7 +774,7 @@ triggers: {
   refuses it at bind time.
 - One trigger naming a missing source, consumer or handler stops delivery to every consumer of
   that installation until it is fixed, so check trigger names with care. The full behaviour is in
-  the [trigger profile](HOSTED_EXECUTION.md#me-captured-trigger-profile).
+  the [trigger profile](HOSTED_EXECUTION.md#captured-trigger-profile).
 
 ## Publishing events
 
@@ -1138,7 +1138,7 @@ keys (`keyField`), and the record field carrying the key back (`recordKeyField`)
 `next` under `page.argument` until `next` is null or `maxPages` (1 to 16) is reached. A repeated
 cursor, a cursor over 2048 bytes, or a non-null `next` on the last allowed page refuses the whole
 fetch; the host never returns a truncated result. The details are in the
-[paging profile](HOSTED_EXECUTION.md#me-captured-producer-paging-profile).
+[paging profile](HOSTED_EXECUTION.md#captured-producer-paging-profile).
 
 **Pushdown.** Each rule maps a record property to a handler argument. When a query pins the
 property with `=` or `IN`, the handler receives the allowed values as a list of strings under
@@ -1147,7 +1147,7 @@ pushdown changes cost and never answers. **Declare a rule for every property you
 filter on.** A filter left undeclared makes the handler fetch every record the key allows, and
 the answer is identical, so nothing tells you it happened. Where the host shows query
 diagnostics, they name the arguments that reached the handler on each call; a filter missing
-from that list is the next rule to declare. See the [pushdown profile](HOSTED_EXECUTION.md#me-captured-producer-pushdown-profile).
+from that list is the next rule to declare. See the [pushdown profile](HOSTED_EXECUTION.md#captured-producer-pushdown-profile).
 
 **Names and arguments.** The producer's key is `[a-z][a-z0-9._-]{0,63}`. `keyArgument`, every
 join field and every pushdown `property` are identifiers, `[A-Za-z_][A-Za-z0-9_]{0,63}`.
@@ -1167,7 +1167,7 @@ producers chain, and the engine stages each hop after the one before it. See
 
 **Limits and scope.** Each fetch is at most 256 keys of up to 2048 characters, 64 KiB of
 arguments, 1 MiB of output and 1,024 rows, across all pages together. A refused fetch carries a
-[reason code](HOSTED_EXECUTION.md#me-captured-producer-paging-profile). Producer results are never cached. Only producers from the querying handler's own installation run, each as a nested call
+[reason code](HOSTED_EXECUTION.md#captured-producer-paging-profile). Producer results are never cached. Only producers from the querying handler's own installation run, each as a nested call
 that needs that handler's grants as well as its own.
 
 ## Graph queries and view references
@@ -1209,7 +1209,7 @@ export const openBySeverity: OpenBySeverityHandler = async (input, ctx) => {
 - Only nodes the owner owns outright are visible. Nodes shared with the owner, variable-length
   and named paths, list and pattern comprehensions, procedures, and functions outside a fixed
   list are refused. The list and the size limits are in the
-  [graph-query profile](HOSTED_EXECUTION.md#me-captured-graph-query-profile).
+  [graph-query profile](HOSTED_EXECUTION.md#captured-graph-query-profile).
 - The query may cross into the realm's own producers, as above. Nothing a producer returns is
   kept.
 
@@ -1254,7 +1254,7 @@ host resolves `input` and `output` against the World's declared types, publishes
 A type may come from another realm or from the owner. If nothing in the World declares a
 goal's `input` or `output` type (`UserInput` as input excepted), the host reports and drops that
 goal when it loads. An SDK may warn earlier without treating an external type as an error. See the
-[goal profile](HOSTED_EXECUTION.md#me-captured-goal-profile).
+[goal profile](HOSTED_EXECUTION.md#captured-goal-profile).
 
 ## Lenses and watches
 
@@ -1396,7 +1396,7 @@ The owner's approval to propose is separate from reading the graph. Each install
 most 32 pending proposals, and a restart discards them. Accepting applies the write under the
 operator's policy: which properties a decoration may set, which methods a write-back may call
 with which arguments, flat scalar values only, and `private-storage` only. The outcomes and
-routes are in the [write proposal profile](HOSTED_EXECUTION.md#me-captured-write-proposal-profile).
+routes are in the [write proposal profile](HOSTED_EXECUTION.md#captured-write-proposal-profile).
 
 ## Owner approval, step by step
 
@@ -1469,7 +1469,7 @@ work around it. The future declaration still belongs in `realm.ts`.
 | --- | --- |
 | Source and imports | [Source selection](#source-selection-and-legacy-compatibility) and [definition evaluation](#definition-evaluation); legacy loading remains supported. Enforcement gaps are stated there. |
 | Metadata, profile and language | [Realm metadata](#realm-metadata); complete `exports` and `retry` semantics and target-contract negotiation remain unspecified. Realm, module, capture and installation identities are distinct; see [glossary](GLOSSARY.md#source-and-dependency-identity). |
-| Handlers and schemas | [Handlers](#handlers) and the [schema profile](README.md#me-captured-handler-schema-profile). Standard Schema adapters and inferred types are SDK behavior. Only the evaluated supported JSON Schema reaches the host; optional-output null tolerance does not apply to inputs. |
+| Handlers and schemas | [Handlers](#handlers) and the [schema profile](README.md#captured-handler-schema-profile). Standard Schema adapters and inferred types are SDK behavior. Only the evaluated supported JSON Schema reaches the host; optional-output null tolerance does not apply to inputs. |
 | Dependencies | [Dependencies](#dependencies), including sources, methods, state and explicit batch limits of evidence. Bundled npm requirements have [legacy-only declaration status](HOSTED_EXECUTION.md#backends-and-dependencies). |
 | Types and properties | [Declaring types](DECLARING_TYPES.md#typescript-object-declarations), including visibility and property validation. Complete population, method/retrieval defaults, examples/perspective selection, value enumeration and cardinality interactions remain unspecified. Existing lifecycle, spine and hub semantics are not removed because an SDK omits their fields. |
 | Producers and joins | [Captured producers](#producers), [conventional producers](README.md#producers) and [Virtual Cypher](VIRTUAL_CYPHER.md). `persistMinted` remains refused at validation/install. An SDK accepting it does not permit persistence of minted anchors. Exhaustive nested-field/default tables and SDK coverage of query inputs, per-rule producer selection and paging remain deferred. |

@@ -400,7 +400,7 @@ schedules and API operations; automatic provider polling and webhook adapters re
 ## Replay
 
 A consumer receives all seven fields by default — `offset`, `eventId`, `streamId`, `type`,
-`occurredAt`, `gap` and `payload` — unless a [declared trigger](#me-captured-trigger-profile)
+`occurredAt`, `gap` and `payload` — unless a [declared trigger](#captured-trigger-profile)
 narrows the selection down to a subset of them. The envelope omits host paths, credentials
 and authority selectors. Processing retains the source and consumer grants through host
 callbacks and nested calls. A checkpoint advances only after the handler succeeds and
@@ -661,7 +661,7 @@ schema, since a declared request body is not itself compulsory. This check is bo
 transitively by the 64 KiB argument cap above, since the body is a subset of that payload.
 
 Pagination and an MCP transport remain a separate contract; GraphQL operations have their own
-[captured GraphQL operation profile](#me-captured-graphql-operation-profile).
+[captured GraphQL operation profile](#captured-graphql-operation-profile).
 
 ### Result admission
 
@@ -851,7 +851,7 @@ with no console therefore needs an owner path of its own to those approvals. Eac
 capability stays unavailable until its own approval is granted. The shape of that path is the
 host's; this contract says only that it exists and that it grants exactly what each step grants.
 
-## Me captured GraphQL operation profile
+## Captured GraphQL operation profile
 
 A captured Realm may declare `graphql/operations.yml` (version 1), naming one fixed HTTPS
 endpoint and a fixed set of persisted query documents the Realm ships. There is no live
@@ -928,7 +928,7 @@ the response's `data` member is returned, unwrapped — the rest of the response
 discarded. Typing that returned data beyond this, pagination and an MCP transport remain a
 separate contract.
 
-## Me captured graph-query profile
+## Captured graph-query profile
 
 
 
@@ -977,7 +977,7 @@ fixed message, so the handler cannot learn which rule it broke. The rows come ba
 query projected them; return scalar properties (`b.id AS id`) when the handler needs plain
 values.
 
-A statement may cross into the Realm's own [captured producers](#me-captured-producer-paging-profile).
+A statement may cross into the Realm's own [captured producers](#captured-producer-paging-profile).
 Each producer's join makes its target label reachable, and the host calls the producer's
 handler as a nested call of the querying handler, so the producer runs only while that
 handler's own grants hold. The ordinary Virtual Cypher rules apply: a producer's target label
@@ -1032,7 +1032,7 @@ unchanged. Naming the owner's view by its real name, rather than the alias, neve
 the alias's data. Identity bridges, resolve chains, node-view composition and lens
 combinations remain unsupported.
 
-## Me captured goal profile
+## Captured goal profile
 
 A captured Realm may declare planner goals under `goals/` as version-1 data:
 
@@ -1070,7 +1070,7 @@ name. Owner-authored planner steps keep their own trust boundary and are the way
 request becomes a Realm input type; Realm `actions/` are not loaded, and a captured Realm that
 ships them gets one loading problem saying so.
 
-## Me captured trigger profile
+## Captured trigger profile
 
 A captured Realm may declare trigger bindings under `triggers/` as version-1 data. A
 trigger binds one declared channel source to one declared consumer with an explicit
@@ -1137,7 +1137,7 @@ Pending: diagnostics that name which dependency a trigger was refused for — mi
 consumer or handler wiring, versus a stale capture digest — are not yet specified beyond that
 shared refusal. Any reply path a trigger might carry also remains a separate later contract.
 
-## Me captured write proposal profile
+## Captured write proposal profile
 
 A captured handler may build a typed, bounded write proposal describing an intended graph
 write before any confirmation. A proposal is one of two kinds: a `method-write-back`, which
@@ -1247,7 +1247,7 @@ Authority is checked before the write, inside it and just before it commits. A r
 lands mid-write rolls the whole write back. An applied write leaves a private receipt
 recording the proposal, the installation and the kind of write, and changes nothing else.
 
-## Me captured producer paging profile
+## Captured producer paging profile
 
 A captured producer may declare a paging profile alongside its key argument:
 
@@ -1298,7 +1298,7 @@ A refused producer fetch carries one reason code. The query error reads
 | `ARGUMENT_BYTES` | The encoded arguments were over the limit. |
 | `RESULT_BYTES` | The answer, or all pages together, were over the byte limit. |
 
-## Me captured producer pushdown profile
+## Captured producer pushdown profile
 
 A captured producer may name query filters its handler applies itself:
 
@@ -1361,12 +1361,12 @@ reply protocol need a host adapter. Source IDs and payload fields are not creden
 
 ### Legacy executable migration
 
-Me does not load Realm `actions/`, `goals/` or `mcp/` files as host StepSpecs or
+A captured host does not load Realm `actions/`, `goals/` or `mcp/` files as host StepSpecs or
 subprocess registrations. Owner configuration retains those host features. Compile
 Realm code into captured manifest handlers and bind commands, function schedules,
 producer handlers, lenses, data-pipe consumers or captured goals. A legacy
 `stepType: goal` file inside a captured Realm is reported and never parsed; declare
-goals with the [captured goal profile](#me-captured-goal-profile) instead. MCP/GraphQL
+goals with the [captured goal profile](#captured-goal-profile) instead. MCP/GraphQL
 transports require dedicated profiles; host declarations do not grant those capabilities.
 
 ## Approved SQL callers
@@ -1544,7 +1544,7 @@ identity. Expiry and revocation deny new appends and receipt replay; a recorded 
 not restore authority. A different delegation cannot reuse another submitter's event ID to
 claim its receipt. Consumers require their own current source/consumer admission.
 
-### Me delegated-ingress profile
+### Delegated-ingress profile
 
 Owner endpoints are `/api/v1/channels/sources/{realmName}/{sourceName}/delegations` (GET
 metadata, POST issue), with `/{id}/rotate` and `/{id}/revoke` POST operations. These owner
