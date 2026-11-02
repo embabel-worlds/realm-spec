@@ -30,7 +30,7 @@ mode. An `experimental` publisher needs `confirmed: true`.
 | `cache` | the producers' cache policy | built |
 | `verbs[]` | an OpenAPI document in `apis/`, one `POST /verbs/{name}` operation per verb, with operationIds prefixed by the realm (`petclinicAddVisit`) because operationIds resolve across every installed realm | built |
 | `effect`, `approval` | `write` and `external` verbs are marked as effects. `external` verbs, and every verb whose approval is not `never`, are marked sensitive, which parks an agent's call as a Request. `when` and `decided` are treated as needing approval on every call. | built |
-| `auth` | the credential is declared in `keys.yml`, so the owner is asked for it, and is resolved from the owner's wallet, then the environment. `actingUser: required` is refused at install, because the world does not yet send an acting user. | built |
+| `auth` | the credential is declared in `keys.yml`, so the owner is asked for it, and is resolved from the owner's wallet, then, in the local or first-party tier only, the process environment (see [trust tiers](README.md#apis)). `actingUser: required` is refused at install, because the world does not yet send an acting user. | built |
 | a lookup by a spine-bound property | a join anchored on that spine | planned: today only `hub:` is written |
 | an `object` property | flat properties on the node, named by camel-cased path | planned |
 | a part type | a type whose nodes hang off the owner by `partOf.relationship` | planned |

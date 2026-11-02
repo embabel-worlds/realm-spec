@@ -1724,7 +1724,7 @@ realm and a declared credential the owner binds in a captured realm. See
 
 | Field | Required | Notes |
 |---|---|---|
-| `url` | yes | Spec source. HTTP(S), `file://`, or a bare relative path resolved against the apis.yml file's parent directory (used for vendored specs — see below). |
+| `url` | yes | Spec source. HTTP(S), `file://`, or a bare relative path resolved against the apis.yml file's parent directory (used for vendored specs — see below). A relative path that resolves outside the realm, through `..` or a symbolic link, is refused at load, and `file://` follows the [trust tiers](#apis). |
 | `name` | recommended | Gateway namespace — `gateway.<name>.*`. Falls back to a slugified spec title if omitted. **Always set this** in published realms so the prompt examples work regardless of the spec's `info.title`. |
 | `type` | no | `openapi` (default) or `graphql`. |
 | `auth` | no | `none` (default), `bearer`, `api-key`, `oauth2`. See **Auth** below. |
@@ -1873,6 +1873,14 @@ The `identity:` block tells the host how to call the provider's `/userinfo` or `
 | `account-id-field` | yes | Top-level JSON field name to read as the stable account identifier. |
 | `display-name-field` | no | Top-level JSON field name for the human-readable label. Falls back to `account-id-field` if absent or blank in the response. |
 
+**Where tokens may go.** `auth-url`, `token-url` and `identity.url` must be `https://` URLs, or the
+entry is refused at load. The client secret and the refresh token go only to `token-url`, and the
+access token only to `identity.url` and the servers of the entry's own OpenAPI document. The host
+follows no redirect on a request carrying any of them, and never logs a URL into which `{token}` was
+substituted. Client credentials are looked up by provider name, so a host sends them only to a token
+endpoint whose host the deployment has accepted for that provider name; an entry naming another host
+is refused at load rather than given them.
+
 Examples:
 
 ```yaml
@@ -1915,7 +1923,7 @@ Two properties a pack author can rely on:
 **Lookup order** for client_id / client_secret:
 1. The user's own **wallet** (per-user override — encrypted and self-service, replacing the retired per-workspace file)
 2. The deployment's **org vault** (the default everyone gets)
-3. `${VAR}` from the pack's `oauth2.client-id` / `client-secret` (escape hatch for power users)
+3. `${VAR}` from the pack's `oauth2.client-id` / `client-secret` (escape hatch for power users, in the local or first-party tier only; a marketplace realm's `${VAR}` is refused at load under the [trust tiers](#apis))
 
 If none resolve, the provider's status reports `not-configured` and Authorize returns an actionable error message instead of silently failing.
 
@@ -1923,7 +1931,7 @@ If none resolve, the provider's status reports `not-configured` and Authorize re
 
 End users **never** paste tokens, IDs, or secrets. Settings → Connected Services → click **Authorize** → consent on the provider's page → done. ConnectedAccounts holds the real account label; `gateway.<name>.*` is live in chat.
 
-**Token refresh** is automatic — the host's `OAuth2Service` rotates expired access tokens using the stored refresh token and writes back any new refresh token the provider issues (HubSpot rotates them on every refresh).
+**Token refresh** is automatic — the host rotates expired access tokens using the stored refresh token and writes back any new refresh token the provider issues (HubSpot rotates them on every refresh).
 
 ## `keys.yml` — the keys a realm needs
 
@@ -3281,9 +3289,9 @@ into the consequence engine. The payload cannot select or override that route.
 | Field | Required | Meaning |
 |---|---|---|
 | `type` | yes | Name of a type declared in this realm (or another loaded realm) whose `parents` includes `Signal`. |
-| `webhook.signature` | yes | Signature scheme the host's built-in verifiers handle. |
-| `webhook.signature-secret` | conditional | Env-var name holding the shared secret. Required for any non-`none` scheme. Conventional realms only: a captured realm's webhook channel names a declared credential in `signature.credential` (see [TypeScript realms](TYPESCRIPT_REALMS.md#channels)). |
-| `webhook.tenancy` | yes | Strategy for routing the inbound webhook to a world. |
+| `webhook.signature` | yes | Signature scheme the host's built-in verifiers handle: `hmac-sha256`, `hmac-sha1`, `jwt` or `none`. Any other value refuses the event source at load. A request whose signature does not verify is rejected before mapping, and emits no signal. `none` is a local or first-party compatibility form under the [trust tiers](#apis); a marketplace realm declaring it is refused at load. |
+| `webhook.signature-secret` | conditional | The name the shared secret is stored under, never the secret itself, under the same trust-tier rules as `token-env`. Required for any non-`none` scheme. Conventional realms only: a captured realm's webhook channel names a declared credential in `signature.credential` (see [TypeScript realms](TYPESCRIPT_REALMS.md#channels)). |
+| `webhook.tenancy` | yes | Strategy for routing the inbound webhook to a world: `path-token`, `payload-field` or `header`; any other value refuses the event source at load. Under `payload-field` a field of the verified payload only chooses among the routes registered for the verified secret, and a value naming no such route is rejected, so the payload never reaches another world. |
 | `webhook.mapping` | yes | Map of type-property → JSONPath. Every required property of the `Signal` parent (`id`, `occurredAt`, `sourceKind`, `sourceId`) must be covered. |
 | `webhook.tier-when` | no | Tier-override map. Each entry's value is a Jinja boolean expression evaluated against the parsed payload. First true wins; default tier is `AMBIENT`. |
 
