@@ -2629,10 +2629,10 @@ limits, triggers, and observability. Data enters through declared surfaces and l
 calls. A portable realm never reaches around that boundary: no ambient credentials, direct
 infrastructure, or mutable runtime shared with another realm.
 
-Two consequences are normative:
+Three consequences are normative:
 
 - **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world, context, principal, or execution. Realms deliberately share declared types inside a world; graph data is readable only through the current context/access policy or an explicit policy-authorized bridge. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world-, context-, and where principal-dependent, principal-scoped.
-- **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
+- **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway, or in an admitted persistent dependency under the [dependency state rules](TYPESCRIPT_REALMS.md#dependency-state). This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
 - **A binding the runner was not given is NOT DECLARED.** Referencing it throws a `ReferenceError`
   rather than yielding `undefined`, so `if (violation)` does not guard it and neither does
   `violation ?? null`. Only `typeof` does, and it holds whether the identifier was never declared or
@@ -2818,7 +2818,7 @@ The absences are the point: a wasm function is pure logic over gateway calls. A 
 ### Single file, or a typed project
 
 The following two layouts describe legacy realms without `realm.ts`. New definitions use
-+[source composition](REALM_COMPOSITION.md); their handlers use the separate guest import rules.
+[source composition](REALM_COMPOSITION.md); their handlers use the separate guest import rules.
 
 - **Legacy single file:** `wasm/handlers.js`, `realm.yml` and a hand-authored
   `dist/manifest.json`. The host compiles the JavaScript handler on load.
