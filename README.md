@@ -3224,6 +3224,11 @@ binds registration and callback authentication to the world, context, access-pol
 also verifies the current `worldEpoch`. The templated form below is local/first-party compatibility
 syntax.
 
+A `webhooks/` receiver declares no signature verification, so it is a local or first-party
+compatibility form, like a `none` signature on a [webhook event source](#webhook-event-source).
+A marketplace realm shipping one is refused at load, naming the file. A realm that needs inbound
+webhooks there declares an `events/` webhook source with a verified signature.
+
 ```yaml
 # webhooks/github-issues.yml
 - name: github-issues
