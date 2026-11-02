@@ -7,9 +7,9 @@ description: Author or extend an Embabel realm, a git repo of declarative capabi
 
 `realm.ts` is the preferred realm definition format, assembled from local definition files
 as needed. The host reads it directly. Do not generate or commit YAML or manifests from it.
-Start with [Composing a realm](../../REALM_COMPOSITION.md) and the
-[TypeScript contract](../../TYPESCRIPT_REALMS.md). Existing YAML realms remain readable
-under the [legacy compatibility and migration rules](../../TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility)
+Start with [Composing a realm](https://github.com/embabel-worlds/realm-spec/blob/main/REALM_COMPOSITION.md) and the
+[TypeScript contract](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md). Existing YAML realms remain readable
+under the [legacy compatibility and migration rules](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility)
 and receive no new YAML features. The directory recipes below describe that legacy
 format and existing capability semantics; they are not a second declaration to create beside
 `realm.ts`. A realm contains no JVM bytecode, host configuration or user credentials.
@@ -200,7 +200,7 @@ arrays and nested objects remain structured. Raw SQL gateway calls are not a por
 capability. External SQL uses approved producers or typed operations. The governed captured
 path reaches Cypher through the same call once the owner separately approves `cypher_query`;
 the rules for that call are under "Captured realms" below. Check what the target host states
-it supports ([host support statements](../../HOSTED_EXECUTION.md#host-support-statements))
+it supports ([host support statements](https://github.com/embabel-worlds/realm-spec/blob/main/HOSTED_EXECUTION.md#host-support-statements))
 before using a host-resource callback.
 
 A handler / decoration / skill runs **CypherScript** in `code_mode`: TS/JS that interleaves
@@ -584,11 +584,11 @@ push.
 ## Channel sources and consumers
 
 Declare sources and consumers in `data-pipes.yml` using the
-[hosted data-pipe contract](../../HOSTED_EXECUTION.md#data-pipes). A source names its stream
+[hosted data-pipe contract](https://github.com/embabel-worlds/realm-spec/blob/main/HOSTED_EXECUTION.md#data-pipes). A source names its stream
 and event type. A consumer names a captured handler; the owner separately approves its exact
 source and handler. A declaration creates no grant. In a TypeScript realm, write them as
 `dataPipes` in `realm.ts`, and declare channel-fed sources and consumers with `connecting`; see
-[sources, consumers and triggers](../../TYPESCRIPT_REALMS.md#sources-consumers-and-triggers).
+[sources, consumers and triggers](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#sources-consumers-and-triggers).
 
 Use `gateway.channel.publish` in a captured Docker handler or `ctx.gateway.channel.publish`
 in a Wasm handler. Keep `streamId`, `eventId` and payload stable on retry. The journal matches a retry on those,
@@ -604,7 +604,7 @@ approval.
 
 A captured realm runs from a copy the owner admitted, and every capability is its own owner
 approval. Write `realm.ts`, importing definition fragments as needed;
-[TypeScript realms](../../TYPESCRIPT_REALMS.md) is the full contract, with the owner's approval
+[TypeScript realms](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md) is the full contract, with the owner's approval
 steps at the end. Use `defineRealm` in place of `satisfies Realm`: under it, a goal, producer,
 lens, channel or consumer naming a handler the realm does not declare is a compile error. The host
 refuses an undeclared handler everywhere a realm names one: a goal, producer, `dataPipes`
