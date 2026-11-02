@@ -1107,7 +1107,7 @@ the declared default, and only a full page reports `PARTIAL_RESULT` (`TRUNCATED`
 >
 > This bites hardest on a paged walk of a slow or throttling source: latency climbs page over page until the request is cancelled part-way, so the fetch that fails is the one that would have returned the *most* data — the large result set, not the empty one.
 
-**Chunking (`maxKeysPerCall`).** Producers chunk the unioned anchor keys into batches of `maxKeysPerCall` — so a traversal over many anchors stays within the endpoint's limit and never becomes N+1. Set it to the endpoint's documented cap: a search `IN`/`OR` (query-length bound, ~50, the `api` default), a dedicated **bulk-by-ids** endpoint (HubSpot `/batch/read` 100, Jira `bulkfetch`), or a `$batch`/composite multiplex (Microsoft Graph 20, Salesforce 25). `sql` defaults to 500.
+**Chunking (`maxKeysPerCall`).** Producers chunk the unioned anchor keys into batches of `maxKeysPerCall` — so a traversal over many anchors stays within the endpoint's limit and never becomes N+1. Set it to the endpoint's documented cap: a search `IN`/`OR` (query-length bound; the `api` default is host-defined and documented, about 50 on the reference host), a dedicated **bulk-by-ids** endpoint (HubSpot `/batch/read` 100, Jira `bulkfetch`), or a `$batch`/composite multiplex (Microsoft Graph 20, Salesforce 25). `sql` defaults to 500.
 
 **Per-key vs batched (`batchSafe`).** A producer batches up to `maxKeysPerCall` keys per call by default. Set **`batchSafe: false`** when one call covering many keys is **not complete per key** — a globally-ranked, capped search is the classic case: GitHub issue search `author:a author:b` returns ONE `updated`-desc list capped at `paging.maxPages × size`, so a prolific author fills the cap and a low-volume colleague's results fall off the end (you'd list them for one question and find nothing for the next). With `batchSafe: false` Virtual Cypher fetches **one key per call**, giving each key its own budget. It is a declared **capability**, not a magic number — you do NOT also shrink `maxKeysPerCall`, so a realm can't reintroduce the starvation bug by forgetting to. (`echoKeyAs` already implies per-key.)
 
@@ -1333,8 +1333,8 @@ data; new approval cannot revive an old run. Results and handles are in memory.
 
 The reference host limits active work to 64 runs globally and eight per owner,
 returning HTTP 429 at capacity. Cancelled workers consume capacity until they exit.
-It retains up to 200 settled runs and cancels overdue work using the configured
-background timeout. Cancellation cannot undo completed effects.
+It retains up to 200 settled runs and cancels overdue work after the background timeout,
+which a host sets and documents. Cancellation cannot undo completed effects.
 See [hosted execution](HOSTED_EXECUTION.md) for supported routes and limits.
 
 ### Host-specific legacy definitions
@@ -4294,7 +4294,7 @@ slots:
 | `slots[].default` | yes | The value before anything has been observed. |
 | `slots[].range` | for `ordinal`/`ratio` | `[min, max]` inclusive. A host clamps to it rather than failing a turn. |
 | `slots[].stages` | for `stage` | The ordered states. Movement need not be forward. |
-| `slots[].limit` | no | Longest `text`; most items in a `list` or `entities`. A host caps whether or not one is given. |
+| `slots[].limit` | no | Longest `text`, in characters; most items in a `list` or `entities`. A host caps whether or not one is given, at a value it sets and documents. |
 
 ### The slot types
 

@@ -1364,7 +1364,8 @@ await realm.call("oncall.acknowledge", { incidentId: incidents.items[0].id });
 
 - One call runs at a time. A second call made while one is waiting rejects straight away, so
   `await` each call before starting the next.
-- A call gives up after about two minutes. Every refusal rejects with the same message.
+- A call gives up after the host's app call deadline, which the host sets and documents. Every
+  refusal rejects with the same message.
 - The page cannot fetch, open sockets, load remote scripts, styles, images or fonts, read the
   owner's cookies or storage, open popups or submit forms. Scripts may be inline and may use
   `eval`. Images and fonts work as `data:` or `blob:` URLs. Bundle everything at build time.

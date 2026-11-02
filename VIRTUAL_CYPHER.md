@@ -4761,6 +4761,33 @@ rather than failing a pass at a time. A host may cap `budgetPerTick`, and the nu
 advances per tick is the host's, so several sweeps in one world each advance more slowly.
 
 
+### 9.2 Host-defined limits and defaults
+
+Some limits and defaults are the host's to set rather than the spec's. For each one below, the
+host sets the value, documents it with its unit where a realm author can read it, and applies the
+behaviour the cited section states when it is reached. A realm may rely on the documented value of
+the host it runs on and on nothing more, except where a row names a floor or ceiling the spec
+already fixes. A field a realm may set takes the host's documented default when it is omitted.
+
+| Limit | Where | What a realm may rely on |
+|---|---|---|
+| `fileCacheSeconds` default | `tabular` (§5.8) | None beyond the documented default. |
+| `maxRows` default | `tabular` | Exceeding it truncates and is reported, never silent. |
+| `maxRowsPerKey` default | `tabular` | Bounds one key's contribution; none beyond the documented default. |
+| `partition.maxUnits` default | partitioned producers | A range past it keeps the most recent sub-ranges and reports the uncovered head (§5.9). |
+| `keyTransform.cacheSeconds` default | §5.7 | None beyond the documented default. |
+| `maxKeysPerCall` default, per producer kind | every keyed producer | At least one key per request; a larger batch is split, never refused. A `sql` producer defaults to 500. |
+| Default `maxGroups` for a filterable aggregation | §7 | A query may set its own, up to 2000. |
+| Default `sample.size` and `text.chars` for `score` and `classify` | §7 | None beyond the documented default; a query may set its own. |
+| `wordcount` range | prose reductions (§7) | A value outside the range is clamped to it, never refused. |
+| Feed connect and read timeouts | feed sources (§5.10) | Fixed per host; a realm cannot change them. |
+| Patience budget field, unit and maximum | §9 | An answer inside the budget returns normally; past it, a run reference. |
+| Work bound, in match steps | §9 | Always set. A statement past it returns nothing and is told why. |
+| Time bound, in milliseconds | §9 | Off unless the host sets one. |
+| Deployment maximum for an annotation write limit | §12 | At least one. |
+| Dry-run plan lifetime | §12 | An expired plan applies nothing and needs a new dry-run. |
+| Default `rankWindowSize` and `rankConstant` | `elasticsearch` (§5.16) | None beyond the documented default. |
+
 ## 10. Steering the generator — type-level `examples:`
 
 The schema tells the text-to-Cypher generator what *exists*; it does not tell it what to *prefer*.

@@ -1420,8 +1420,8 @@ arguments.
 
 One call runs at a time. A second `realm.call` made while the first is still waiting
 rejects straight away with "A Realm call is already running", so an app that fires several
-reads chains them (`await` one before starting the next). A call gives up after about two
-minutes. Every refusal, whatever its cause, rejects with the same message, "Realm call
+reads chains them (`await` one before starting the next). A call gives up after the app call
+deadline, which the host sets and documents; the reference host's is about two minutes. Every refusal, whatever its cause, rejects with the same message, "Realm call
 refused or unavailable", so an app cannot tell a revoked grant from a failed handler and
 should show one plain error for both. The encoded request is capped at 1 MiB and the handler
 name at 256 characters.
