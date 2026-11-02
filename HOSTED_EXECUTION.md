@@ -796,32 +796,13 @@ that resolve a module name plus exact version. Every such extension must preserv
 verification and independent operator admission. A registry or host may require license and
 provenance metadata as policy, even though the portable declaration makes them optional.
 
-## Reference implementation
-
-This governed implementation's current support is narrower than some trusted-host examples
-in the main specification:
-
-| Capability | State |
-| --- | --- |
-| Captured Wasm and Docker handlers, type methods and schedules | Retained approval checks. The bounded handler schema profile validates inputs before dispatch and outputs before final admission. |
-| [Captured command aliases](README.md#commands) | Strict versioned metadata, owner discovery and direct chat dispatch to approved same-installation handlers. |
-| Approved provider lifecycle and durable journal delivery | Implemented for Discord, Slack and Telegram. |
-| Captured source/consumer approval and publication | Implemented with World-load source discovery. |
-| Scheduled API-to-channel handlers | Captured schedules, approved GET operations, durable publication and consumer replay, including poller cursor persistence through `gateway.channel.position`/`publishBatch`. |
-| Captured callback to an approved sibling | Implemented within the same installation. |
-| Captured API operations and wallet bindings | Implemented for the read (GET) and write (`post`/`put`/`patch`/`delete`) profiles, each under its own grant. |
-| Captured handler lenses | Versioned same-installation bindings; bounded JSON results, original-target refresh and prepared background runs. Completion and response checks retain admission; revocation clears stored data. Active work and settled storage are capped. Cache reuse is disabled. Opt-in content results hydrate owned focus under retained graph approval and select compatible built-in views; executable presentations are excluded. |
-| Legacy Realm lenses | Excluded in captured Worlds, including previously loaded definitions and retained views. Owner lenses remain available; cached results are isolated by owner. Versioned handler bindings use the captured route. |
-| Captured handler producers | Version-1 same-installation bindings, JSON batch keys and bounded record arrays. Owner precedence, retained World/approval checks, cancellation and call budgets apply. No result cache. `=`/`IN` filter pushdown through declared handler arguments; paging only through a declared cursor argument under a bounded page count, re-verified before every page. Reachable from a captured graph query along a declared join from a bound anchor; producers chain. Graph materialization preserves owner boundaries and host metadata. |
-| Collection sources and mirrors | Captured complete-snapshot receiver with separate read/storage grants, atomic private records and coverage, authority-partitioned caches and finite capacity. Public declarations need matching host policy and never publish shared nodes. |
-| Captured Virtual Cypher | Implemented owned reads and same-installation captured producers/collections with retained resource grants and rollback materialization. |
-| Owner database target approval | Adoption, upgrade, revocation and read-only production SQL use through the owner connection facade are implemented. |
-| Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
-| Additional dependency ecosystems and VFS | Not implemented on this path. SQLite dependency persistence is separately specified. |
-| Firecracker, generalized remote backends and resumable arbitrary computation | Not implemented. |
+## Host support statements
 
 Hosts must state which profile and capabilities they support. Generated types describe an
 operation's contract; they do not grant permission or prove receiver availability.
+
+The reference host's own statement is in the non-normative
+[appendix](#appendix-reference-host-status-non-normative).
 
 ## Unattended operation
 
@@ -1693,3 +1674,28 @@ unresolved marker, including when the legacy handler route receives that name. T
 apply to the default confidential mode. An operator who enables the bounded excerpt mode
 chooses to retain escaped guest text in host logs.
 
+## Appendix: reference host status (non-normative)
+
+This appendix records what one implementation, the reference host, supports at the time of
+writing. It is not part of the contract: a host conforms by the sections above, and states its
+own support as [host support statements](#host-support-statements) requires. The reference
+host's support is narrower than some trusted-host examples in the main specification.
+
+| Capability | State |
+| --- | --- |
+| Captured Wasm and Docker handlers, type methods and schedules | Retained approval checks. The bounded handler schema profile validates inputs before dispatch and outputs before final admission. |
+| [Captured command aliases](README.md#commands) | Strict versioned metadata, owner discovery and direct chat dispatch to approved same-installation handlers. |
+| Approved provider lifecycle and durable journal delivery | Implemented for Discord, Slack and Telegram. |
+| Captured source/consumer approval and publication | Implemented with World-load source discovery. |
+| Scheduled API-to-channel handlers | Captured schedules, approved GET operations, durable publication and consumer replay, including poller cursor persistence through `gateway.channel.position`/`publishBatch`. |
+| Captured callback to an approved sibling | Implemented within the same installation. |
+| Captured API operations and wallet bindings | Implemented for the read (GET) and write (`post`/`put`/`patch`/`delete`) profiles, each under its own grant. |
+| Captured handler lenses | Versioned same-installation bindings; bounded JSON results, original-target refresh and prepared background runs. Completion and response checks retain admission; revocation clears stored data. Active work and settled storage are capped. Cache reuse is disabled. Opt-in content results hydrate owned focus under retained graph approval and select compatible built-in views; executable presentations are excluded. |
+| Legacy Realm lenses | Excluded in captured Worlds, including previously loaded definitions and retained views. Owner lenses remain available; cached results are isolated by owner. Versioned handler bindings use the captured route. |
+| Captured handler producers | Version-1 same-installation bindings, JSON batch keys and bounded record arrays. Owner precedence, retained World/approval checks, cancellation and call budgets apply. No result cache. `=`/`IN` filter pushdown through declared handler arguments; paging only through a declared cursor argument under a bounded page count, re-verified before every page. Reachable from a captured graph query along a declared join from a bound anchor; producers chain. Graph materialization preserves owner boundaries and host metadata. |
+| Collection sources and mirrors | Captured complete-snapshot receiver with separate read/storage grants, atomic private records and coverage, authority-partitioned caches and finite capacity. Public declarations need matching host policy and never publish shared nodes. |
+| Captured Virtual Cypher | Implemented owned reads and same-installation captured producers/collections with retained resource grants and rollback materialization. |
+| Owner database target approval | Adoption, upgrade, revocation and read-only production SQL use through the owner connection facade are implemented. |
+| Captured Docker CommonJS dependencies | Implemented for bounded, verified bundles; no runtime package installation. |
+| Additional dependency ecosystems and VFS | Not implemented on this path. SQLite dependency persistence is separately specified. |
+| Firecracker, generalized remote backends and resumable arbitrary computation | Not implemented. |

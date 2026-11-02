@@ -199,9 +199,9 @@ Where supported, `ctx.gateway.cypher.query({cypher, params})` binds values throu
 arrays and nested objects remain structured. Raw SQL gateway calls are not a portable guest
 capability. External SQL uses approved producers or typed operations. The governed captured
 path reaches Cypher through the same call once the owner separately approves `cypher_query`;
-the rules for that call are under "Captured realms" below. Check the
-[hosted execution contract](../../HOSTED_EXECUTION.md#reference-implementation) before using
-a host-resource callback.
+the rules for that call are under "Captured realms" below. Check what the target host states
+it supports ([host support statements](../../HOSTED_EXECUTION.md#host-support-statements))
+before using a host-resource callback.
 
 A handler / decoration / skill runs **CypherScript** in `code_mode`: TS/JS that interleaves
 `await gateway.kg.query({cypher, params})` (graph reads through Virtual Cypher — scoped,
