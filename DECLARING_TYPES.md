@@ -51,12 +51,11 @@ the portable `values` enumeration protocol, are not yet specified here.
 `validation: ["nonEmpty", { rule: "range", min: 1, max: 10 }]`.
 A string names a rule; an object names it in `rule` and supplies its parameters. These are
 property rules, separate from handler input/output JSON Schema. The host retains them with
-the type declaration. Existing extraction behavior enforces `oneOf` on a target property:
+the type declaration. Extraction enforces `oneOf` on a target property:
 a record violating the declared vocabulary is dropped before persistence, as described in
 [extraction](VIRTUAL_CYPHER.md#56-typed-extraction--kind-extract-lazy-entities).
 The complete rule vocabulary, `nonEmpty` and `range` parameter/default semantics, unknown-rule
-behavior and enforcement across other write paths are not yet specified or established by
-the available host evidence. Declaring a rule must not be presented as proof that every
+behavior and enforcement across other write paths are not yet specified. Declaring a rule must not be presented as proof that every
 write path enforces it. Authors needing a guaranteed handler boundary must also use the
 [handler schema profile](README.md#me-captured-handler-schema-profile).
 

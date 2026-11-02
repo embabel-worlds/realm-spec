@@ -265,7 +265,8 @@ export default { name: 'library', version: '1.0.0', types } satisfies Realm
 
 The relative spelling is `import { types } from './types/index.ts'`. Both identify the same
 captured definition file. Neither spelling gives the definition access outside the realm.
-Hosts that have not implemented subpath mappings must report the unsupported import.
+A host that does not support subpath mappings must refuse the definition, naming the
+unsupported import, as [definition evaluation](TYPESCRIPT_REALMS.md#definition-evaluation) requires.
 
 Handlers run later, in the guest, under different import rules. The current reference
 TypeScript handler profile accepts relative named value imports confined to the handler

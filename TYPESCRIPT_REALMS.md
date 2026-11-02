@@ -174,7 +174,7 @@ export default defineRealm({
 | `host` | Optional `"wasm"` or `"docker"` placement hint. `"docker"` names the Node bundle host, which a host may run natively or in a container; it does not require Docker. Absent means infer from the available handler source/artifact using [placement](README.md#placement). A data-only realm needs no handler artifact. |
 | `execution` | `"conventional"` by default; `"captured"` selects the captured declaration forms and admission requirements. |
 | `runtime` | Guest language, `"typescript"` by default; also `"python"`, `"ruby"`, `"lua"`, `"compiled"`. A recognized language does not promise host execution support. An unsupported runtime refuses handler binding explicitly. In the captured profile, a host must refuse `channels`, `sources` or `consumers` when the runtime is other than `"typescript"`, even if it supports that runtime for handlers. |
-| `entry` | Realm-relative handler source path, with no leading slash, backslash or `..` segment. Defaults to `wasm/handlers.ts`, `wasm/handlers.py` for Python, or `wasm/src/lib.rs` for compiled guests. An explicit entry must exist. When handlers need compilation, the effective default must exist too; a realm with no handlers needs no entry. The current reference source builder supports the fixed `wasm/handlers.ts` or `.js` layout; other entry layouts need host support and must not silently select another file. |
+| `entry` | Realm-relative handler source path, with no leading slash, backslash or `..` segment. Defaults to `wasm/handlers.ts`, `wasm/handlers.py` for Python, or `wasm/src/lib.rs` for compiled guests. An explicit entry must exist. When handlers need compilation, the effective default must exist too; a realm with no handlers needs no entry. A host that cannot build the declared or default entry refuses handler binding, naming the entry, and never selects another file. The reference source builder builds only `wasm/handlers.ts` or `wasm/handlers.js`. |
 | `icon` | Optional path to an existing file inside the realm. Remote URLs are refused, as in [Icons](README.md#icons). |
 | `description`, `author`, `url` | Optional descriptive strings. `url` is the realm's information link, not an import or capability. |
 | `tags` | Optional list of discovery strings; omission and an empty list both declare no tags. |
@@ -401,8 +401,9 @@ refused, since it would ask the owner for a secret no call uses. The host counts
 API entry's `credential` (or its deprecated `tokenEnv`), a channel's `credential`, a webhook
 signature's `credential` and the [GraphQL](#graphql) source's `credential`. Binding, rotation
 and revocation are described under [credentials](HOSTED_EXECUTION.md#credentials) in the hosted
-contract. An `oauth2` credential is accepted in the declaration, and binding one is refused by
-the reference host.
+contract. An `oauth2` credential is accepted in the declaration. A host that cannot bind one refuses
+the binding, naming the credential, and anything that needs it stays unstarted, as for any
+unbound credential.
 
 ## APIs
 
@@ -892,7 +893,7 @@ silently select a variant it does not understand.
 | --- | --- |
 | `{ local: "modules/stockfish-19.0.0.wasm" }` | A regular file inside the captured realm. Paths are realm-relative, without leading slash, backslash, `.` or `..` components. A symbolic link or escape from the realm is refused. Human-readable filenames are encouraged. |
 | `{ registry: "default" }` | The operator-configured source named `default`. Any nonempty configured source name may replace it; an unknown name is refused. Omitting `from` means this default. |
-| `{ url: "https://modules.example.org/module.wasm" }` | Fetch at install if verified bytes are not already cached; verify and cache by digest. It is never fetched during a handler call. A URL must use HTTPS and contain no credentials or fragment. Its filename need not be the digest. Redirects require explicit host policy and must remain HTTPS; no redirects is the current digest-prefix source behavior. |
+| `{ url: "https://modules.example.org/module.wasm" }` | Fetch at install if verified bytes are not already cached; verify and cache by digest. It is never fetched during a handler call. A URL must use HTTPS and contain no credentials or fragment. Its filename need not be the digest. A host follows no redirect unless its policy allows one, and a followed redirect must remain HTTPS. |
 | `{ realm: "another-realm" }` | Reserved, refused with `DEPENDENCY_SOURCE_NOT_SUPPORTED_YET`, naming the dependency and `realm` source. Consent, pinning, cycles and upgrades remain to be specified. |
 
 The unambiguous string shorthands are `"./modules/example.wasm"` for a local file and
@@ -905,13 +906,13 @@ New source tags may be added independently with their own consent and pinning ru
 changing existing tags. An unrecognized tag is refused explicitly as unsupported, naming the
 dependency; it must never fall back to the default registry.
 
-**Registry resolution today.** The module name and exact version describe the requested
-module; operator policy checks those labels where configured. Current sources fetch bytes by
-digest through an operator-configured digest-addressed store or HTTPS prefix, not by a
-name/version lookup. Current admission does not independently verify the author's version
-label against the bytes. A registry may later resolve `(module, exact version)` to a candidate,
-but that candidate must still match the declared `sha256`. That lookup is reserved, not
-required of today's hosts, and needs no second authored file.
+**Registry resolution.** The module name and exact version describe the requested
+module; operator policy checks those labels where configured. A registry source fetches bytes
+by digest through an operator-configured digest-addressed store or HTTPS prefix, not by a
+name/version lookup. A host need not verify the author's version label against the bytes; the
+digest decides. A registry may later resolve `(module, exact version)` to a candidate, but that
+candidate must still match the declared `sha256`. That lookup is reserved, not required of a
+host, and needs no second authored file.
 
 Whatever the source, the digest is the identity of the bytes. A missing source or hash
 mismatch is refused naming the dependency and its source. `DIGEST_MISMATCH` must identify
@@ -1033,7 +1034,7 @@ at most 8 MiB. Invalid UTF-8, bounds or ownership violations fail the call.
 
 ### Dependency state
 
-The implemented state profile is SQLite (`module: 'sqlite3-wasi'`, admitted as SQLite).
+The only specified state profile is SQLite (`module: 'sqlite3-wasi'`, admitted as SQLite).
 `persistent` defaults to false. Ephemeral state starts empty for each dispatch. With
 `persistent: true`, a world, realm and dependency binding retains its private database.
 The host publishes changes only after successful dispatch and output validation. Failure,
@@ -1055,8 +1056,8 @@ state. Fingerprints predating migrations mean an empty applied list.
 
 State options on `pure-compute` are refused. State and migration semantics for other module
 kinds are not yet specified. Declaring `kind: 'sqlite'` on an arbitrary module does not grant
-SQLite support. The currently implemented migration restriction is the SQLite module profile;
-generalization to additional admitted stateful kinds remains open.
+SQLite support. Migrations are specified for the SQLite module profile only; generalization
+to additional admitted stateful kinds remains open.
 
 ### Dependency batch calls
 
@@ -1065,7 +1066,7 @@ The SDK offers `ctx.deps.<key>.<method>.batch(calls)` for declared scalar method
 a multi-argument method uses a list of argument tuples; a zero-argument method uses empty
 tuples. That is an SDK surface, not evidence of a portable host batch protocol. Host-side
 batch dispatch, partial results, failure ordering, cancellation and atomic state/commit
-semantics are not yet specified or established by the grounding evidence. Do not infer a
+semantics are not yet specified. Do not infer a
 transaction from a batch helper. Sequential awaited calls inside one dispatch use the
 ordinary scalar-call and success-only persistence rules above.
 
