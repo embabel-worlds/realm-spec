@@ -1719,8 +1719,12 @@ SELECT query ONCE; consumers only ever see the virtual join, and no query author
   TRUNCATED warning. A retryable refusal — a throttle, a gateway failure, a timeout — is attempted
   once more, honouring the endpoint's `Retry-After` where it sends one: the same law every producer
   kind gets (§9, *what a flaky source costs*), not a `sparql` speciality.
-- **Credentials stay out of YAML.** An authenticated endpoint names an environment variable
-  (`fetch.bearerTokenEnv`); public endpoints need nothing.
+- **Credentials stay out of YAML.** An authenticated endpoint names the key it needs
+  (`fetch.bearerTokenEnv`), never its value; public endpoints need nothing. Every producer field
+  ending in `Env` (`bearerTokenEnv`, `passwordEnv`, `apiKeyEnv`) names a key the way an `apis/`
+  entry's `token-env` does and resolves under the same [trust tiers](README.md#apis): from the
+  world's credential store, and from the process environment only in a local or first-party
+  installation. A marketplace realm cannot read the host's environment through one.
 
 Cost every consumer should know: each key batch is one live query against an endpoint the realm
 does not control. Public endpoints enforce their own timeouts and rate limits; a realm should
@@ -2343,8 +2347,11 @@ RETURN f.name, a.method, a.access, a.lines
   and its `sha256` is of the classes, not of any file.
 - **Where a jar may be.** A relative path resolves against the world's `data/` tree, then against
   the declaring realm's own directory — so a realm can ship an example jar — and an absolute path
-  must lie under a root the operator trusts. A key that names no readable jar, war or folder there
-  yields no rows and a `PRODUCER_ERROR` naming the key; a jar or war larger than `maxJarMb` (default
+  must lie under a root the operator trusts. A key arrives in query text, so containment is checked
+  after `..` segments and symbolic links are resolved: a path that then lies outside those roots
+  names no readable jar. Every path later sections resolve as a jar path does is held to this rule.
+  A key that names no readable jar, war or folder there yields no rows and a `PRODUCER_ERROR`
+  naming the key; a jar or war larger than `maxJarMb` (default
   128) is refused the same way, never half read — for a war the size is what is read, its classes
   and the named libraries, and for a folder the size of its class files. A folder is read again when
   a file in it is added, removed or changed. On an appliance, `embabel data add <file|folder> --to jars`
@@ -2565,8 +2572,9 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
 **The contract:**
 
 - **The key is a project's location**: an https git URL, optionally `@ref` (a commit, tag or branch;
-  the default branch without one), read at the commit it resolves to; or a folder under the world's
-  `data/` tree, an operator-trusted root, or the folder the operator mounted for project keys. A git
+  the default branch without one), read at the commit it resolves to and held to the same address
+  rule as any fetched URL; or a folder under the world's `data/` tree, an operator-trusted root, or
+  the folder the operator mounted for project keys, contained as a jar path is (§5.18). A git
   project is read once per commit and kept; a folder is read afresh for each fetch. A tag or branch,
   the default branch included, is resolved to its commit at most once a minute, so a pushed commit is
   read by the first fetch a minute after it.
