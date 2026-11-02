@@ -4986,7 +4986,8 @@ params:
 A query that merely MATCHes the derived label evaluates the rules **implicitly, on defaults** —
 so a rule set meant for implicit evaluation should default every param. Anchoring a rule set to
 one entity is nothing special: declare the key as a param (`{officerId: $officer}`). Param names
-may not shadow the engine's reserved names or the scope pair (`userId`, `worldId`).
+may not shadow the engine's reserved names or a scope field (`userId`, `worldId`, `workspaceId`);
+a rule set declaring one is refused, naming the param.
 
 ### 13.2 What a rule may say — the validated fragment
 
