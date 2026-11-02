@@ -135,8 +135,8 @@ Handler compilation is separate: compiling guest code does not create another re
 
 The host checks all references to handlers. An absent `handlers` block declares none. A goal,
 producer, consumer, channel, lens or app naming an undeclared handler is refused with its name.
-Captured `actions`, `events` and legacy `webhooks` remain unavailable in the governed profile;
-the host reports them instead of silently executing them.
+Conventional `actions`, `events` and legacy `webhooks` in a captured realm are declarations in
+the wrong profile: the host refuses each, naming the field, and never executes it.
 
 ## App limits and profiles
 
