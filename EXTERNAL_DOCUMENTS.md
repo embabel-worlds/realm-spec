@@ -4,7 +4,7 @@
 > external store (Google Drive, Notion, Confluence, SharePoint, Dropbox, a wiki, …) in the
 > assistant's searchable knowledge base, and how those documents stay fresh. The assistant side is
 > **one source-neutral gateway surface**; everything source-specific — API connectivity, auth,
-> content export — lives in the realm. The JVM never learns a source API.
+> content export — lives in the realm. The host never learns a source API.
 
 ---
 

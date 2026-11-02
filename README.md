@@ -368,7 +368,7 @@ uncategorised rather than infer one.
 Me keeps this legacy host configuration outside Realm execution. Use the
 [captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for Me Realms.
 
-Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape; the framework's `NameOrClassTypeIdResolver` resolves either a registered short name (e.g. `action`, `goal`) **or a fully-qualified class name** (`com.example.MyCustomActionSpec`) to an `ActionSpec` class on the classpath. Host extensions can use either path.
+Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape; the host resolves either a registered short name (e.g. `action`, `goal`) **or a fully-qualified class name** (`com.example.MyCustomActionSpec`) to an `ActionSpec` class on the classpath. Host extensions can use either path.
 
 | `stepType` value | Shape |
 |---|---|
@@ -470,7 +470,7 @@ value: 1.0
 
 #### `whenExpr` — the predicate DSL
 
-A boolean expression over the matched signal's fields. Parser source: `com.embabel.world.policy.PolicyExprParser`. Grammar (today; expect additions as concrete rules need them):
+A boolean expression over the matched signal's fields. Grammar (today; expect additions as concrete rules need them):
 
 **Operators**, lowest to highest precedence:
 
@@ -2450,7 +2450,7 @@ A realm with `realm.ts` declares handlers there directly and generates no manife
 | `description` | first JSDoc paragraph | LLM-visible documentation. |
 | `inputSchema` | TS type of `args` parameter | JSON Schema; drives the typed surface on the LLM side. |
 | `outputSchema` | TS type of the unwrapped `Promise<T>` | Same. |
-| `schedule` | manifest author | Optional cron expression (Spring 6-field); the host also runs the Realm Function on this cadence. See [Execution hosts](#execution-hosts). |
+| `schedule` | manifest author | Optional six-field cron expression (second, minute, hour, day of month, month, day of week); the host also runs the Realm Function on this cadence. See [Execution hosts](#execution-hosts). |
 | `onType` | `export class X extends Entity` methods (or manifest author) | The entry is a method on a declared type, surfaced as `<obj>.<name>(args)` rather than a bare gateway function. |
 | `className` | exported class name | Set for class-based type methods; the class to instantiate before invoking `name`. Absent for the function form. |
 
@@ -2516,7 +2516,7 @@ Handlers run with the same trust as LLM-generated code (both are inside the sand
 
 ### Author tooling
 
-The host ships a thin wrapper (`embabel-realm`) that drives the JVM-side surface generation. Most realm authors only ever need `npm run build` for everyday work; `embabel-realm sync` regenerates `.embabel/gateway.d.ts` when the host's surface changes (new realms, new APIs).
+The host ships a thin wrapper (`embabel-realm`) that drives the host-side surface generation. Most realm authors only ever need `npm run build` for everyday work; `embabel-realm sync` regenerates `.embabel/gateway.d.ts` when the host's surface changes (new realms, new APIs).
 
 ```bash
 embabel-realm sync                        # from inside any realm repo
@@ -2882,7 +2882,7 @@ affect scheduling and type methods:
 
 | Field | Meaning |
 |---|---|
-| `schedule` | A cron expression (Spring 6-field, evaluated in the host's timezone). Installation makes the schedule available but **does not activate it**. It starts only after adoption under the same digest-bound grant as a routine, and a realm update pauses it until that grant is valid again. A host shows a realm's Manifest Schedules as routines of an agent it proposes for the realm, so they are adopted the same way. A **Manifest Schedule** passes empty args (`{}`), so every `inputSchema` field must be optional. (A scheduled routine in `agents/` instead passes `{trigger: "cron", firedAt}` under a different input contract; see [routines that call a Realm Function](#routines-that-call-a-realm-function-and-dispatch-scoped-replies--forward-looking).) |
+| `schedule` | A six-field cron expression (second, minute, hour, day of month, month, day of week), evaluated in the host's timezone. Installation makes the schedule available but **does not activate it**. It starts only after adoption under the same digest-bound grant as a routine, and a realm update pauses it until that grant is valid again. A host shows a realm's Manifest Schedules as routines of an agent it proposes for the realm, so they are adopted the same way. A **Manifest Schedule** passes empty args (`{}`), so every `inputSchema` field must be optional. (A scheduled routine in `agents/` instead passes `{trigger: "cron", firedAt}` under a different input contract; see [routines that call a Realm Function](#routines-that-call-a-realm-function-and-dispatch-scoped-replies--forward-looking).) |
 | `onType` | The function is a method on a declared type — callable as `<obj>.<name>(args)` on an in-scope object, not as a bare gateway function. The handler receives the object as `input.self` and the caller's arguments as `input.args`. `schedule` does not combine with `onType`: a scheduled invocation has no receiver. |
 
 A Trigger Registration has one discriminated identity everywhere it appears in adoption, dispatch,
@@ -2937,11 +2937,11 @@ A realm may instead ship a prebuilt `dist/handlers.wasm` and no source — a **s
 
 Normative for every host: dispatch time, guest memory, and payload sizes are bounded, and crossing a bound is an error the caller sees — never a truncation, never a hang. The concrete values are host operations, not something a realm can declare or rely on. The reference host's defaults:
 
-| Setting | Default | Behaviour at the limit |
+| Limit | Default | Behaviour at the limit |
 |---|---|---|
-| `assistant.wasm.enabled` | `true` | `false` rejects every dispatch with a clear error — the kill switch. Declarative content is unaffected. |
-| `assistant.wasm.dispatch-timeout` | 30s | The dispatch is interrupted and returns an error. Work longer than the budget cannot run on this host. |
-| `assistant.wasm.max-memory-pages` | 1024 (64 MiB) | A module declaring more is rejected with a clear message. |
+| wasm enabled | yes | Turned off, it rejects every dispatch with a clear error: the kill switch. Declarative content is unaffected. |
+| dispatch timeout | 30 seconds | The dispatch is interrupted and returns an error. Work longer than the budget cannot run on this host. |
+| guest memory | 1024 pages (64 MiB) | A module declaring more is rejected with a clear message. |
 | guest I/O | 1 MiB per payload | Each of the function's args, its result, and every host-call request/response is bounded — at 1 MiB or the module's memory cap, whichever is smaller. Oversized payloads error rather than truncate. |
 
 In the reference host, every dispatch is observable: it records the bundle, function, elapsed time, error if any, and how many gateway calls the guest made.
@@ -4159,7 +4159,7 @@ duties need `vc_relevance` mapped to something better than the cheapest model. _
 
 Prompt contributions — optional content **appended to every chat system prompt** for every user with the realm installed. Currently supports `examples.md`.
 
-> **⚠️ Tax on every chat turn.** Bytes you add here are paid by every user, every turn, even when they're not invoking your realm. Hosts enforce a soft size ceiling (Embabel's reference host: 1024 bytes/realm, configurable via `assistant.realm-loader.prompt-max-bytes`); over-budget realms still load but the host surfaces a warning in the world problems list.
+> **⚠️ Tax on every chat turn.** Bytes you add here are paid by every user, every turn, even when they're not invoking your realm. Hosts enforce a soft size ceiling (the reference host: 1024 bytes per realm by default, configurable by the operator); over-budget realms still load but the host surfaces a warning in the world problems list.
 >
 > **Treat `prompts/` as a pointer, not a manual.** Tell the LLM the capability *exists* and where to find the routing detail. Put the actual workflow examples in a [Skill](#skills), which the LLM activates on demand only when relevant, so its content is paid for only when used.
 
@@ -4757,7 +4757,7 @@ Realms are discoverable via the host's directory system:
 ## What's intentionally not in a realm
 
 - **Code that runs with host privileges.** No JVM bytecode, no native libraries, no classpath contributions. Realm code executes only inside a host-managed sandbox — the code sandbox for `dist/` JS handlers, the capability-scoped wasm runtime for `dist/handlers.wasm` (see [Execution hosts](#execution-hosts)) — never as the host itself.
-- **Spring beans, host configuration changes.**
+- **Host components, host configuration changes.**
 - **User credentials.** Realms carry credential references, never values. Marketplace realms use
   host-vetted typed slots and auth profiles. Environment-variable references are local or explicitly
   first-party/org-reviewed compatibility syntax only.
