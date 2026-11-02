@@ -2234,7 +2234,7 @@ realm-name/
 
 ### Handler signature
 
-Every exported async function with a `(ctx, args)` signature becomes a manifest entry at build time; the host registers from the manifest, never by introspecting the code.
+Every exported async function with a `(ctx, args)` signature becomes a manifest entry at build time; the host registers from the manifest, never by introspecting the code. A manifest with no `handlerAbi` is invoked in this form; see [one signature across hosts](#single-file-or-a-typed-project) for `handlerAbi`.
 
 ```ts
 // src/api/docs-editor.ts
@@ -2875,9 +2875,9 @@ events/mappings, channels, types, producers, APIs, MCP/webhook declarations, pro
 surfaces. Adoption and dispatch pin `realmDigest`; changing a non-code declaration can change
 behavior just as surely as changing code.
 
-The legacy handler ABI convergence below is forward-looking, not a new YAML feature:
+The handler ABI is selected per manifest, not per handler:
 
-- **One signature across hosts.** The canonical handler signature is `(input, ctx)` with the gateway under `ctx.gateway` (as shown throughout). The docker `src/` handler today is `(ctx, args)` with the gateway passed directly as the first argument. The invocation convention is selected by a top-level manifest field `handlerAbi` — one of `"input-ctx"` (the default when absent) or `"ctx-args-legacy"` — applying to the whole artifact, never inferred from parameter names or arity (both are arity-two). Unifying on `(input, ctx)` so one `src/` serves both hosts is the convergence; the `(ctx, args)` form persists only under an explicit `handlerAbi: "ctx-args-legacy"`.
+- **One signature across hosts.** The canonical handler signature is `(input, ctx)` with the gateway under `ctx.gateway` (as shown throughout). A manifest selects the invocation convention for the whole artifact with the top-level field `handlerAbi`, `"input-ctx"` or `"ctx-args-legacy"`, never inferred from parameter names or arity (both are arity-two). Any other value refuses handler binding, naming the field. A manifest with no `handlerAbi` is read as it always has been: on the `docker` host as `"ctx-args-legacy"`, the `(ctx, args)` form with the gateway passed directly as the first argument, and on the `wasm` host as `"input-ctx"`, the only form that host has run. A `docker` realm moves to `(input, ctx)` by declaring `handlerAbi: "input-ctx"`, so one `src/` can serve both hosts. A `realm.ts` declaration has no manifest, and its handlers are always `(input, ctx)`.
 New `realm.ts` definitions keep handler schemas in their `handlers` record. Legacy manifest
 extraction is not a proposed authoring step for those definitions.
 
