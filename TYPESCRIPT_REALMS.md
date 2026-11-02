@@ -90,6 +90,26 @@ only permitted imports and explicitly referenced resources. Adjacent legacy decl
 cannot supply missing fields or override the evaluated object. Arbitrary npm validators
 and unrestricted package resolution are outside this contract.
 
+### Handler imports
+
+Handler source the host builds from `entry` is guest code, and its imports follow these rules,
+separate from definition evaluation:
+
+- A relative import of named values, such as `import { format } from './lib/format.ts'`, is
+  accepted when it resolves to a regular file inside the handler folder: the folder holding the
+  entry, `wasm/` by default.
+- Refused before the handler is bound, naming the importing file and the specifier: an import
+  that resolves outside the handler folder (`../types/index.ts`, an absolute path, or a symbolic
+  link that leaves it), a `#` subpath mapping, a bare package specifier, a remote URL and a host
+  built-in. An editor or a `tsconfig.json` alias resolving one does not make it acceptable.
+- Other relative import forms (a default, namespace or side-effect-only import, or a dynamic
+  `import()`) are not portable; a host may refuse them, naming the file.
+- Type-only imports are erased. They confer nothing and do not make a value import acceptable.
+- A handler reaches a dependency module only through `ctx.deps`, never by importing it.
+
+Legacy `src/` projects ship their built artifacts and keep their existing loading; see
+[single file, or a typed project](README.md#single-file-or-a-typed-project).
+
 ### SDK assistance (non-normative)
 
 The TypeScript SDK checks a definition as you write it. `satisfies Realm` checks its fields;

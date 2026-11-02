@@ -2840,7 +2840,7 @@ The absences are the point: a wasm function is pure logic over gateway calls. A 
 ### Single file, or a typed project
 
 The following two layouts describe legacy realms without `realm.ts`. New definitions use
-[source composition](REALM_COMPOSITION.md); their handlers use the separate guest import rules.
+[source composition](REALM_COMPOSITION.md); their handlers use the separate [handler import rules](TYPESCRIPT_REALMS.md#handler-imports).
 
 - **Legacy single file:** `wasm/handlers.js`, `realm.yml` and a hand-authored
   `dist/manifest.json`. The host compiles the JavaScript handler on load.

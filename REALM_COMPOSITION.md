@@ -268,10 +268,10 @@ captured definition file. Neither spelling gives the definition access outside t
 A host that does not support subpath mappings must refuse the definition, naming the
 unsupported import, as [definition evaluation](TYPESCRIPT_REALMS.md#definition-evaluation) requires.
 
-Handlers run later, in the guest, under different import rules. The current reference
-TypeScript handler profile accepts relative named value imports confined to the handler
-folder (`wasm/`), for example `import { format } from './lib/format.ts'`. It refuses
-`#types`, bare packages and `../types/index.ts`, even when an editor resolves them.
+Handlers run later, in the guest, under the separate
+[handler import rules](TYPESCRIPT_REALMS.md#handler-imports): relative named value imports
+confined to the handler folder (`wasm/`), for example `import { format } from './lib/format.ts'`.
+`#types`, bare packages and `../types/index.ts` are refused, even when an editor resolves them.
 Type-only imports are erased; they do not make a runtime value import safe. Keep shared
 guest helpers inside the handler folder and keep definition helpers outside guest execution.
 
