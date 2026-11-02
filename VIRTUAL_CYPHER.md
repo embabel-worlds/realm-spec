@@ -5375,11 +5375,11 @@ deployment — which is also why a realm may not widen a label into either class
 own public register stays per principal in the cache, because its rows are its world's and not the
 organisation's.
 
-What stays per principal whatever the label says: nothing is inferred from a producer's
-CREDENTIALS. If your producer authenticates as the acting user and you point it at a label the
-deployment declares shared, you are declaring that its records are that label's — one row per
-identity, the same for everybody — and they will be kept that way. Fill a label of your own
-instead.
+What stays per principal whatever the label says: the results of a producer that authenticates
+as the acting user. Its records are what that user could fetch, so they are cached for that
+principal, never for the deployment or the organisation, even when the label it fills is one the
+deployment declares reference or shared. The table above sets the scope only for a fetch that does
+not depend on who asked, and a second asker of a user-credentialed fetch pays its full price.
 
 ### 15.5 Which positions you must label, and what holds the rest
 
