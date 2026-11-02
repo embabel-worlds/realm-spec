@@ -1729,7 +1729,9 @@ SELECT query ONCE; consumers only ever see the virtual join, and no query author
   ending in `Env` (`bearerTokenEnv`, `passwordEnv`, `apiKeyEnv`) names a key the way an `apis/`
   entry's `token-env` does and resolves under the same [trust tiers](README.md#apis): from the
   world's credential store, and from the process environment only in a local or first-party
-  installation. A marketplace realm cannot read the host's environment through one.
+  installation. A marketplace realm cannot read the host's environment through one. Like
+  `token-env`, each may name only a `variable` the realm's own `keys.yml` declares; any other name
+  refuses the producer at load, naming the field and the undeclared variable.
 
 Cost every consumer should know: each key batch is one live query against an endpoint the realm
 does not control. Public endpoints enforce their own timeouts and rate limits; a realm should

@@ -1728,7 +1728,7 @@ realm and a declared credential the owner binds in a captured realm. See
 | `name` | recommended | Gateway namespace — `gateway.<name>.*`. Falls back to a slugified spec title if omitted. **Always set this** in published realms so the prompt examples work regardless of the spec's `info.title`. |
 | `type` | no | `openapi` (default) or `graphql`. |
 | `auth` | no | `none` (default), `bearer`, `api-key`, `oauth2`. See **Auth** below. |
-| `token-env` | with bearer / api-key | Env-var or credential-store key holding the token. Deprecated in favour of a [key entry](#keysyml--the-keys-a-realm-needs) for the same variable, or of a declared credential in a captured realm. |
+| `token-env` | with bearer / api-key | The name of the key holding the token, which must be a `variable` the realm's own `keys.yml` declares (see [a realm names only its own keys](#auth)). Deprecated in favour of a [key entry](#keysyml--the-keys-a-realm-needs) for the same variable, or of a declared credential in a captured realm. |
 | `headers` | no | Custom HTTP headers; values support `${VAR}` interpolation from credential store / env. |
 | `oauth2` | with `auth: oauth2` | OAuth2 config — see **OAuth2** below. |
 | `tags` | no | Allowlist of OpenAPI tag names. Filters huge specs to a coarse subset. |
@@ -1822,7 +1822,13 @@ Credential references resolve through a host binding keyed by world, context, pr
 grant revision, with context access checked on every call. In the local/first-party compatibility
 tier, `token-env` and `${VAR}` may then resolve from that world's credential store (set via
 `set NAME = ...` in chat or via the admin UI), followed by the process environment. Process fallback
-is unavailable in shared multi-world or untrusted marketplace deployments. Missing credentials mean
+is unavailable in shared multi-world or untrusted marketplace deployments.
+
+**A realm names only its own keys.** A conventional realm's `token-env` and
+`webhook.signature-secret` may name only a `variable` its own [`keys.yml`](#keysyml--the-keys-a-realm-needs)
+declares, so a realm cannot reach a key the owner stored for another realm or the host's own
+environment by guessing its name. Any other name is refused at load, naming the field and the
+undeclared variable. Missing credentials mean
 the entry is skipped at world load with a logged warning; the API never appears in the gateway.
 A captured realm's API operations read only the owner's wallet, through the credential the owner
 bound, and never fall back to the process environment.
@@ -2049,8 +2055,10 @@ anything from the response that could identify the key.
 
 ### Realms that declare nothing
 
-`keys.yml` is optional, and a realm without one behaves as before. A host still derives one entry per
-credential variable the realm's APIs refer to (`token-env`, `${VAR}` in `headers`), and presents it as:
+`keys.yml` is optional for a realm that names no key by `token-env`, `webhook.signature-secret` or a
+producer's `*Env` field: each of those must name a `variable` the realm declares here, as
+[a realm names only its own keys](#auth) requires, and the one-line shorthand is enough. For a
+`${VAR}` in `headers`, a host still derives one entry per variable, and presents it as:
 
 | | Derived from the variable |
 |---|---|
@@ -2062,7 +2070,7 @@ credential variable the realm's APIs refer to (`token-env`, `${VAR}` in `headers
 A declared entry takes precedence over a derived one for the same variable, so a realm can adopt
 `keys.yml` one key at a time.
 
-A derived entry resolves the way `token-env` does, so the process environment fallback applies
+A derived entry resolves the way a declared key does, so the process environment fallback applies
 only in the local or first-party tier described under [Auth](#auth).
 
 **Load problems.** A `validate.api` the realm does not declare, a `validate.operation` that API does
