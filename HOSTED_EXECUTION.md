@@ -844,12 +844,12 @@ decides. With no network, a channel or API call refuses as its transport rules s
 approved work that does not need the network can still run. This does not add private
 database support to a profile that does not offer it.
 
-Every owner approval in this contract is a route under `/api/v1`, listed step by step in
-[owner approval](TYPESCRIPT_REALMS.md#owner-approval-step-by-step). Nothing grants from inside
-a Realm, over a channel or from a configuration file. A host with no console therefore needs
-an owner path of its own to those routes. Each governed capability stays unavailable until
-its own approval is granted. The shape of that path is the host's; this contract says only that it
-exists and that it grants exactly what the routes grant.
+Every owner approval in this contract is an owner action, listed step by step in
+[owner approval](TYPESCRIPT_REALMS.md#owner-approval-step-by-step) with the reference host's
+routes. Nothing grants from inside a Realm, over a channel or from a configuration file. A host
+with no console therefore needs an owner path of its own to those approvals. Each governed
+capability stays unavailable until its own approval is granted. The shape of that path is the
+host's; this contract says only that it exists and that it grants exactly what each step grants.
 
 ## Me captured GraphQL operation profile
 

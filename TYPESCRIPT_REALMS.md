@@ -1402,8 +1402,9 @@ routes are in the [write proposal profile](HOSTED_EXECUTION.md#me-captured-write
 
 Installing a realm grants it nothing. Every capability is a separate owner approval, and every
 approval names the installation revision the owner read; a stale revision answers 409 and
-changes nothing. This is what the owner walks through, in order, and what each step unlocks. All
-routes are under `/api/v1`.
+changes nothing. This is what the owner walks through, in order, and what each step unlocks. The
+routes are the reference host's, all under `/api/v1`. Another host may offer the same approvals
+another way; each still grants exactly what its step unlocks, and nothing more.
 
 | Step | Route | Unlocks |
 | --- | --- | --- |
