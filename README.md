@@ -2681,13 +2681,13 @@ Adding a host that consumes an existing artifact class changes nothing for a Rea
 | declared | on disk | placement |
 |---|---|---|
 | absent | `dist/handlers.wasm` present | wasm |
-| absent | no wasm bundle | docker |
+| absent | no wasm bundle and no handler source under `wasm/` | docker |
 | `docker` | no wasm bundle | docker |
 | `docker` | wasm bundle present | **conflict** |
 | `wasm` | bundle present | wasm |
 | `wasm` | no bundle, `wasm/handlers.js` present | wasm — bundle built on load |
 | `wasm` | no bundle, `wasm/handlers.ts` present | wasm — TypeScript compiled and bundled on load |
-| absent | `wasm/handlers.ts` present, nothing else | wasm — handler source under `wasm/` **is** the declaration. It placed such a realm on docker until me#1565, which loaded no functions and showed `verbs: []`; if a host still does that, declare `host: wasm`. |
+| absent | no bundle, `wasm/handlers.js` or `wasm/handlers.ts` present | wasm, built on load: handler source under `wasm/` **is** the declaration |
 | `wasm` | neither | **conflict** |
 
 A conflict surfaces as a world-loading problem with a one-sentence reason and a suggested `host:` fix; the realm's declarative content still loads. `docker` with a bundle present is a conflict deliberately: a stale bundle must never sit silently beside a host that isn't running it.
