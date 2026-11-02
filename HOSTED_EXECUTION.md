@@ -677,9 +677,10 @@ or another isolated backend while preserving retained identity, bounded I/O, med
 and refusal behavior. A remote backend must preserve those checks and authenticate its
 transport; backend placement does not grant access to credentials.
 
-Captured Docker execution can load bundled CommonJS and JSON artifacts from
-`dist/node_modules/`. The reference host verifies at most 256 runtime entries totaling 8 MiB
-and resolves package main/index, subpaths, relative modules and cycles inside the container.
+Captured execution on the `docker` host, the Node bundle host however the host runs it, can
+load bundled CommonJS and JSON artifacts from `dist/node_modules/`. The reference host verifies
+at most 256 runtime entries totaling 8 MiB and resolves package main/index, subpaths, relative
+modules and cycles inside the captured bundle.
 Missing imports have no host fallback. Package exports maps, ESM and native module loading
 are unsupported. Bundled code receives no additional authority or credentials.
 

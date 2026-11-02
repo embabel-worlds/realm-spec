@@ -222,7 +222,7 @@ tags:
 | `category` | No | What the realm is for: one id from the published list of categories. See [Category](#category). |
 | `tags` | No | Free-text keywords, for finding the realm. They are not its category. |
 | `maturity` | No | The author's own readiness claim: `experimental`, `beta`, `stable` or `deprecated`. Absent means the realm makes no claim — which is **not** a claim of being finished. See [Maturity](#maturity). |
-| `host` | No | Execution host for the Realm's Functions: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
+| `host` | No | Execution host for the Realm's Functions: `docker` (the Node bundle host, which needs no container) or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
 | `capabilities` | No | Captured realms only. What the realm asks the owner to grant at admission beyond its handlers and resources. The one value is `model`, which asks for [the model call](HOSTED_EXECUTION.md#the-model-call). The owner may grant none of them. |
 
 ### Icons
@@ -1705,7 +1705,7 @@ cannot meet the deployment's marketplace credential policy, that integration is 
 marketplace tier. The `token-env`, custom-header interpolation, and credential-bearing MCP forms
 documented below are compatibility features for local or explicitly first-party/org-reviewed
 installations. Their trust tier is adoption-visible and they never become marketplace-safe merely
-because they run in Docker.
+because they run in a sandbox or a container.
 
 The typed credential slot is a [key entry](#keysyml--the-keys-a-realm-needs) in a conventional
 realm and a declared credential the owner binds in a captured realm. See
@@ -2620,9 +2620,10 @@ require adoption in the fork.
 
 ## Execution hosts
 
-> **Forward-looking contract.** The portable Docker capability boundary, fail-closed unknown-host
-> behavior, and atomic artifact-set publication below require host changes. Until implemented and
-> tested, current Docker/source-validation behavior is not a marketplace security boundary.
+> **Forward-looking contract.** The portable capability boundary of the `docker` host, fail-closed
+> unknown-host behavior, and atomic artifact-set publication below are requirements a host may not
+> yet meet. A host that does not enforce them must not treat its `docker` host or its source
+> validation as a marketplace security boundary.
 
 A realm ships logic and declarations. The platform supplies the sandbox, identity binding, resource
 limits, triggers, and observability. Data enters through declared surfaces and leaves through gateway
@@ -2663,7 +2664,12 @@ Two hosts exist:
 | Host | What runs | Choose it when |
 |---|---|---|
 | `docker` | the compiled `dist/` JS modules, in the host's Node code sandbox | Default. Handlers need npm dependencies or the full TS project layout. Portable realm code still has no raw network or ambient credential access. |
-| `wasm` | `dist/handlers.wasm`, in-process inside the host runtime | Functions are small and dependency-free, per-dispatch latency matters, or the deployment has no container runtime. |
+| `wasm` | `dist/handlers.wasm`, in-process inside the host runtime | Functions are small and dependency-free, per-dispatch latency matters, or the deployment offers no Node code sandbox. |
+
+The `docker` value names the Node bundle host, not a container technology. A host runs a realm's
+Node bundle in whatever conforming way it chooses, natively or in a container, unless the realm
+itself declares a requirement. A realm observes only the capability set below, whichever way the
+host runs it.
 
 The portable contract is capability-based on both hosts: no sockets, DNS, arbitrary `fetch`, process
 environment, inherited file descriptors, or ambient credentials. External access goes through the
