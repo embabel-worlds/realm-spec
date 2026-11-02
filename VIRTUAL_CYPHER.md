@@ -3746,8 +3746,7 @@ system; a *view* is a view over the graph (real + virtual) itself. Two kinds, by
 
 - **Regular (inlined).** Expanded at query time — the view's `MATCH … RETURN <var>` body is spliced in and its
   return variable renamed to the outer alias, so `MATCH (c:my_key_accounts)-[:R]->(x)` becomes
-  `MATCH <view body> MATCH (c)-[:R]->(x)`. Always fresh; no storage. (Flat inlining, **not** `CALL {}` — the
-  scope rewriter rejects subqueries.)
+  `MATCH <view body> MATCH (c)-[:R]->(x)`. Always fresh; no storage. (Flat inlining, **not** `CALL {}`.)
 - **Materialized (cached).** The result nodes are committed and a reference reads the cache instead of
   re-running the body, until a TTL / refresh policy invalidates it. This is the durable sibling of the
   ephemeral `keep(queryId)` option: the expensive fan-out (map) + agentic reduce runs on a **refresh
@@ -3850,57 +3849,23 @@ fire:
 MATCH (d:breach_mentions) RETURN count(DISTINCT d) AS incidents      -- an aggregate over a precomputed view
 ```
 
-### 8.4 The materialization cache is pluggable
+### 8.4 What a materialized view caches
 
-The materialized-view cache is a **strategy behind an interface**, not a fixed mechanism. The default strategy
-is graph-colocated and transactional: a
-`MaterializedView {view, worldId, contextId, accessPolicyRevision, principalId?, expiresAt}` marker node with
-`[:MEMBER]` edges to the cached result nodes, swept by TTL. But the store is an SPI:
+Where a materialized view's cache lives is the host's choice: in the graph beside the data, in
+memory, or in an external store. Whichever it chooses, these hold:
 
-```kotlin
-interface ViewMaterializationStore {
-  data class CacheState(val expiresAt: Long, val memberCount: Long)
-  data class RowSnapshot(val columns: List<String>, val rows: List<Map<String, Any?>>, val expiresAt: Long)
-
-  fun state(view: String, scope: String): CacheState?
-  fun clear(view: String, scope: String)
-  fun sweepExpired()
-
-  // A view whose body returns a NODE caches its members.
-  fun materialize(view: String, scope: String, memberIds: List<String>, expiresAt: Long)
-  fun bindClause(alias: String, outputLabel: String, view: String, scope: String): String
-
-  // A TABULAR view has no node to point a MEMBER edge at, so it caches the rows themselves.
-  fun materializeRows(view: String, scope: String, columns: List<String>, rows: List<Map<String, Any?>>, expiresAt: Long)
-  fun rows(view: String, scope: String): RowSnapshot?
-}
-```
-
-Two things in that shape are load-bearing.
-
-**A view without an `outputLabel` is a row snapshot, not a member set.** Its body returns columns, and
-there is no node to point a `MEMBER` edge at — so what is cached is the rows, which is what a client
-reading the view by name wanted anyway. A store that implements only the member half silently fails
-every tabular view.
-
-**Members are bound by a clause, not returned as ids.** `bindClause` lets the default
-graph-colocated store prepend pure Cypher (`-[:MEMBER]->` off its marker node) with no ids threaded
-through the query; an off-graph store returns `elementId(alias) IN [...]` instead. Returning a member
-list would have forced every store to pay the graph store's worst case.
-
-`scope` is the acting caller's scope as §2 defines it; the store never interprets it, only keys on it.
-
-**Every entry is keyed per caller**, unconditionally. A view body may use caller-specific
-credentials, policy, inputs or anchors, and the reference host does not attempt to prove otherwise —
-there is no analysis that marks a view caller-invariant and no sharing of one entry between callers.
-That is the conservative choice and it costs: two callers asking for the same view materialize it
-twice. A host that wants to share reference-data views across callers needs an invariance proof this
-one does not have, and must not assume the absence of the parameter implies one.
-
-An alternative strategy swaps in without touching the query path: an **in-memory LRU** for a single-process
-deployment, an **external KV / Redis** for a horizontally-scaled one, or an **`immutable`** strategy (no TTL,
-explicit invalidation only) for reference data. The refresh policy (`ttl`, cron `refresh:`) is orthogonal to
-the store.
+- **A node view caches its members; a tabular view caches its rows.** A view with an `outputLabel`
+  caches the nodes its body returned, and a reference reads those nodes. A view without one has no
+  node to point at, so it caches its returned columns and rows, which is what a client reading the
+  view by name receives. A host must cache both shapes; one that cached only members would fail
+  every tabular view.
+- **Every entry is keyed per caller**, by the acting caller's scope as §2 defines it,
+  unconditionally. A view body may use caller-specific credentials, policy, inputs or anchors, and
+  nothing marks a view caller-invariant, so no entry is shared between callers. Two callers asking
+  for the same view materialize it twice. A host that wants to share reference-data views across
+  callers needs an invariance proof, and must not take the absence of a parameter as one.
+- **Freshness is the view's refresh policy**, whichever store holds the entry: `ttl`, a cron
+  `refresh:`, or `immutable`, which has no TTL and changes only on explicit invalidation.
 
 ### 8.5 A general result / entity cache — and negative results
 
