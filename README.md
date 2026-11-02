@@ -165,7 +165,7 @@ for declarative realms. Authors choose freely per file.
 ### Choosing a shape
 
 - Start declarative. If a YAML `stepType: action` (or any
-  host-extension `ActionSpec` referenced by FQN) can express what
+  host-extension `stepType` identifier) can express what
   you need, that's the right tool — no build step, no runtime code
   path, the host's planner reasons about it directly.
 - Reach for handlers when the operation has invariants the planner
@@ -368,16 +368,16 @@ uncategorised rather than infer one.
 A captured host keeps this legacy host configuration outside Realm execution. Use the
 [captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for captured Realms.
 
-Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape; the host resolves either a registered short name (e.g. `action`, `goal`) **or a fully-qualified class name** (`com.example.MyCustomActionSpec`) to an `ActionSpec` class on the classpath. Host extensions can use either path.
+Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape. Its value is an identifier the realm writes: either a registered short name (e.g. `action`, `goal`) **or a host-extension identifier spelled like a fully-qualified class name** (`com.example.MyCustomActionSpec`). The identifier is an opaque string to the realm; how a host maps it to a shape is the host's. A host refuses an identifier it does not recognise, naming the file.
 
 | `stepType` value | Shape |
 |---|---|
-| `action` | Framework `PromptedActionSpec` — typed LLM call producing `outputTypeName` |
-| `<FQN>` | Any other `ActionSpec` subtype on the classpath. Use this when shipping a host-extension shape whose YAML contract isn't yet stable enough to claim a short name. |
+| `action` | A typed LLM call producing `outputTypeName` |
+| `<identifier>` | A host-extension shape named by its identifier. Use this when shipping a host-extension shape whose YAML contract isn't yet stable enough to claim a short name. |
 
-**Short name vs FQN dispatch.** A short name like `action` is a public contract; once realm authors write it, you can't change the spec's shape without breaking their YAML. Reserve short names only for shapes that have stabilised. FQN dispatch lets a host iterate freely on field names, parsing, and dispatch semantics without committing to a YAML slot upstream. The flip side: an FQN that appears in published realm YAML is itself a public identifier — a host that moves or renames the class must keep the old name resolvable, or every realm that wired against it breaks.
+**Short name vs extension identifier.** A short name like `action` is a public contract; once realm authors write it, you can't change the spec's shape without breaking their YAML. Reserve short names only for shapes that have stabilised. An extension identifier lets a host iterate freely on field names, parsing, and dispatch semantics without committing to a YAML slot upstream. The flip side: an identifier that appears in published realm YAML is itself public — a host must keep accepting it, whatever it renames internally, or every realm that wired against it breaks.
 
-Example host extension (the assistant's predicate-driven `PolicyActionSpec`):
+Example host extension (the reference host's predicate-driven policy action, identifier `com.embabel.world.policy.spec.PolicyActionSpec`):
 
 ```yaml
 # realm-email/actions/policy_email_unreplied.yml
@@ -395,7 +395,7 @@ The framework's resolver calls `Class.forName(stepType)` and deserializes the re
 
 ### `stepType: action` — typed LLM call
 
-The framework's general-purpose `PromptedActionSpec`. The LLM produces a typed object the planner can chain into other actions. `nullable: true` declares that the LLM may return null (no output) — the planner sees the missing binding and replans.
+The general-purpose prompted action. The LLM produces a typed object the planner can chain into other actions. `nullable: true` declares that the LLM may return null (no output) — the planner sees the missing binding and replans.
 
 ```yaml
 # actions/triage-issue.yml
@@ -417,7 +417,7 @@ Fields: `name`, `description`, `llm` (LlmOptions, optional), `inputTypeNames`, `
 
 ### LLM-judged signals — `stepType: action` producing `AttentionVerdict`
 
-LLM-judged attention rules are vanilla `stepType: action` PromptedActionSpecs whose output is an `AttentionVerdict` (a typed `{reason, confidence, tier}` value) and which declare `nullable: true` so the LLM can return null = "skip". The host provides a generic wrap action that lifts `(AttentionVerdict, Signal)` to `AttentionCandidate`, closing the catchup chain.
+LLM-judged attention rules are plain `stepType: action` prompted actions whose output is an `AttentionVerdict` (a typed `{reason, confidence, tier}` value) and which declare `nullable: true` so the LLM can return null = "skip". The host provides a generic wrap action that lifts `(AttentionVerdict, Signal)` to `AttentionCandidate`, closing the catchup chain.
 
 ```yaml
 # realm-email/actions/triage_email_attention.yml
@@ -442,11 +442,11 @@ cost: 0.5
 value: 1.0
 ```
 
-The wrap is a two-step GOAP chain per signal: the PromptedActionSpec emits an `AttentionVerdict`, then the host's wrap action emits the final `AttentionCandidate`. The wrap is keyed off `(AttentionVerdict, Signal)` inputs so it composes generically with *any* LLM-judgment realm — realm-email, realm-slack, realm-calendar, etc. — without needing per-signal-type wrap classes.
+The wrap is a two-step GOAP chain per signal: the prompted action emits an `AttentionVerdict`, then the host's wrap action emits the final `AttentionCandidate`. The wrap is keyed off `(AttentionVerdict, Signal)` inputs so it composes generically with *any* LLM-judgment realm — realm-email, realm-slack, realm-calendar, etc. — without needing per-signal-type wrap classes.
 
 ### Deterministic rules — host-extension via FQN
 
-The assistant ships an in-tree `PolicyActionSpec` for cheap, no-LLM rules over a single signal — fires when its predicate matches and writes an `AttentionCandidate`. **No `surface:` block** — how the candidate gets rendered into a notification is a downstream concern, not the producer's call.
+The reference host ships a policy action for cheap, no-LLM rules over a single signal — fires when its predicate matches and writes an `AttentionCandidate`. **No `surface:` block** — how the candidate gets rendered into a notification is a downstream concern, not the producer's call.
 
 The YAML uses FQN dispatch (the predicate DSL is still iterating, so we don't reserve a short stepType slot upstream yet):
 
@@ -461,7 +461,7 @@ inputTypeNames:
 
 whenExpr: "reviewer == $self and age >= 48h"
 
-# Same top-level cost / value as PromptedActionSpec. Cheap predicate:
+# Same top-level cost / value as a prompted action. Cheap predicate:
 # low cost, standard value — the planner picks this before any LLM
 # judgment on the same signal type.
 cost: 0.01
@@ -3371,7 +3371,7 @@ starting a provider connector. A Realm declaration, `auto-start` value or proces
 variable grants no runtime authority. The following legacy connector format applies only
 where the host explicitly supports it; it does not replace the owner lifecycle API.
 
-A realm configures a connector the host implements — host-extension via FQN, the same dispatch pattern as `PolicyActionSpec`:
+A realm configures a connector the host implements, named by a host-extension identifier as a `stepType` is (this one is the reference host's):
 
 ```yaml
 # channels/discord.yml
@@ -3896,7 +3896,7 @@ execution out of band; none is serialized into the action input. The action stay
 | `nodeLabels` | list&lt;string&gt; | Every Neo4j label on the node |
 | `nodeProperties` | object | Map of realm-visible properties on the node. Reserved host metadata is redacted. |
 
-**Output type**: `DecorationResult` (a host-provided domain type). Action declarations set `outputType: com.embabel.world.kg.decoration.DecorationResult`.
+**Output type**: `DecorationResult` (a host-provided domain type). Action declarations set `outputType: com.embabel.world.kg.decoration.DecorationResult`, the reference host's identifier for that type.
 
 ```ts
 interface DecorationResult {
@@ -4677,6 +4677,10 @@ each installed realm's `hints/`, one parse failure costing that file — recorde
 `realms/<name>` where its author will look — never the rest.
 
 ## Validating a realm in CI
+
+> **Tools (non-normative).** This section describes one validator, the reference host's, and the
+> workflow this repository publishes for it. This specification, not that validator or its image,
+> defines conformance: a disagreement between them is a defect in the validator.
 
 `realm_validate` answers "would this load?" inside a running appliance. The same checks run with no
 appliance at all, so a realm repository can make them a **required check** — including on pull
