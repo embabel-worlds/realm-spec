@@ -240,7 +240,7 @@ on it, and a host that ignores the field entirely is still conformant.
 
 **It must be a file the realm ships**, addressed relative to the realm root.
 Hosts are required to refuse anything else â€” an absolute path, a `..` that
-climbs out of the realm, or a URL:
+climbs out of the realm, a symbolic link that resolves outside it, or a URL:
 
 | Declared | Result |
 |---|---|
@@ -3430,7 +3430,7 @@ sweeps:                               # cold materializations it keeps filled â€
 | `routing` | no | What to ask this agent about, for a host that routes questions to colleagues. |
 | `persona` | no | A personality the host already has, or one this realm ships under `personalities/`, named `<realm>/<slug>` to say which realm's (`realm-bible/jonathon`). A persona confers no authority, but it is part of what the sponsor signs: for an agent people talk to it is the behaviour, guardrails included (see [Signed versions](#signed-versions)). |
 | `conversation` | no | How the agent is talked to: the realms it reaches, the host tools it keeps, the skills it brings in by name, its model role and the sampling a caller may ask for. See [Talking to an agent](#talking-to-an-agent). |
-| `prompt` | no | A markdown file beside the agent file under `agents/`, named by its plain file name (`coder.md`). Its text is the agent's instructions for a conversation. A host that runs a conversation through an outside coding agent gives it these instructions at the start of the session. The path may not leave `agents/`; a missing or unreadable file means the agent has no prompt. |
+| `prompt` | no | A markdown file beside the agent file under `agents/`, named by its plain file name (`coder.md`). Its text is the agent's instructions for a conversation. A host that runs a conversation through an outside coding agent gives it these instructions at the start of the session. A value with a `/`, a `..`, an absolute path, or a file that is a symbolic link is refused as a loading problem naming the agent. A missing or unreadable file is reported as a loading problem, and the agent loads with no prompt. |
 | `asks` | no | Suggested first questions, a list of short strings a host may offer as one-click asks. |
 | `routines[]` | no | The work it does without being asked. Fields below. |
 | `duties[]` | no | Conditions it keeps true, each naming the view, lens or DERIVE label that should hold. _Forward-looking._ |
