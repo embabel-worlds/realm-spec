@@ -61,13 +61,18 @@ the fetch.
 
 ## 2. The execution model
 
-**A Virtual Cypher query never writes.** On every surface that takes a query — asks, views, rule
-bodies, code, captured-realm reads — a write clause anywhere in it (`CREATE`, `MERGE`, `SET`, `REMOVE`,
-`DELETE`, `FOREACH`, `CALL { } IN TRANSACTIONS`, including after a `WITH`) refuses the query before
-anything is fetched or run, naming the clause; a write clause that appears only inside a string,
+**A Virtual Cypher query never writes anything that outlives it.** On every surface that takes a
+query — asks, views, rule bodies, code, captured-realm reads — a write clause anywhere in it (`CREATE`,
+`MERGE`, `SET`, `REMOVE`, `DELETE`, `FOREACH`, `CALL { } IN TRANSACTIONS`, including after a `WITH`)
+that touches a stored or fetched type refuses the query before anything is fetched or run, naming the
+clause. The one write a query may make is to **projected types** (§7.9): nodes of a `projected: true`
+type, and relationships declared on one, created inside the run and gone when it ends — which is how a
+view can be a step that adds a fact for the next (a judged link such as `(:Issue)-[:TRACKED_BY]->`).
+A view whose writes are all projected validates and runs; one that writes anything else is refused at
+load, with the same rule the run applies. A write clause that appears only inside a string,
 comment or map key is data and the query runs. A realm persists changes only through its write
 proposals, never by writing from a query — so nothing a query read from a live source is ever
-stored by that query. The one surface that writes is the annotation surface (§12): a realm and a
+stored by that query. The one surface that writes durably is the annotation surface (§12): a realm and a
 deployment must both opt into it, it takes its own fixed statement shape, and it writes only
 declared annotation properties of REAL nodes — never a fetched record.
 
@@ -823,6 +828,45 @@ Every cross-realm join is one of these. Choose by what the two sides actually sh
 Two things that are NOT a join mechanism, however tempting: seeding the same key by hand into both
 realms (it works until the second customer), and a per-producer rewrite that normalizes one side to
 match the other's spelling (it encodes realm B's format inside realm A).
+
+#### 5.4.4 `canonicalize()` — the spine as a function
+
+A spine's `normalize` is the single definition of "the same entity", and `hub:` applies it to a
+property. When a query holds a raw value that is not on a `hub:` property — an invoice's customer
+URL, a sender's address, a parameter — it must not normalize the value itself:
+`split(i.customerUrl, '//')[1]` strips the scheme and nothing else, so `https://www.Acme.com/` joins
+nothing while the same company's customer record, keyed through `hub:`, joins fine. No error; the
+invoices are simply missing. Ask the spine instead:
+
+```cypher
+MATCH (b:LagoBooks {scope:'all'})-[:HAS_INVOICE]->(i:LagoInvoice)
+MATCH (a:CustomerAccount {accountKey: canonicalize(i.customerUrl, 'CustomerAccount')})
+RETURN a.name, sum(i.amountDueCents) / 100.0 AS owed
+```
+
+| Call | Returns |
+|---|---|
+| `canonicalize(value, 'Spine')` | the spine's key for a raw value — `'Priya <priya@Northwind-Traders.example>'` → `'northwind-traders.example'`, `'https://www.Acme.com/'` → `'acme.com'` — or `null` |
+| `canonicalize(n)` | for a node whose type marks a property `hub: <Spine>`, the key from the first such property that has a value; for a node of the spine type itself, its own key |
+| `canonicalization(value, 'Spine')` | `{key, outcome, rule}` — `outcome` is `ok`, `excluded` (the spine's `exclude:` refused it, e.g. a freemail address) or `invalid` (it fails `require:`, e.g. no dot); `rule` names the spine |
+
+**It is the same normalisation `hub:` applies, not a second copy** — a query and a `hub:` property can
+never disagree about a value.
+
+**`null` means "not an identity for this spine"** and nothing else. When the reason matters — telling
+a declined personal address from a malformed one — ask `canonicalization`.
+
+**It reads nothing and claims nothing.** No lookup, no model: `canonicalize` says what the key *would
+be*, not that an entity with that key exists. Existence is the `MATCH` that uses it.
+
+**Refused before anything is fetched**, as an invalid query: a spine name that is not a string
+literal; an unknown spine; a type that is not a spine; the one-argument form on a type with no
+`hub:`; a value that is not a string, a parameter, or a property of a matched node. In the
+property form the node's label must be written in the statement (`MATCH (i:LagoInvoice)`), and a
+list-valued property reads `null`.
+
+**Spines are per world.** A realm-declared spine (§5.4.1) is visible to queries in the world it is
+installed in, and unknown elsewhere.
 
 ### 5.5 Graph-cached aggregates — `cache: {kind: graph}`
 
@@ -2571,7 +2615,8 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
   project is read once per commit and kept; a folder is read afresh for each fetch. A tag or branch,
   the default branch included, is resolved to its commit at most once a minute, so a pushed commit is
   read by the first fetch a minute after it.
-- **Five emits, each row in the columns of a standard-model parent** (and a sixth, `captures`, below), so a realm's language children
+- **Five emits, each row in the columns of a standard-model parent** (and a sixth, `captures`, and a
+  seventh, `version`, below), so a realm's language children
   of those parents (`PythonDeclaration` under `SourceDeclaration`) carry them under the same names as
   Java's:
   - `files` (`Source`): `root`, `path`, `language`, `lines`, `sha256`, `commit` (git), `url` (on a
@@ -2600,6 +2645,12 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
     project's own.
   Every row carries `id`, `sourceId` (its file's `id`), `path`, `language`, `line`, `url`, `project`
   and `anchorKey`.
+- **`version` says whether the project changed, without reading it.** One row per project key:
+  `project` (as read), `commit` (a repository's, the default branch or `@ref` resolved as above) and
+  `version` — the commit, or for a folder a digest of every file's path, size and modification time.
+  No file is read or parsed, so it is cheap enough to ask every minute; it is what a `documents`
+  source watches (README, `sync.watch`) to re-read a project only when a commit lands. A folder's
+  `version` moves when a file is added, removed or rewritten, even with the same bytes.
 - **`id` names a row where it was read, not what it is.** It holds the project as read
   (`host/repo@<commit>` for a repository) and the row's line and column, so it changes with every commit
   and whenever the code above it moves. It is the key to join rows of one read (`enclosingId = d.id`).
@@ -3341,13 +3392,13 @@ RETURN summarize(n.description, 'what is newest and most important') AS digest
 | `summarize(text [, instruction])` | prose | a neutral overview |
 | `render(text [, instruction])` | prose | the same items as prose — all of them, in order, hedges kept |
 | `synthesize(text, goal)` | prose | a goal-directed answer (argues toward `goal`) |
-| `classify(text, labels)` | one label | exactly one label from the closed set `'a,b,c'` |
+| `classify(item, labels [, rubric])` | one label | exactly one label from the closed set `'a,b,c'` |
 | `extract(text, what)` | list | the distinct things asked for (deduped) |
 | `themes(text [, focus] [, count])` | list | the recurring cross-item topics (labels only) |
 | `cluster(text [, k])` | list of maps | semantic groups, each with a COUNTED size and examples |
-| `score(text, rubric)` | number 0–1 | one terminal ordinal judgment of the whole group |
-| `holds(text, question)` | boolean or null | a three-valued verdict on a claim |
-| `relevant(text, criterion)` | list | only the items matching a subjective criterion |
+| `score(item, rubric)` | number 0–1 | one ordinal judgment of the whole group |
+| `holds(item, question)` | boolean or null | a three-valued verdict on a claim |
+| `relevant(item, criterion)` | list | only the items matching a subjective criterion — over nodes, the group's own nodes |
 | `argmax(key, text, criterion)` | winner payload | the best candidate under a comparative rubric |
 | `correlate(x, y)` | map | the Pearson correlation of two numeric expressions: `{r, n, dropped, ci, detectable}` |
 | `regress([x1, …], y, label)` | map | a least-squares fit of `y` on the predictors: fit quality, per-predictor strengths, and the rows most above and most below their prediction, one list per direction |
@@ -3522,6 +3573,48 @@ What this costs, and the one rule it imposes:
 Grouping follows Cypher's own rules: the non-aggregated keys of the clause define the groups, so
 `WITH t, summarize(n.description, …)` is one digest per `t` over all its `n`s — not one per `n`.
 
+#### Judging nodes, not only text
+
+`relevant`, `classify`, `holds` and `score` accept a NODE variable as their item, not only a property:
+
+```cypher
+MATCH (i:Issue)<-[:RAISED]-(:Attendee)-[:WORKS_FOR]->(:CustomerAccount)-[:HAS_CASE]->(c:SupportCase)
+WHERE c.status IN ['open', 'pending']
+WITH i, relevant(c, 'the same problem as: ' + i.summary) AS tracked
+UNWIND tracked AS tc
+MATCH (tc)-[:ASSIGNED_TO]->(e:Engineer)
+RETURN i.summary, tc.subject, e.name
+```
+
+- **The model reads each node whole**: its labels, its properties, and what the world's types declare
+  they mean — the `description` of the type and of each property (§ types). A `status: pending` is shown
+  with its declared meaning, so a description written for query authors is read by the judge too; an
+  undeclared type is shown with its labels and properties alone. Who may see a node (its scoping
+  properties) and embeddings are never shown.
+- **`relevant` over nodes keeps the group's own nodes.** The result is a subset of the nodes the group
+  matched — the model can only keep what it was shown, by its position in what it was shown — so it can be
+  `UNWIND`ed, traversed from and re-matched like the nodes it came from, and it is scoped as they were.
+  A group whose candidates were all rejected keeps an empty list. A group that could not be judged is
+  never an empty list: its cell is null with the reason in the result, or — where a later clause reads
+  the kept nodes — the query fails and says so, since an answer built on a silently missing group would
+  look complete.
+- **Projected in the final `RETURN`**, the kept nodes come back as nodes.
+- **A node is longer than a title**, and the cost check prices what is shown: a reduction over nodes is
+  quoted on the size of the nodes as rendered, and a query over the inline limit is refused before it
+  runs, never cut down to fit.
+- What does NOT flow on: kept nodes from a variable that no node pattern bound (an `UNWIND`ed list, a
+  comprehension), and any structured result (`correlate`, `regress`, `cluster`, `argmax`). Re-binding the
+  matched name itself (`UNWIND tracked AS c` after matching `c`) is refused with a request to use a new
+  name.
+- **Inside a subquery.** A judgement may sit inside a unit `CALL { … }`, `OPTIONAL CALL { … }` or
+  `CALL () { … }`, nested at any depth — the groups are read over the rest of that body. So a plan whose
+  steps are unit subqueries can judge in one step what an earlier step projected. Refused, each for a
+  reason and before any model call: an importing body (`CALL { WITH x … }`, `CALL (x) { … }` — a node
+  grouped under two outer rows could collect different values and keep only one answer); inside
+  `EXISTS {}`, `COUNT {}` or `COLLECT {}` (no clause boundary to read the groups up to); inside
+  `CALL {} IN TRANSACTIONS` or any other braces; and a judging body that writes and runs more than once
+  (later runs would form groups the judgement never saw).
+
 #### What the arguments mean
 
 Every signature above splits its arguments the same way, and getting the split wrong is the most
@@ -3536,8 +3629,18 @@ common authoring error:
   answer can say WHICH item won and not merely what the winning text said. Every other function in the
   table accumulates exactly one.
 - **Every argument after the accumulated ones is a LITERAL string** — the instruction, goal, labels,
-  what, focus, rubric, criterion, question. A row expression there is not evaluated per row (there is
-  nothing to evaluate it against once the group is reduced), so write the words themselves.
+  what, focus, rubric, criterion, question — with one exception, below. A row expression there is not
+  evaluated per row (there is nothing to evaluate it against once the group is reduced), so write the
+  words themselves.
+- **The exception: a judgement's criterion may read the GROUPING KEY.** `relevant`'s criterion,
+  `classify`'s rubric, `holds`' question and `score`'s rubric may be an expression over the clause's
+  grouping keys — `WITH i, relevant(c, 'the same problem as: ' + i.summary) AS tracked` asks one question
+  per issue. It is evaluated once per group, from that group's keys only. An expression that reads a
+  variable the clause aggregates over (`relevant(c, 'like ' + c.title)` grouped by `i`) is REFUSED before
+  the query runs: it has a different value on every row of the group, and none of them is the group's. A
+  group whose criterion evaluates to null is not judged — its cell is null and the result says why —
+  because no criterion would keep everything. `classify`'s label set is always a literal: it is the
+  closed set every group's answer is checked against.
 - **Optional arguments are POSITIONAL but type-disambiguated.** `themes(text [, focus] [, count])`
   reads a NUMERIC argument as the topic count and a string as the focus, in whichever order they
   arrive — `themes(n.title, 5)` and `themes(n.title, 'risks', 5)` both mean what they look like.
@@ -3730,6 +3833,180 @@ Being a list of maps, `clusters[0].size` is addressable — which is what lets a
 filter the rows it came from. Prefer `themes` when only the recurring topics matter and membership
 does not; prefer `cluster` for "what groups are in these, and how big is each".
 
+### 7.8 `ai.fromText` — project a typed graph shape out of text
+
+```cypher
+MATCH (a:CustomerAccount)-[:HAS_CASE]->(c:SupportCase)-[:HAS_MESSAGE]->(m:SupportMessage)
+WHERE c.status IN ['open', 'pending'] AND m.fromCustomer
+CALL ai.fromText(m.body, '(m)-[:NAMES]->(k:Competitor)') YIELD k
+RETURN k.name AS competitor, count(DISTINCT a) AS accounts
+```
+
+**Means:** "read this text, and give me the elements of this shape that it states" — as graph elements
+the rest of the query matches, filters, joins and counts like any other. Standard procedure-call syntax,
+so it works wherever a query runs: views, DERIVE rule bodies, handlers, `kg_query`.
+
+**The pattern** is a string literal: directed single hops of one type, at most one label per node, no
+inline properties, in one connected piece. Each variable is one of three things:
+
+| Variable | What happens |
+|---|---|
+| no label (bound earlier in the query) | an **anchor**: what the text projects attaches to it; it is never created |
+| a **projected** type | **created** for this run only, typed by its declaration |
+| a **world** type | **resolved, never invented**: the text's mention is matched through the type's spine; a miss is reported |
+
+**YIELD** names the pattern variables the call binds (`YIELD k`, `YIELD i AS issue`). Variables not
+yielded do not enter the query's scope. An anchor is not yielded — it is already bound. `YIELD *`,
+`YIELD … WHERE` and `OPTIONAL CALL` are refused; filter in a following `WITH … WHERE`.
+
+**Guarantees:**
+
+- **Nothing is stored.** Created elements exist for the run that made them and no other: graph counts are
+  identical before and after, and a run never sees another run's projection.
+- **Typed before anything is asked.** Every label and relationship in the pattern must be declared (below);
+  an undeclared one, a world type with no spine or no description, or a pattern that creates nothing is
+  refused before any text is read or any model call is made.
+- **A row reaches only what its own text projected.** One extraction per distinct text; two rows with the
+  same text share it.
+- **Cardinality is the declaration's.** A relationship declared `many: false` attaches at most one target per
+  source; when the text gives several, none is attached and the outcome is reported as ambiguous.
+- **Provenance.** Every created element carries `sourceSpan` (the words it was read from) and `extractedBy`
+  (the model role and model that read it).
+- **Outcomes are not collapsed into empty.** A world mention its type's identity policy refuses (a freemail
+  address on a domain-keyed spine) is reported `PROJECTION_DECLINED`; one that matches no stored entity,
+  `PROJECTION_UNRESOLVED`; several candidates where one is allowed, `PROJECTION_AMBIGUOUS` — each a warning on
+  the result. A value outside a declared closed set is dropped and reported `UNPARSEABLE_ANSWER`. A text that
+  states nothing is an empty answer; a model call that fails refuses the query with a retryable
+  `SOURCE_UNAVAILABLE`, never an empty one.
+- **Resolution is spine-only for now.** A world-type mention resolves through its type's spine key
+  (`normalize`, `require`, `exclude`) and nothing else: a company named only by name is unresolved.
+- **Cached and priced.** The same text, pattern, declarations and model are not asked twice. Texts not
+  already projected are counted against the query's model-call limit before any is asked (§9); over it,
+  the query is refused `TOO_EXPENSIVE` rather than truncated. At most 200 distinct texts per call.
+- **The model is a role's**: `vc_extraction` (remappable per world with `llmRoles`; where nothing maps it, it
+  resolves as `vc_execution` does), or the role one call names with a third argument,
+  `ai.fromText(text, pattern, {role: 'chat_best'})`. The option takes a ROLE only: a name that is not a role
+  this world knows is refused, and a model name is refused as one. A call naming a role is a different
+  question for caching, even when it lands on the same model.
+- **Not in raw mode.** A raw-mode statement (the openCypher conformance surface) treats `ai.fromText` as an
+  unknown procedure.
+- **Where it may be called.** At the top level of a statement, or inside a `CALL { … }` subquery — a unit
+  subquery (whose projection the rest of the statement, later subqueries included, can read), or an
+  importing one (`CALL { WITH m … }`, reading each outer row's text with that row's anchors). A subquery no
+  row reaches reads no text. Refused, each for a reason: inside `EXISTS {}`, `COUNT {}` or `COLLECT {}`
+  (there is no point before the clause to read the inputs at); inside `OPTIONAL CALL {}` (a row that
+  projects nothing would have to survive); inside `CALL {} IN TRANSACTIONS` (it commits as it goes, and a
+  projection is never committed); inside `CALL (x) {}` (write it `CALL { WITH x … }`); and after a write
+  anywhere earlier in the statement (put the call before the first write).
+
+**Declaring local types.** A type `ai.fromText` may create is a realm type marked `projected: true`; its
+relationships are declared on it with `relationships:`:
+
+```yaml
+- name: Attendee
+  projected: true
+  description: Someone from the customer's side, in a meeting or an email.
+  properties:
+    name: "Full name, as written."
+  relationships:
+    RAISED:    { to: Issue, many: true, description: "Problems this person raised." }
+    WORKS_FOR: { to: CustomerAccount, many: false, description: "The customer account they work for." }
+
+- name: Issue
+  projected: true
+  description: A problem the customer raised, not a request or a wish.
+  properties:
+    summary:  "One line: what is wrong, in the customer's words."
+    severity: { type: string, enum: [high, medium, low], description: "How much it blocks them." }
+
+- name: Competitor
+  projected: true
+  description: A rival product the customer names.
+  properties:
+    name: "Its name, as written."
+  relationships:
+    NAMES: { from: SupportMessage, many: true, description: "A competitor named in the message." }
+```
+
+Rules, each refused at load as an error against the declaring realm:
+
+- A projected type has a description, and every property has one — the model reads them.
+- It has no producer, join, population, spine, parent, method or lifecycle, and no join targets it; nothing
+  persists it. It may not reuse a world type's name, and may not declare `sourceSpan` or `extractedBy`.
+- A relationship names exactly one of `to:` (this type is the source) or `from:` (this type is the target —
+  how an edge from a world type is declared without editing that type), a description, and a type this world
+  declares. `many` defaults to `true`.
+- `relationships:` on a type that is not projected is refused.
+- `enum: [...]` on a property is the `values:` shorthand for a closed set.
+
+An appliance that predates `projected:` reads a type file strictly and refuses the whole file, rather than
+loading the type as an empty world type; keep projected types in a file of their own if the realm must also
+load on older appliances.
+
+### 7.9 Writing projected types inside a query — one query is a pipeline
+
+A query may `CREATE` and `MERGE` projected types (§7.8), and `SET` what it made. The writes land in
+the run's scratch: the rest of the same query sees them, as Cypher's read-your-writes promises, no other
+run ever does, and nothing reaches the store. "Read-only" on the query surfaces means read-only **with
+respect to the store**.
+
+That is what makes one ordinary query a pipeline: project text, build on it, read what was built.
+
+```cypher
+CALL ai.fromText($notes, '(t:Attendee)-[:RAISED]->(i:Issue), (t)-[:WORKS_FOR]->(a:CustomerAccount)')
+  YIELD t, i, a
+WITH DISTINCT i, a
+MATCH (a)-[:HAS_CASE]->(c:SupportCase) WHERE c.status IN ['open', 'pending']
+WITH i, relevant(c, 'the same problem as: ' + i.summary) AS tracked
+UNWIND tracked AS tc
+CREATE (i)-[:TRACKED_BY]->(tc)
+WITH count(*) AS linked
+MATCH (t2:Attendee)-[:RAISED]->(untracked:Issue)
+WHERE NOT EXISTS { (untracked)-[:TRACKED_BY]->() }
+RETURN untracked.summary, untracked.severity, t2.name, t2.role
+```
+
+`Attendee` and `Issue` are projected types with no stored instances, so `MATCH (untracked:Issue)` reads
+exactly what this run made — the label is the isolation. Steps can also be written as unit subqueries,
+each run in order:
+
+```cypher
+CALL { CALL ai.fromText($email, '(t:Attendee)-[:RAISED]->(i:Issue)') YIELD t RETURN count(*) AS projected }
+CALL { MATCH (i:Issue) … CREATE (i)-[:TRACKED_BY]->(c) RETURN count(*) AS linked }
+MATCH (u:Issue) WHERE NOT EXISTS { (u)-[:TRACKED_BY]->() } RETURN u.summary
+```
+
+**What may be written** — anything else is refused before the query runs, with the rule it broke:
+
+| Write | Allowed when |
+|---|---|
+| `CREATE` / `MERGE` a node | every label on it is a projected type |
+| `CREATE` / `MERGE` a relationship | it is declared under `relationships:` on a projected type (§7.8), so one end is always projected — never an edge between two stored nodes |
+| `SET` / `REMOVE` | on elements this run created |
+| `DELETE` | of elements this run created; never of stored ones |
+
+- **World types are never created.** `CREATE (:CustomerAccount …)` is refused in a query exactly as
+  `ai.fromText` resolves a world type instead of inventing one.
+- **Declared properties only.** A property set on a projected node must be declared on its type; a
+  required property left `null` raises a `PROJECTION_INCOMPLETE` warning naming the row, rather than
+  being admitted silently.
+- **`MERGE` on a projected type is keyed construction** — one node per distinct key, how a query collapses
+  duplicates.
+- **Relationship ends are checked by type, and a variable is typed by where it came from.** `tc` above
+  has no label written, but it was unwound from `relevant(c, …)` over `SupportCase` nodes, so it is a
+  `SupportCase` and `TRACKED_BY` is admitted. A variable fed from a parameter or a literal list has no
+  such origin and is refused; write the label (`MATCH (x:SupportCase)`) if you need one.
+- **Use fresh names across stages.** A name dropped by a `WITH` and bound again by a later `MATCH`, or
+  reused across `CALL {}` bodies, is refused (§4) — hence `untracked` and `t2` above.
+- **A model call may not feed the rest of a statement from what that statement wrote.** A judgement or
+  reduction written after a `CREATE`, whose result a later clause reads, is refused rather than run early.
+  One whose result is only returned at the end is computed after the statement and may read what it
+  made. Elements projected by `ai.fromText` are not "written" in this sense — the query above judges
+  stored cases and links projected issues to them.
+
+A caller need not write the steps at all: given only the final `MATCH … RETURN`, a planner chooses them from
+the world's views and rules and compiles them into exactly this shape of unit subqueries (§16).
+
 ---
 
 ## 8. Views — a saved query used as a label
@@ -3740,7 +4017,10 @@ system; a *view* is a view over the graph (real + virtual) itself. Two kinds, by
 
 - **Regular (inlined).** Expanded at query time — the view's `MATCH … RETURN <var>` body is spliced in and its
   return variable renamed to the outer alias, so `MATCH (c:my_key_accounts)-[:R]->(x)` becomes
-  `MATCH <view body> MATCH (c)-[:R]->(x)`. Always fresh; no storage. (Flat inlining, **not** `CALL {}`.)
+  `MATCH <view body> MATCH (c)-[:R]->(x)`. Always fresh; no storage. Inlining is flat, not a `CALL {}`
+  subquery: the view's members bind the outer alias directly, so the rest of the query traverses from them as
+  from any matched node. (Unit `CALL {}` subqueries are allowed in queries — §4, §16 — a view reference is
+  simply not expanded into one.)
 - **Materialized (cached).** The result nodes are committed and a reference reads the cache instead of
   re-running the body, until a TTL / refresh policy invalidates it. This is the durable sibling of the
   ephemeral `keep(queryId)` option: the expensive fan-out (map) + agentic reduce runs on a **refresh
@@ -3794,6 +4074,10 @@ answered quietly wrong:
   would be ignored and the second truncated, so the answer would not be the one asked for. A view
   parameter holds one value: a view that needs a list should read it inside its own query, not as
   `IN $p`.
+
+**A view may declare its answer instead of its body.** `goal:` in place of `cypher:` names the final read
+query only; the world plans the steps that reach it, compiles and pins them, and runs the pinned statement
+(§16.10).
 
 ### 8.2 Output typing — identity preservation is the rule
 
@@ -4282,8 +4566,8 @@ The planner budgets producer calls against it and, when a query can't fit, emits
 **advice** (push a predicate, add a `LIMIT`, narrow the anchor) rather than silently over-calling.
 
 **Bounds (per statement):** the caps above are declared per join and bound what a query asks of a
-SOURCE. Two further bounds belong to the statement itself and bound what it may spend in the engine.
-Neither is declared in a realm, neither can be raised from a query, and either one stopping a
+SOURCE. Three further bounds belong to the statement itself and bound what it may spend in the engine.
+None is declared in a realm, none can be raised from a query, and any one stopping a
 statement is reported as a refusal of kind `BUDGET_EXCEEDED` carrying the limit it exceeded and the
 unit that limit is in:
 
@@ -4291,6 +4575,14 @@ unit that limit is in:
   exceeds it returns nothing and is told which of the two causes is its own: a pattern with nothing
   to anchor it, or too many node sets matched at once, where the candidate space is the product of
   them even though each set is labelled.
+- a **records** bound, counted in fetched records: how many records the statement's fetches may
+  bring into the graph it runs on, across all its stages and `UNION` branches (200,000 unless the
+  host sets another). A fetched record is in the graph before any aggregation or `LIMIT` reads it, so
+  `count(*)` over every call site of a large project brings every call site in; a statement past the
+  bound returns nothing and is told to fetch fewer. A filter on the fetched node's own properties or
+  on parameters — in its property map or in the `WHERE` that reaches it (`WHERE c.method IN
+  $methods`, `WHERE d.path STARTS WITH $dir`) — is applied before records are brought in, and is the
+  lever; so is reading the source in parts, one statement per part. An aggregation or a `LIMIT` is not.
 - a **time** bound, counted in milliseconds, off unless the host sets one. It is a **backstop**, not
   a second way to say the same thing: work is counted in match steps, and a statement whose cost
   lies somewhere those are not charged — a filter evaluated per candidate over a wide match is the
@@ -4299,10 +4591,9 @@ unit that limit is in:
   bound is told what is usually true of one that does, which is that it is unbounded in a shape the
   other bound cannot see.
 
-A host that sets no time bound has only the work bound, which is the behaviour every deployment had
-before the time bound existed. Where a host does set one, it is a property of the deployment and not
-of the query: the same statement may be answered on one deployment and declined on another, and a
-realm cannot tell which from its own files. **So a realm must not rely on either bound as control
+A host that sets no time bound has only the work and records bounds. Where a host does set one, it is a property of the deployment and not
+of the query: the same statement may be answered on one appliance and declined on another, and a
+realm cannot tell which from its own files. **So a realm must not rely on any of these bounds as control
 flow.** They exist to make a runaway statement fail loudly and diagnosably instead of spinning; a
 query whose correctness depends on being stopped is a query to rewrite, by narrowing the match
 before filtering it — anchoring it, or staging the joins with `WITH` and aggregating as you go.
@@ -4329,7 +4620,7 @@ showed can never be spent unasked. A warm anchor costs nothing. A query that mea
 (`{ai: {materialize: true}}`) or runs as a background job.
 
 **A bound that stops the run is `BUDGET_EXCEEDED`.** A statement that exceeds the graph engine's
-work or row budget, or a rule set that exceeds `maxRounds` or `maxPairs` (§13.7), is refused with
+work, row or records budget, or a rule set that exceeds `maxRounds` or `maxPairs` (§13.7), is refused with
 `BUDGET_EXCEEDED`, naming the limit and its unit, and returns nothing: never a partial set presented
 as complete. A statement budget is fixed and cannot be raised from a query. The refusal names the
 levers: aggregate earlier, add a `LIMIT`, narrow the `MATCH`, filter before sorting.
@@ -4843,11 +5134,11 @@ schema-level engineering could not touch.
 
 ## 11. Determinism and guarantees
 
-- **Read-only.** A user query never writes the graph. Nothing it materializes outlives the run
-  (§2); the sole persisted side effect is a write-through identity **bridge** (a
+- **Read-only.** A user query never writes the graph. Nothing it materializes outlives the run,
+  projected nodes and relationships it creates included (§2, §7.9); the sole persisted side effect is a write-through identity **bridge** (a
   cache of *who* an external identity is, not *what* data they hold). The single, explicitly
   opted-in exception is the dedicated annotation-write surface (§12) — ordinary queries remain
-  read-only and continue to reject mutating clauses.
+  read-only and continue to reject mutating clauses on stored or fetched data.
 - **Scoped, fail-closed.** Every keyed probe goes through the world/context scope rewriter; vector
   searches are filtered by world, context, and access-policy revision at the source. A query can
   never read another context without an explicit authorized bridge, and never another PRINCIPAL's
@@ -5417,3 +5708,337 @@ Two limits stay, and they are the same in both spellings: the subquery's pattern
 node bound OUTSIDE it, and a position no relationship reaches
 (`EXISTS { MATCH (s)-[:R]->(:T) MATCH (y) }`) must name a label. Each of those is a scan of the
 whole graph rather than a constraint, and holding one position states no scope over a scan.
+
+---
+
+## 16. Planning: ask for the result, not the steps
+
+A query says how to reach an answer. A **goal** says only what the answer is — the final read query,
+written over the facts it needs as if they already existed — and leaves the route to a planner. The route
+is chosen deterministically, by embabel-agent's GOAP condition planner (A\*), from the views and DERIVE
+rules the world already has; models do judgement inside the steps, within typed bounds, and never choose
+the route. A planned query is correct by construction, and reproducible: proven well-formed before it
+runs, and the statement that runs is the one that was reviewed, every time it runs.
+
+That claim has an edge, and the section is precise about where it lies:
+
+| Holds before anything runs | Because |
+|---|---|
+| the plan is well-formed: every fact it reads is made by an earlier step or held by the world | introspection checks each step's needs against what precedes it (§16.2) |
+| it refuses before it spends | planning runs no step, reads no source and calls no model (§16.8) |
+| the same goal over the same world gets the same plan | the planner is deterministic, and two plans of equal cost are reported as a tie, never broken by chance (§16.5) |
+| what runs is what was reviewed | a saved plan is pinned with a fingerprint of every step it chose, and refused as stale when one moves — never silently redone (§16.10) |
+
+What is **not** proven is that a model's judgement inside a step is right. It is bounded (it fills declared
+types, §7.8, and keeps only elements it was shown, §7.7), typed, reported (`PROJECTION_*` and the other
+warnings), cached (§7.6) and priced (§9) — but it is a judgement. "Deterministic planning; bounded, typed
+model calls" is the accurate description. "Fully deterministic" is not.
+
+### 16.1 The model
+
+- **A step is a saved view or a DERIVE rule the world already has** — its own, or one a realm ships. No
+  one writes a step signature: what a step needs and makes is read off its Cypher (§16.2).
+- **A goal is the only thing written.** It is one read-only `MATCH … RETURN` over world labels and the
+  facts steps make — projected labels and relationships (§7.8), derived labels (§13), views' output
+  labels.
+- **The plan compiles to one standard query.** Each chosen view becomes a unit `CALL {}` subquery, in plan
+  order, and the goal comes last:
+
+```cypher
+CALL {
+  CALL ai.fromText($email, '(t:Attendee)-[:RAISED]->(i:Issue), (t)-[:WORKS_FOR]->(a:CustomerAccount)')
+    YIELD t
+  RETURN count(t) AS projected
+}
+CALL {
+  MATCH (li:Issue)<-[:RAISED]-(raiser:Attendee)-[:WORKS_FOR]->(acct:CustomerAccount)-[:HAS_CASE]->(c:SupportCase)
+  WHERE c.status IN ['open', 'pending']
+  WITH li, relevant(c, 'the same problem as: ' + li.summary) AS tracked
+  UNWIND tracked AS tc
+  CREATE (li)-[:TRACKED_BY]->(tc)
+  RETURN count(*) AS linked
+}
+MATCH (raisedBy:Attendee)-[:RAISED]->(untracked:Issue)
+WHERE NOT EXISTS { (untracked)-[:TRACKED_BY]->() }
+RETURN untracked.summary AS issue, untracked.severity AS severity, raisedBy.name AS person
+```
+
+**Nothing is new in Cypher.** The compiled statement is an ordinary Virtual Cypher query, held to every
+rule in this document: `ai.fromText` inside a unit subquery (§7.8, "where it may be called"), a
+reduction over elements inside one (§7.7), writes of projected types into the run's scratch (§7.9). Steps
+communicate through that scratch, never through variables: a later step reads what an earlier one made by
+matching its label. One statement is one run, so what the steps project lives exactly as long as the plan.
+
+A DERIVE rule is a step the statement does not call: its conclusion is evaluated whenever a query reads it
+(§13), so the plan lists it — what it makes, what it needs — and the compiled statement simply reads.
+
+### 16.2 Introspection — what a step needs and makes
+
+| In a view or rule body | Read as |
+|---|---|
+| `CALL ai.fromText(…, '<pattern>')` | **makes** the pattern's projected nodes and relationships, and its resolved world-type edges |
+| `CREATE` / `MERGE` of a projected label, or of a relationship declared on a projected type | **makes** it |
+| `MATCH`, `OPTIONAL MATCH`, `EXISTS {}` or **`NOT EXISTS {}`** over a projected label or relationship | **needs** it |
+| `MATCH` over a world label | nothing — the world provides it |
+| a `derives:` label (§13), a view's `outputLabel` | a **named** output |
+| `$x` read into `ai.fromText` | an input: **text** |
+| `$x` keyed on a spine `L` (`{accountKey: $x}`) or read into `canonicalize(…, 'L')` (§5.4.4) | an input: an **identity** of `L` |
+
+Facts are named `node:Issue` and `edge:Attendee-RAISED->Issue`; a path pattern is the set of its edges.
+The goal is read by the same rules: every fact it reads is a fact the plan must make.
+
+- **`NOT EXISTS` is a need.** The goal above reads `TRACKED_BY` only to test its absence. Counted only
+  positively, a plan that skipped the step making `TRACKED_BY` would type-check, and every issue would come
+  back "untracked" because the edge could never exist.
+- **World labels are free.** The world is always there; a step is never chosen to provide one.
+- **Types say *what*, not *which*.** Two views that both return `CustomerAccount` rows — "at risk", "owes
+  money" — are identical by type, and a planner choosing between them by type would pick wrongly. So
+  planning is over **named facts** only. A view that returns only world labels — including one whose
+  `outputLabel` is a type the world already declares — makes no fact: it is a question, not a step.
+- **What cannot be read is left out, never guessed.** A body the pass cannot type, a view with a parameter
+  that is neither text nor identity and has neither a default nor an input of its name, and a rule set with a param it does not default
+  (which never fires on its own, §13.1) are each left out of planning with a diagnostic naming why.
+- **A goal view is never a step** (§16.10).
+
+### 16.3 What makes a view plannable
+
+The realm author's checklist. A view that meets it becomes a step in every plan that needs what it makes,
+in every world that installs it, with no wiring.
+
+1. **It makes a named fact.** It projects text into projected types (`ai.fromText`), writes a projected
+   type or a declared projected relationship (§7.9), or returns an `outputLabel` that no world type
+   already declares. A DERIVE rule set makes its `derives:` label or relationship.
+2. **Every fact a goal may read has a description.** Projected types and their relationships already must
+   (§7.8); a rule set's `description` describes its `derives:`; a view's `description` describes its
+   `outputLabel`. English mode (§16.9) chooses between facts by these descriptions, and a fact without one
+   is never offered to it.
+3. **Its parameters are typed by use.** Text it reads into `ai.fromText` is a text input; a key it matches
+   on a spine, or canonicalizes onto one, is an identity of that spine. Any other parameter needs a default:
+   without one, the view is left out of every plan whose caller does not supply an input of that name.
+4. **Its names are distinct from every other step's.** The engine refuses a variable reused across `CALL {}`
+   bodies and the statement around them (§4), so a plan cannot combine two steps that share a variable or a
+   `RETURN` column name. The compiler refuses the clash and names it; it never renames, because a rename it
+   chose would be invisible in the pinned query. Choose names that say what they hold — `raisedBy`,
+   `untracked`, `tc` — rather than `n` and `x`.
+5. **It reads what it needs by label.** A step that consumes another's output matches the fact (`MATCH
+   (li:Issue)…`); it cannot receive a variable, because no variable crosses a step boundary.
+
+A realm validates the checklist where it can: a goal view it ships is planned at validation (§16.10), so a
+step that does not make what the goal needs is an error at the goal's line, not a surprise in a world.
+
+### 16.4 Inputs
+
+An input is typed: `{name: {type: 'text' | '<SpineLabel>', value}}` — an email or meeting notes as `text`,
+one entity of a spine (`{type: 'CustomerAccount', value: 'acme.com'}`) as an identity. Binding, against the
+chosen plan's steps and the goal:
+
+- an input named after a parameter binds to it;
+- otherwise a `text` input binds to the one parameter the plan reads into `ai.fromText`, and an identity of
+  `L` to the one parameter a step keys or canonicalizes on spine `L`;
+- two candidate parameters for one input is refused, naming both — and so are two inputs for one
+  parameter, and a text or identity parameter no input binds. Name the input after the parameter to choose;
+- any other parameter takes its declared default.
+
+The compiled plan is one statement, so `$email` read by two steps is one parameter: binding counts names.
+
+### 16.5 Outcomes — none is a guess
+
+| Outcome | Means | Carries |
+|---|---|---|
+| `planned` | the goal is reachable, and one plan is cheapest | `reads` (the facts the goal reads), `steps` in run order — each with `from`, `kind` (`view` or `rule`), `realm`, the facts it `adds` and `requires`, what it `reaches`, whether the statement `runs` it, and its `cost` — the `compiled` statement, the input bindings, and the quote |
+| `unreachable` | some fact the goal reads is made by no step on offer | `missing` — the fact, by name — and the planner's `detail` |
+| `tie` | two plans reach the goal at equal cost | both rival `plans` and the `cost` they share. Make the goal more specific; the planner never picks one |
+| `refused` | the request cannot be planned as made — an untypable goal, an input that binds ambiguously, a plan whose steps do not compile together | `reasons`, each saying what to change |
+| `needsInput` | English mode: the goal is sound, and needs an input nobody supplied | the `goal`, and `needsInput: {type, why}` |
+| `declined` | English mode: no goal this world can reach answers the question | the `reason`, the `missing` facts when that is why, and the last `goal` written |
+
+Any outcome may carry `diagnostics`: the steps left out of planning, and why. An `unreachable` answer is
+also a precise brief: the missing fact names the step — or the realm — the world lacks.
+
+### 16.6 Costing — stored before API before AI
+
+The planner chooses the plan whose steps' costs sum least, so a step's cost is what separates two plans that
+reach the same goal. It is judged from **what the step reaches**, read off its body like everything else:
+
+- a **stored** read — labels whose producers read what the deployment holds, or no producer at all;
+- an **API** — a label or relationship whose producer calls an outside source (§5.3);
+- a **model** — `ai.fromText`, an `ai.*` function or `{ai: …}` directive (§7), a model reduction such as
+  `relevant` (§7.7), or a label whose producer is model-backed (`generative`, `agentic-rag`, `extract`,
+  `aggregate`).
+
+The ordering is the contract: stored < API < model, and one model step outweighs several API steps. A stored
+read is milliseconds and free; an API is a round trip, a rate limit and a source that can be down, but answers
+the same way twice; a model call is seconds, billed per token, and a judgement that can differ between runs.
+So a model step is in a plan only when the goal needs what only a model makes. Presence counts, not number:
+how many calls a run makes is the quote's business (§9), not the planner's.
+
+- **Pluggable.** The cost function is a deployment's to replace. Costs are in 0..1, and a value outside that
+  range is refused, not clamped — a clamped cost would tie plans the function meant to separate. The
+  reference host's default prices a stored read at 0.05, adds 0.2 for an API and 0.7 for a model
+  (informative; the ordering is what is promised).
+- **`reaches` is stated beside `cost`.** A step's `reaches` — `api`, `model`, both, or empty — is read off the
+  step; its `cost` is the installed function's number. A surface labelling a step "AI" reads `reaches`, never
+  the number.
+- **Equal cost is a tie**, reported and never broken (§16.5).
+- **The quote is not the cost.** Each `planned` answer carries the engine's quote for the compiled statement
+  (`modelCalls`, `apiCalls`, `wouldRefuse`), made by reading the graph only. The quote does not price
+  `ai.fromText`: each step it leaves out is listed under `unpriced`, and those calls are priced when the plan
+  runs, and refused there over the limit (§7.8, "Cached and priced").
+
+### 16.7 Scope
+
+**A plan never reaches through a view the caller could not invoke directly.** The steps on offer are the
+views the asking principal may run; a view hidden from them is not named in a diagnostic either. A DERIVE
+rule carries no audience of its own: it is evaluated for any query that reads its conclusion, planned or not
+(§13). A plan runs as the caller, through the path every query takes, so §15's scope and every refusal in
+this document apply to the compiled statement unchanged.
+
+### 16.8 Explain, then run — the `plan` tool and its endpoints
+
+The MCP tool `plan` is offered wherever `kg_query` is:
+
+```
+plan({goal | question, inputs?, run?: false})
+→ {"outcome": "planned", "reads", "steps": [{from, kind, realm, adds, requires, reaches, runs, cost}],
+   "compiled", "inputs": [{input, parameter}], "quote": {modelCalls, apiCalls, wouldRefuse, plan, unpriced},
+   "diagnostics"?}
+   + {"rows", "warnings", "error"?}                         when run is true
+→ {"outcome": "unreachable", "missing", "detail"}
+→ {"outcome": "tie", "plans", "cost"}
+→ {"outcome": "refused", "reasons"}
+   with a question: + {"question", "goal", "worldOnly"}, or "needsInput" / "declined" (§16.9)
+```
+
+Exactly one of `goal` and `question`. `inputs` is an object (or its JSON text) of typed inputs (§16.4).
+
+**Explain first.** With `run: false`, the default, `plan` introspects, plans, compiles and quotes: it runs
+no step, reads no source and calls no model. A caller reads the steps and the quote, then calls again with
+`run: true`, which plans again and executes what that compiled; rows and warnings come back unchanged. A
+goal that reads only stored data needs no plan — it plans to no steps, and `kg_query` answers it directly.
+
+The same answer, field for field, over REST:
+
+```
+POST /api/v1/admin/kg/plan        { "goal" | "question", "inputs"? }   → the tool's answer; never executes
+POST /api/v1/admin/kg/plan/run    { "goal" | "question", "inputs"? }   → the answer, + rows and warnings
+```
+
+Explaining and running are two **routes**, not one route with a flag: a studio that plans as its author
+types calls a route that cannot execute whatever the body says, and a client allow-list can grant it without
+granting the run. The caller is the authenticated principal. Neither or both of `goal` and `question` is a
+400; every planner outcome — `unreachable`, `tie` and `refused` included — is a 200, because each is the
+answer.
+
+### 16.9 English mode — the question writes the goal
+
+```
+question → goal (a final MATCH … RETURN) → plan → compiled query → rows
+           one model call                  no model
+```
+
+`plan({question})` (or a `question` body) hands the question to the same text-to-Cypher generator
+`kg_ask` uses, told the world's schema **and** the facts its steps can make — each with its
+description and what it needs (`text`, an identity) — the facts declared that nothing makes, and the names
+the steps already bind, which the goal must not reuse (§16.3·4).
+
+- **Prefer the world.** When stored or live data answers the question, the goal reads only world labels, and
+  the answer says `worldOnly: true`: no steps, no projection. A goal reads a fact only when the question needs
+  what only a step makes.
+- **Checked without a model.** Each written goal must be one read-only query, typed, with no parameters, over
+  declared labels only — then it is planned exactly as a `goal` would be, with the caller's inputs.
+- **A missing input is a question back.** A goal reachable only from text no one supplied answers
+  `needsInput` (`{type: 'text', why}`), carrying the goal, so supplying the input plans that goal without
+  writing it again.
+- **A goal that cannot be reached is rewritten, then declined.** A fact nothing makes, or a goal that does not
+  compile beside its steps, is sent back to the generator with every reason so far — up to three attempts —
+  and then the answer is `declined`, naming what nothing makes. It is never a guessed answer.
+- **Both layers are shown.** The answer carries the `question`, the `goal` written from it, and the plan made
+  of that goal. Writing the goal is the one model call `run: false` makes. A question with `run: true` writes
+  the goal again; to run exactly what was shown, pass the returned `goal` as `goal`.
+
+A question is not yet a field of a saved view; a view that should keep its answer pins the goal (§16.10).
+
+### 16.10 Goal views — a saved answer whose steps are planned
+
+A view may declare `goal:` in place of `cypher:`. The world plans it, compiles it and pins the result; the
+view then runs that statement like any other view, so everything that runs views — by name, over MCP, in
+lenses, apps and watches — gets it unchanged.
+
+```yaml
+# views/untracked-issues.yml — what a realm ships: the goal, and nothing the server writes
+- name: UntrackedFromEmail
+  description: Issues a customer's email raises that no open support case already tracks.
+  params:
+    email: { type: string, description: "The customer's email, as text." }
+  goal: |
+    MATCH (raisedBy:Attendee)-[:RAISED]->(untracked:Issue)
+    WHERE NOT EXISTS { (untracked)-[:TRACKED_BY]->() }
+    RETURN untracked.summary AS issue, untracked.severity AS severity, raisedBy.name AS person
+```
+
+| Field | Written by | Meaning |
+|---|---|---|
+| `goal` | the author | The final read query, over facts as if they existed. Read by validation's vocabulary, property and query-shape checks as a view's `cypher` is. |
+| `params` | the author | The plan's inputs, typed by use (below). |
+| `compiled` | **the server**, never the author | The statement the goal compiled to — what an invocation runs. |
+| `plan` | **the server**, never the author | What `compiled` was planned from: a fingerprint of the goal text, and each chosen step's name, kind and signature fingerprint. |
+
+**Params are typed by use.** A param a chosen step reads into `ai.fromText` is text; one a step keys or
+canonicalizes on spine `L` is an identity of `L`; one only filtered on is a value bound at invocation. A
+param binds the parameter of **its own name** — the compiled statement keeps the steps' parameter names, so
+binding `email` to a step's `$notes` would be invisible in the pin. A param nothing reads, or one read two
+ways, is refused, naming who reads what. A chosen step's parameter the view does not declare is compiled in as
+that step's default.
+
+**Compile, pin, run.** Saving a goal view plans it as the saving principal, over the steps that principal may
+run, and stores `compiled` and `plan` beside it; the compiled statement is then checked as any view body is.
+Unreachable, tie and refused are save errors — the save names the missing fact, both rival plans, or the
+reasons, and nothing is written. An invocation runs `compiled` and **never plans**.
+
+**Replanning is explicit:** a re-save, the MCP tool `view_replan` (`{name}` → `{ok, compiled}`, or `{ok:
+false, error, details}` naming the missing fact, the rivals or the refusal), or
+`POST /api/v1/admin/kg/views/{name}/replan`. Nothing replans a pinned goal view by itself.
+
+**Stale is refused, never silently redone.** A pin records each chosen step's signature — what it needs,
+makes, names and takes; not its body or cost, which the compiled statement already holds. Every invocation
+checks the pin against the invoking principal's steps:
+
+| Found at invocation | Answer |
+|---|---|
+| the goal was never compiled in this world | refused: not compiled — replan it |
+| the goal text changed since the pin | refused as stale |
+| a pinned step was removed | refused as stale, naming the step |
+| a pinned step's signature changed | refused as stale, naming the step |
+| a pinned step the invoking principal cannot run | refused as stale, without naming it (§16.7) |
+
+Each refusal is the caller's to fix, answered as any invalid view argument is. The views listing carries the
+`goal` and a `goalStatus` — `pinned`, `not compiled`, or `stale: <what moved>` — which is the warning before
+anyone invokes it.
+
+**A goal view is an answer, not a step.** It is never offered to a plan: its compiled statement makes what its
+own steps make, and offering it would tie every plan with itself.
+
+**A realm ships `goal:` alone; pins are per world.** A goal is planned over the steps of the world it runs in —
+every installed realm's views and rules — so the same realm can compile differently in two worlds. A pin
+written back into the realm would ship one world's answer to every other, so each world keeps its own pins,
+written by the server. A world compiles a goal view it has never compiled when it is rebuilt — realm install,
+refresh or removal, world switch, all explicit acts — and never replans one it has already pinned. A view a
+user saves keeps its pin with it, written by the server; clients never edit it.
+
+**Realm validation** plans each shipped goal view over the realm's own views and DERIVE rules, and those of the
+realms validated beside it, read against the projected types, spines and producers they declare:
+
+| Found | Severity |
+|---|---|
+| unreachable, or refused | **ERROR** at the view's `goal` |
+| a shipped `compiled:` or `plan:` | **ERROR** — those fields are the server's |
+| a tie | **WARNING** — validation cannot price the deployment's model reductions, so two plans the installing world tells apart may tie here; the world refuses a real tie when it compiles the view |
+
+Audience is not applied at validation: which steps a principal may plan through is decided per principal,
+when the world compiles.
+
+### 16.11 What is not here yet
+
+A plan today is one statement and answers a question: it reads, projects and judges, and writes only the run's
+scratch. Plans that pause — for a person's approval, or a step that takes hours — and plans that act through
+gated writes are forthcoming, and will be specified when they are built.

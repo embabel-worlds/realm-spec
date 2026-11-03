@@ -22,6 +22,12 @@ application declare its own types, lookups, verbs and identity bridges, so a wor
 its URL alone, with no realm authored by hand. [PUBLISHERS.md](PUBLISHERS.md) says how an Embabel
 world maps a publisher onto Virtual Cypher and code mode.
 
+**Asking for a result without writing the steps?** [Planning](VIRTUAL_CYPHER.md#16-planning-ask-for-the-result-not-the-steps)
+takes a goal — the final query, or a question in English — and a deterministic planner chooses the
+realm's views and DERIVE rules that reach it, compiled to one ordinary query that is shown before it
+runs and pinned once saved. A view becomes a step by making a named, described fact; a view may declare
+its `goal:` instead of its `cypher:`.
+
 ---
 
 ## Repository convention
@@ -224,6 +230,7 @@ tags:
 | `maturity` | No | The author's own readiness claim: `experimental`, `beta`, `stable` or `deprecated`. Absent means the realm makes no claim — which is **not** a claim of being finished. See [Maturity](#maturity). |
 | `host` | No | Execution host for the Realm's Functions: `docker` (the Node bundle host, which needs no container) or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
 | `capabilities` | No | Captured realms only. What the realm asks the owner to grant at admission beyond its handlers and resources. The one value is `model`, which asks for [the model call](HOSTED_EXECUTION.md#the-model-call). The owner may grant none of them. |
+| `optionalLabels` | No | Labels this realm's views read but do not need: each owned by a companion realm that may be absent, and read only under `OPTIONAL MATCH`. See [Optional labels](#optional-labels--reading-a-companion-realm-that-may-be-absent). |
 
 ### Icons
 
@@ -1271,7 +1278,8 @@ Two consequences follow from the fact that a reference is an INLINE of the body,
 | Field | Required | Description |
 |---|---|---|
 | `name` | yes | What it is run and matched by. A node view may NOT be named like a label the world already holds — matching that label anywhere, including inside other views, would silently come to mean "the nodes this view selects". |
-| `cypher` | yes | The body. Standard Cypher, parsed by the real parser; there is no `DEFINE VIEW` statement and no subquery form. |
+| `cypher` | yes, unless `goal` | The body. Standard Cypher, parsed by the real parser; there is no `DEFINE VIEW` statement and no subquery form. |
+| `goal` | no | In place of `cypher`: the final read query only. The world plans the views and rules that reach it, and pins the compiled statement per world. A realm ships `goal:` alone — a shipped `compiled:` or `plan:` is a validation error. See [Virtual Cypher §16.10](VIRTUAL_CYPHER.md#1610-goal-views--a-saved-answer-whose-steps-are-planned). |
 | `description` | no | What it answers, for the Views list and for a model choosing between views. |
 | `params` | no | Declared bind values, each with a `type` (`string`, `int`, `number`, `float`, `double`, `boolean`, `date`), a `description`, and ideally a `default` so the view stays runnable bare. A param with no default must be supplied, unless it declares `required: false`: then an invocation may omit it and it is bound to `null` (so `WHERE $p IS NULL OR x.k = $p` skips the filter). An explicit `null` argument is accepted for any param — it takes the default when one is declared, and is bound as `null` otherwise. `default: null` alone does not make a param optional; declare `required: false`. One value each: a view needing a list reads it inside its own body rather than taking `IN $p`. |
 | `outputLabel` | inferred | The type a node view's rows are. **Inferred** when the body returns a single bare node variable, which is why most views never declare it. REQUIRED on a `materialized` view, where there is nothing to infer from until the body runs. |
@@ -1282,6 +1290,51 @@ Two consequences follow from the fact that a reference is an INLINE of the body,
 like an existing label; an argument the view never reads; a fractional number for an `int` parameter;
 and a label in the body that is a near miss for one the realm knows (`GitHubIsue` beside
 `GitHubIssue`), reported at the view's file and line.
+
+**A label nothing installed declares is reported.** A view reading a label that no installed realm
+declares — as a type, a parent, a derived label, a join's anchor, a `projected: true` type or another
+view's output — is reported on its realm, which reads `degraded`, and a run of it carries an
+`UNOWNED_LABEL` warning: a plain MATCH over such a label can never return a row, and an empty answer
+from it means "not installed", not "no data".
+
+### Optional labels — reading a companion realm that may be absent
+
+Some views are built to answer on their own realm alone and to read MORE when a companion realm is
+installed: realm-odoo's meeting briefing fills in each customer's ultimate owner from Diffbot when
+realm-diffbot (and the bridge realm that joins it in) is present, and leaves that column empty when
+not. The realm says so in `realm.yml`:
+
+```yaml
+# realm.yml
+optionalLabels:
+  - DiffbotOrganization   # realm-diffbot's; joined in by realm-odoo-enrichment
+```
+
+and its views read the label only under `OPTIONAL MATCH`:
+
+```cypher
+MATCH (b:OdooBook)-[:HAS_MEETING]->(m:OdooMeeting)-[:MEETING_WITH]->(c:OdooCustomer)
+OPTIONAL MATCH (c)-[:HAS_DIFFBOT_ORG]->(d:DiffbotOrganization)
+RETURN c.name AS customer, d.ultimateParentName AS ultimateOwner
+```
+
+**Guarantee — an awaited label is a note, not a defect.** While no installed realm declares it, the
+host reports the views as able to read more once a realm declaring the label is installed. That is a
+note: the realm stays `active`. A run of such a view carries `OPTIONAL_LABEL_ABSENT` in place of
+`UNOWNED_LABEL`, saying the rows are whole and the columns read through the label are absent, not
+known to be empty.
+
+**Guarantee — the declaration is checked against the Cypher.** A label is honoured as optional only
+in a view that reads it nowhere but inside `OPTIONAL MATCH` clauses (their `WHERE`, and subqueries
+written there, included). A view that also reads it in a plain `MATCH` cannot answer without it, so
+it is reported as unowned, and the report says the declaration did not apply. A body the host cannot
+parse honours nothing.
+
+**Neither half is enough alone.** An `OPTIONAL MATCH` without the declaration is still reported:
+whether an absent optional side is harmless is the author's knowledge, not the query's — `OPTIONAL
+MATCH (a)-[:TRACKED_AS]->(k:CrmAccount) … WHERE crmRecords = 0` answers "every account is missing from
+the CRM" when `CrmAccount` is merely unowned. Declare a label optional only when its absence leaves
+columns empty and changes no row.
 
 ## `lenses/`
 
@@ -1473,6 +1526,23 @@ at a cap gives you a subset that systematically excludes the present. Only the r
 needs the whole partition, and partial fetching cannot be made safe by narrowing. This mismatch is
 the single best predictor that a collection wants `strategy: mirror` rather than `live`.
 
+It is not a verdict on its own. When every question is bounded by a partition the source DOES fetch
+by (one firm's record, a date window), a live read takes that partition whole and narrows on the
+other axes locally, over a complete set. Say so by naming the partition as `filterableAtSource`
+names it:
+
+```yaml
+partition: firmId                 # the fetch key, named as filterableAtSource names it
+queriedBy: [firmId, isFormerRepresentative]
+filterableAtSource: [firmId]      # the register cannot filter the flag; it reads a firm whole
+sync: { strategy: live }
+```
+
+The platform warns about `strategy: live` only when an unfiltered axis is bounded by no partition
+the source fetches by, so each question would need the whole collection. Whether one partition fits
+a read is the producer's page budget, reported per read as truncation. Mirror when partitions
+outgrow it, or when questions must cross partitions.
+
 **`watermarkFilterable`.** A record may CARRY a last-updated timestamp without the source being able
 to FILTER on it. The first permits incremental refresh; the second forces a full re-walk with a local
 diff. Assume the wrong one and a day of changes vanishes silently. Declare it.
@@ -1607,6 +1677,8 @@ sources:
     sync:
       trigger: on-install                # on-install | scheduled | manual
       schedule: "0 0 3 * * SUN"          # six-field cron, host zone, for `scheduled`
+      # watch:                           # a cheap read that changes when the records may have; see below
+      #   cypher: MATCH (e:Edition) RETURN e.id AS edition, e.publishedAt AS at
       prune: true                        # remove documents no record produces any more
 ```
 
@@ -1635,9 +1707,54 @@ seeded, so a `cypher:` source reading it never sees an empty graph. `scheduled` 
 registered and removed with the realm. `manual` runs it only when asked. A run is always in the
 background; a second trigger while one is running is reported, not queued.
 
+**Watching for changes.** A source whose records are expensive to read but rarely change declares
+`sync.watch`: a `cypher:` read, cheap to run, whose rows change whenever the records may have — a
+project's commit, an edition's date. The host reads it about once a minute for every world that has
+the realm installed and loaded, and runs the source when the rows differ from those of its last
+COMPLETE run, so a change is picked up within a minute or two whatever the trigger. A scheduled or
+`on-install` run whose watch is unchanged ends there, reading nothing else: it is reported as
+`UNCHANGED` and leaves the last run's outcome in place. A run that is asked for (below), a changed
+declaration, and a last run that did not complete always read every record. A watch that cannot be
+read changes nothing and is tried again at the next check. The watch is only a trigger: each record's
+version token still decides what is embedded, so a watch that changes more often than the records
+costs a read, never an embedding.
+
+```yaml
+    sync:
+      trigger: on-install
+      watch:
+        cypher: |                        # one row per project: changes when a commit lands
+          MATCH (ip:IndexedProject)-[:AT]->(v:ProjectVersion)
+          RETURN ip.key AS project, v.version AS version
+      prune: true
+```
+
+`realm_status` reports, beside a watched source's last run, `checkedAt`: when a watch last found it
+current.
+
+**Asking for a run.** Any source, whatever its trigger, runs now when the user whose world installed the
+realm asks: `realm_sync_documents` (realm, and optionally one source) over MCP, or from an app through
+the app runtime's gateway, `gateway.realms.realmSyncDocuments({realm, source})`. It is the user's own
+world, read with the user's own scoping, so no developer mode is needed, and only new or changed
+documents are embedded. An app that records something a source reads — a project to index, a page to
+keep — asks for the run straight after, rather than leaving the record unread until the next schedule:
+
+```js
+await gateway.repository.createEntry({ type: 'IndexedProject', data: { key } });
+await gateway.realms.realmSyncDocuments({ realm: 'polyglot-code', source: 'code-declarations' });
+```
+
+The run's progress (`RUNNING`, with `records`, `processed`, `landed`, `ingested`) and outcome are under
+`documentSources` in `realm_status`, which an app reads as `gateway.realms.realmStatus({realm})`; an app
+declares both namespaces in its manifest (`"namespaces": ["repository", "realms"]`).
+
 **Pruning** removes documents this source holds that no record produced, and only after a COMPLETE
 run: an empty read or a failed record deletes nothing, because "the source returned nothing" and "the
-source is gone" are indistinguishable from the host's side.
+source is gone" are indistinguishable from the host's side. Nor does a read that says part of the
+source could not be read — a project whose repository could not be fetched, a source that refused its
+key or was unreachable: the run is `PARTIAL`, names what was not read, and keeps every document it
+held, so the source answering again re-embeds nothing. A watched source does not re-read every minute
+while that part stays unreadable; its watch changes when it can be read again, and the source runs.
 
 **Entities.** Like any ingested document, each one a source lands is read once more after it is
 stored, by a model that finds the people, organizations and other entities it mentions and links the
@@ -1786,6 +1903,17 @@ realm-hubspot/
 ```
 
 Use this when the upstream provider has stopped publishing OpenAPI specs (or never did), or when you want to pin a specific subset of operations and types without depending on a moving public URL. HTTP(S) and `file://` URLs work too — the relative-path mode is just the most ergonomic for vendored specs.
+
+**A realm's producers call the realm's own APIs.** A producer's `operation:` names an operation by
+its bare id, and another installed realm may ship an operation of the same id — two realms each
+vendoring Wikipedia's page summary both expose `pageSummary`. A producer declared by a realm resolves
+to the operation that realm's own `apis/` (or handlers) supply, wherever the other realm's sits, so
+each realm's fetches go out through its own entry, with its own headers and credentials. Give the
+API entry a `name` of the realm's own (`bible_wikipedia_summary`): API names are unique in a world,
+operation ids need not be. Only a producer whose realm supplies no such operation — or a
+world-authored producer, which belongs to no realm — can land on another realm's copy; the host
+warns about that once, and a conversation bound to both realms refuses that fetch, naming both
+candidates.
 
 ### Auth
 
@@ -4696,6 +4824,19 @@ when it matters; `latest` follows releases.
 or joins through `realm-java-code`'s producers, does not load alone, and is not judged alone: each
 realm given as a dependency counts as installed beside it — its types and producers, not its own
 problems. The default world's types are always known, as they are in every world.
+
+**A property a query reads that no type declares is a warning** — an error under `strict`. Every
+view, lens script, type `examples:` query, `sources.yml` query, and the Cypher or `{prop: …}` map a
+type or join description shows is read for `n.prop`, `n {.prop}` and `(n:Label {prop: …})` on a
+node of a declared type. The property counts as declared when that type or any of its ancestors or
+descendants declares it — in this realm, a dependency, or the default world — when a producer
+feeding the type names it (`compute:`, `project:`, the join's `recordKeyField`, a `brings:` child's
+`id` and `project:`), when a DERIVE head stamps it, or when it is the node's `id`, its `content`, or an
+`ai_`-prefixed value. A map in a description may pin a join's anchor by its `keyField` instead. A
+node whose label no type gives properties, whose type extends one not installed beside it, or whose
+name is rebound (`UNWIND … AS n`, `… AS n`) is not judged. Declare what the rows carry: an
+undeclared property is missing from the schema a model writes Cypher from, and is never coerced to a
+type. A deployment can switch the check off as `realm-undeclared-properties`.
 
 ### The reusable workflow
 

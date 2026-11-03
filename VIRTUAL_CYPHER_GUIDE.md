@@ -577,6 +577,151 @@ Three habits keep it honest:
   cross-section, and rows with missing operands are dropped and counted in `dropped`, so a thin
   join cannot masquerade as a strong signal.
 
+### 3.17 Text into the graph, and one query as a pipeline — `ai.fromText`
+
+```cypher
+CALL ai.fromText($notes,
+  '(t:Attendee)-[:RAISED]->(i:Issue), (t)-[:WORKS_FOR]->(a:CustomerAccount)')
+  YIELD t, i, a
+WITH DISTINCT i, a
+MATCH (a)-[:HAS_CASE]->(c:SupportCase) WHERE c.status IN ['open', 'pending']
+WITH i, relevant(c, 'the same problem as: ' + i.summary) AS tracked
+UNWIND tracked AS tc
+CREATE (i)-[:TRACKED_BY]->(tc)
+WITH count(*) AS linked
+MATCH (t2:Attendee)-[:RAISED]->(untracked:Issue)
+WHERE NOT EXISTS { (untracked)-[:TRACKED_BY]->() }
+RETURN untracked.summary, untracked.severity, t2.name, t2.role
+```
+
+**Means:** "From these meeting notes, what did the customer raise that we have no open ticket for?"
+
+Four things happen in one ordinary query:
+
+- **The notes become a graph.** `ai.fromText` reads the text into the pattern's shape. `Attendee` and
+  `Issue` are realm types marked `projected: true` — nothing fetches or stores them — and their
+  descriptions are what the model is shown, so "a problem, not a request or a wish" keeps "they want
+  annual billing" out of `Issue`. `CustomerAccount` is a world type, so it is **resolved** through its
+  spine, never created: a company the books do not know comes back as a warning, not a fake account.
+- **The model judges nodes, per group.** `relevant(c, …)` keeps the cases that are the same problem as
+  *this* issue — the criterion reads the grouping key — and what it keeps are the group's own nodes.
+- **The query writes, and nothing is stored.** `CREATE` of a projected relationship lands in the run's
+  scratch: the rest of the query sees it, no other run does, and it is gone when the run ends.
+- **The label is the isolation.** `MATCH (untracked:Issue)` reads exactly what this run projected,
+  because `Issue` has no stored instances.
+
+Habits: use fresh names across stages (`tc`, `t2`, `untracked`); write only projected types; and read
+the warnings — a declined personal address or an unresolved company is said, never silently empty.
+See [§7.8 and §7.9 of the spec](VIRTUAL_CYPHER.md).
+
+### 3.18 Asking the spine for a key — `canonicalize`
+
+```cypher
+MATCH (b:LagoBooks {scope:'all'})-[:HAS_INVOICE]->(i:LagoInvoice)
+MATCH (a:CustomerAccount {accountKey: canonicalize(i.customerUrl, 'CustomerAccount')})
+RETURN a.name, sum(i.amountDueCents) / 100.0 AS owed
+```
+
+**Means:** "What does each customer owe?", joining invoices to accounts by the customer's website.
+
+A spine's `normalize` is the single definition of "the same account". Normalising by hand —
+`split(i.customerUrl, '//')[1]` — strips the scheme and nothing else, so `https://www.Acme.com/` joins
+nothing while the same company's customer record, keyed through `hub:`, joins fine: the invoices just
+vanish. `canonicalize` applies the spine's own rules, the same ones `hub:` uses, so the two cannot
+disagree. `canonicalize(n)` reads a node's `hub:` property; `canonicalization(v, 'Spine')` says *why*
+a value is not a key (`excluded` for a freemail address, `invalid` for one with no domain). It reads
+nothing: it says what the key would be, and the `MATCH` decides whether that account exists. See
+[§5.4.4](VIRTUAL_CYPHER.md).
+
+### 3.19 Ask for the result, not the steps — a goal view, then English
+
+3.17 wrote the whole pipeline by hand. A realm that ships its stages as views lets a caller write only the
+last part. The two steps, as the realm ships them:
+
+```yaml
+# views/email-steps.yml
+- name: ProjectEmail
+  description: The people, issues and customer accounts a customer's email states.
+  params:
+    email: { type: string, description: "The email, as text." }
+  cypher: |
+    CALL ai.fromText($email,
+      '(t:Attendee)-[:RAISED]->(i:Issue), (t)-[:WORKS_FOR]->(a:CustomerAccount)')
+      YIELD t
+    RETURN count(t) AS projected
+
+- name: LinkTrackedIssues
+  description: Links each issue a customer raised to the open support cases that are the same problem.
+  cypher: |
+    MATCH (li:Issue)<-[:RAISED]-(raiser:Attendee)-[:WORKS_FOR]->(acct:CustomerAccount)-[:HAS_CASE]->(c:SupportCase)
+    WHERE c.status IN ['open', 'pending']
+    WITH li, relevant(c, 'the same problem as: ' + li.summary) AS tracked
+    UNWIND tracked AS tc
+    CREATE (li)-[:TRACKED_BY]->(tc)
+    RETURN count(*) AS linked
+```
+
+with `TRACKED_BY: { to: SupportCase, many: true, description: "An open case already about this issue." }`
+declared on the projected `Issue` (§7.8). Nobody declares what either view needs or makes; it is read off the
+Cypher. `ProjectEmail` needs text and makes `Attendee`, `Issue`, `RAISED` and `WORKS_FOR`;
+`LinkTrackedIssues` needs those and makes `TRACKED_BY`.
+
+**The answer, as a goal view:**
+
+```yaml
+# views/untracked-issues.yml
+- name: UntrackedFromEmail
+  description: Issues a customer's email raises that no open support case already tracks.
+  params:
+    email: { type: string, description: "The customer's email, as text." }
+  goal: |
+    MATCH (raisedBy:Attendee)-[:RAISED]->(untracked:Issue)
+    WHERE NOT EXISTS { (untracked)-[:TRACKED_BY]->() }
+    RETURN untracked.summary AS issue, untracked.severity AS severity, raisedBy.name AS person
+```
+
+**Means:** "From this email, what did the customer raise that we have no open ticket for?" — and nothing
+about how. The goal reads `Attendee`, `Issue`, `RAISED` and `TRACKED_BY`; the planner finds that
+`TRACKED_BY` needs `LinkTrackedIssues`, which needs what `ProjectEmail` makes from the `email` text, and
+compiles the two into unit `CALL {}` subqueries ahead of the goal — the query 3.17 wrote by hand. The world
+pins that compiled statement beside the view, and every run executes it without planning again.
+
+Four things to notice:
+
+- **`NOT EXISTS` is a need.** The goal reads `TRACKED_BY` only to test its absence, and that is enough to put
+  `LinkTrackedIssues` in the plan. Without it every issue would be "untracked", because nothing made the edge.
+- **The cheapest route wins, and a tie is said.** Each step is costed by what it reaches — a stored read,
+  an API, a model — and the planner takes the route whose costs sum least; two equally cheap routes are
+  reported as a tie, never picked between.
+- **The names are distinct across the plan** — `t`, `li`, `raiser`, `acct`, `tc`, `raisedBy`, `untracked` —
+  because the compiled statement is one query, and the compiler refuses a clash rather than rename it.
+- **The realm ships the goal alone.** `compiled:` and `plan:` are written by each world that installs the
+  realm, over the steps that world has. Shipping them is a validation error. If a step changes later, the view
+  is refused as stale, naming the step, until someone replans it.
+
+**The same answer, asked in English** — over MCP, before anything runs:
+
+```
+plan({question: "what did this customer raise that has no ticket?",
+      inputs: {email: {type: "text", value: "Hi — since the upgrade, exports time out…"}}})
+→ {"outcome": "planned", "question": "…", "worldOnly": false,
+   "goal": "MATCH (raisedBy:Attendee)-[:RAISED]->(untracked:Issue) WHERE NOT EXISTS { … } RETURN …",
+   "steps": [{"from": "ProjectEmail", "adds": ["node:Attendee", "node:Issue", …], …},
+             {"from": "LinkTrackedIssues", "adds": ["edge:Issue-TRACKED_BY->SupportCase"], …}],
+   "compiled": "CALL { … } CALL { … } MATCH (raisedBy:Attendee)…",
+   "quote": {…, "unpriced": ["ProjectEmail"]}}
+```
+
+The question costs one model call — the one that writes the goal — and the answer shows all three layers:
+the English, the goal written from it, and the plan. Nothing has run. Read the steps and the quote, then run
+exactly what you were shown by passing the returned `goal` as `goal` with `run: true`. Asked with no `email`,
+the same question answers `needsInput` — `{type: "text", why: …}` — rather than a guess; asked "which open cases
+does Acme have?", it answers from what the world holds, `worldOnly: true`, with no steps at all.
+
+Habits: give every step a description, since English mode picks facts by them; name variables for what they
+hold; and save an answer worth keeping as a goal view, so it is pinned rather than written afresh. See
+[§16 of the spec](VIRTUAL_CYPHER.md#16-planning-ask-for-the-result-not-the-steps).
+
 ---
 
 ## Where to go next
@@ -586,3 +731,5 @@ Three habits keep it honest:
 - Declaring a producer or a join? [§5 The join surface](VIRTUAL_CYPHER.md#5-the-join-surface-reference).
 - Asking a model to judge, group or summarise rows?
   [§7 LLM query primitives](VIRTUAL_CYPHER.md#7-llm-query-primitives--filter-rerank-and-steer-with-the-ai-namespace).
+- Want the steps chosen for you, or a realm's views to be chosen as steps?
+  [§16 Planning](VIRTUAL_CYPHER.md#16-planning-ask-for-the-result-not-the-steps).
