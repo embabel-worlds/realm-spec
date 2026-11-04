@@ -7,8 +7,8 @@
 > built. Where an implementation and this document disagree, this document is the defect report.
 > **Scope.** Accessibility is per PRINCIPAL and focus is per WORLD: a world decides which
 > capabilities exist in it, not which of its owner's data may be seen. Between principals the
-> boundary is absolute. §15 states this in full, because an earlier draft claimed worlds were
-> mutually confidential for one owner and they are not.
+> boundary is absolute. §15 states this in full; in particular, worlds are not
+> mutually confidential for one owner.
 >
 > **Relationship to Cypher.** Virtual Cypher is not a new language. A query is ordinary Cypher, and
 > everything the [openCypher](https://opencypher.org/) specification says about pattern matching,
@@ -168,8 +168,12 @@ outlives the run**:
    Overlapping runs that fetched the same record each keep seeing it for as long as they run, and
    each returns what it would return alone.
 
-   *The one exception:* an identity **bridge** (`writeThrough`) is committed as a warm cache and
-   re-resolved after `refreshAfter` (§5.2).
+   *The exceptions*, each one a declaration the realm makes, never a side effect of asking: an
+   identity **bridge** (`writeThrough`) is committed as a warm cache and re-resolved after
+   `refreshAfter` (§5.2); a canonical spine and its derived edges are written when records of a
+   canonical-bearing type materialize (§5.4); a `cache: {kind: graph}` aggregate commits its result
+   node (§5.5); and an `extract` producer under `cache: {kind: graph}` commits the entities it
+   extracts (§5.6).
 
 ### Evidence when a lookup returns no matching rows
 
@@ -190,12 +194,12 @@ These distinctions appear in the result envelope next to `rows` and `warnings`. 
 
 | Field | Type | Present | Meaning |
 |---|---|---|---|
-| `fetchedRecords` | integer | on query, ask and saved-view results (the admin REST endpoints omit a zero) | Records the producers returned before query-side filtering, cache-served ones included. |
-| `materializedNodes` | integer | on query, ask and saved-view results (the admin REST endpoints omit a zero) | Graph nodes made available to the query from those records. |
-| `reason` | string | on query, ask, saved-view and admin REST results, only when the result is not a clean answer; absent on a clean answer, including a genuine zero | Why there is no clean answer, as a code a caller can branch on. The evidence codes are `FETCHED_NOT_MATCHED` (records were fetched and none matched), `PARTIAL_NOT_MATCHED` (an incomplete read matched nothing and no step failed) and `UNPUSHED_FILTER` (a bounded read omitted a declared filter); other codes report refusals and failures. Any of them means an empty result does not prove absence. |
-| `incomplete` | string | on query, ask and saved-view results, only when the read was incomplete; the admin REST endpoints omit it | One line, such as `Incomplete: based on the first 100 rows, more exist`, that qualifies every row and figure in the result. |
+| `fetchedRecords` | integer | on query, ask and saved-view results (an operator surface may omit a zero) | Records the producers returned before query-side filtering, cache-served ones included. |
+| `materializedNodes` | integer | on query, ask and saved-view results (an operator surface may omit a zero) | Graph nodes made available to the query from those records. |
+| `reason` | string | on query, ask, saved-view and operator-surface results, only when the result is not a clean answer; absent on a clean answer, including a genuine zero | Why there is no clean answer, as a code a caller can branch on. The evidence codes are `FETCHED_NOT_MATCHED` (records were fetched and none matched), `PARTIAL_NOT_MATCHED` (an incomplete read matched nothing and no step failed) and `UNPUSHED_FILTER` (a bounded read omitted a declared filter); other codes report refusals and failures. Any of them means an empty result does not prove absence. |
+| `incomplete` | string | on query, ask and saved-view results, only when the read was incomplete; an operator surface may omit it | One line, such as `Incomplete: based on the first 100 rows, more exist`, that qualifies every row and figure in the result. |
 | `answerBoundary` | object `{kind, unresolvedQuestion?}` | only on a non-empty record card | `kind: SUPPORTING_CONTEXT_ONLY`: the rows support the lookup but do not answer its original filter. `unresolvedQuestion` restates what is still unanswered. |
-| `cypher` | string | an ask result (`kg_ask`): on an empty result, a requested explanation, or a record card. A saved-view result: only on a requested explanation. A direct query (`kg_query`) never echoes it, since the caller wrote it. The admin REST query endpoints always include it. | The executed query, when present. |
+| `cypher` | string | an ask result: on an empty result, a requested explanation, or a record card. A saved-view result: only on a requested explanation. A direct query never echoes it, since the caller wrote it. An operator query surface always includes it. | The executed query, when present. |
 
 ```json
 { "rows": [], "warnings": [], "fetchedRecords": 12, "materializedNodes": 12,
@@ -277,7 +281,7 @@ These are **rejected at plan time** (fail-closed), with a message:
 | `MATCH (n) RETURN n.name`, or a node left unnamed: `MATCH (p:Person)-[:ABOUT]->()` | **Unscopable node** — a node is reached by the labels it names, so one that names none cannot be held to the asking principal. The lever is per node: a named node is told to take a label; a node the query left unnamed is told to take a name AND a label, because a label alone on `(:Label)` leaves nothing for the scope to be attached to and is refused in turn. |
 | Anything the Cypher parser can't parse | **Fail closed** — an unparseable query is rejected, never run unscoped. |
 | `MATCH (n:!Topic)`, `n IS !Topic`, `WHERE n:!Person` | **Single-label negation** — refused before it runs, naming the spellings that work: `WHERE NOT n:Topic`, or a combined label expression such as `:Topic&!Person`. A `!` inside a string or comment is data. |
-| `RETURN apoc.text.capitalize(p.name)`, `CALL db.labels()` | **A procedure or function library this engine does not provide** — refused as an unknown function, naming it, not as a write. The refusal points at the built-in functions to use instead, and for schema questions at the schema the query guide shows. |
+| `RETURN apoc.text.capitalize(p.name)`, `CALL db.labels()` | **A procedure or function library the engine does not provide** — refused as an unknown function, naming it, not as a write. The refusal points at the built-in functions to use instead, and for schema questions at the schema the query guide shows. |
 | `MATCH (p)-[:AUTHORED]->(r) WHERE count(r) > 1 RETURN p.name` | **Aggregate in `WHERE`** — refused before anything is fetched: compute it in a `WITH` and filter on its alias, `WITH p, count(r) AS n WHERE n > 1`. An aggregate inside a subquery's own `WITH`/`RETURN`, and a `COUNT { }` subquery in `WHERE`, run. |
 | `RETURN p.name AS passage, count(v) AS n ORDER BY n DESC, b.bookOrder` | **A variable the projection dropped** — after a `WITH` or `RETURN` that aggregates or is `DISTINCT`, `ORDER BY` may use only a projected alias or repeat a projected expression. Refused before any fetch, naming every out-of-scope variable at once. A realm view with this shape fails `realm_validate`; one already installed is reported against its realm at load, stays listed, and is refused with the defect named when called. |
 | `x IS :: LIST<INTEGER>`, `x IS :: INTEGER \| STRING`, `x IS NOT :: INTEGER` | **A type predicate this surface cannot read faithfully** — refused for what it is, quoting the type as written, with the rewrite to use; never reported as a syntax error. A plain `x IS :: INTEGER` (or `IS :: INTEGER NOT NULL`) runs on every surface, and a missing value is of every nullable type. |
@@ -444,8 +448,9 @@ negative cache is recorded on the bridge store, so it rides `writeThrough`: a jo
 
 ### 5.2.1 What a join may make DURABLE, and what it may not
 
-A read query writes nothing durable except an identity bridge. That is the whole of the list, and
-these are the two declarations an author reaches for when they want more.
+A read query writes nothing durable except an identity bridge and the declared exceptions listed in
+§2 (spines, graph-cached aggregates, extracted entities). That is the whole of the list, and these
+are the two declarations an author reaches for when they want more.
 
 **`persist: true` — eager enrichment, and NOT "this fetch, kept."** It is the older form of a
 bridge. A join declaring it is run over **every** anchor of its anchor label on a schedule, and its
@@ -527,9 +532,8 @@ empty carries an `EMPTY_NOT_KEPT` note naming the count and printing the declara
 about COST and never about the rows, and it is not raised after a fetch that was capped, refused or
 throttled — an empty there may be a key the source never reached, which no window should pin.
 
-> `kind: session` parses and is reported by the catalog, but the per-`AgentProcess` lifetime it
-> names is **not wired** — it behaves as `none`, and validating a realm that declares it raises a
-> warning saying so. Use `ttl` for a window you can state, or `immutable` for data that does not
+> `kind: session` names a cache that lives as long as one agent run. A host that does not support
+> it treats it as `none`, and validating a realm that declares it raises a warning saying so. Use `ttl` for a window you can state, or `immutable` for data that does not
 > change.
 
 #### Page-number origins
@@ -582,8 +586,7 @@ expensive direction if authored carelessly:
   FULL LLM generation round per iteration, sequentially, re-probing with a growing exclusion set
   until `want` survivors exist — and steering hints, confidence floors, and spine-resolution
   misses all shrink each round's survivor yield. A `defaultWant: 25` behind queries that
-  `LIMIT 5` can burn ten-plus sequential LLM calls chasing survivors nobody will see (observed:
-  12 rounds / 43 seconds from 2 anchors under a steering hint). Set it just above the largest
+  `LIMIT 5` can burn ten-plus sequential LLM calls chasing survivors nobody will see. Set it just above the largest
   LIMIT the edge's saved views and skill queries actually use; a filtered/steered run then
   converges in a round or two.
 
@@ -591,8 +594,8 @@ expensive direction if authored carelessly:
   is a capability grant, and every granted tool is an invitation the model will eventually
   accept: the broad `web` group attaches *every* web-ish tool in the world (brave AND
   wikipedia AND generic search), and a producer hunting one known site will wander into the
-  irrelevant ones (observed: encyclopedia summary lookups with another site's page titles —
-  guaranteed misses — plus retry churn). Name the concrete tool that serves the producer's
+  irrelevant ones (for example, encyclopedia summary lookups with another site's page titles,
+  which always miss, plus retry churn). Name the concrete tool that serves the producer's
   source (`tools: [brave]`); reach for the broad group only when the producer genuinely cannot
   know where its answer lives.
 
@@ -670,7 +673,7 @@ explicit `orgId`, verified membership, and an organization-scoped key; a bare em
 never cross-context or cross-world authority.
 
 **The two built-in spines are not hardwired — they are config.** A spine is declared by a
-`CanonicalSpec` (label, key property, id prefix, normalization primitives, key-node + edge); Person
+spine declaration (label, key property, id prefix, normalization primitives, key-node + edge); Person
 and Organization are just the two built-ins. An operator may add a `Place`, `Repository`, or
 `Product` spine in the host's configuration, and source types join it with `hub: <newLabel>` — the
 engine builds the hub, applies the key-node uniqueness constraint, and the join surface above works
@@ -761,8 +764,6 @@ PROJECT what is swept (`RETURN c.id` — a demand that only asks whether somethi
 as one page, and one that counts is answered by a count and no records); and bind a per-customer
 hop through its own sweep (`MATCH (b)-[:HAS_CUSTOMER]->(lc) MATCH (b)-[:HAS_INVOICE]->(i) MATCH (lc)-[:HAS_INVOICE]->(i)`,
 the hop declaring `materializedKeyField: customerExternalId`) so it links rather than mints.
-Measured on realm-account-health at 2,030 accounts: the three rule-backed views went from "none"
-to answering in a few seconds, six book sweeps and no per-account call.
 
 **An account exists once something has keyed it.** A spine node is created when a query
 materializes records of a type that opts in — canonicalization is on demand, and only the spine
@@ -1194,12 +1195,7 @@ producers:
   it ceases to exist** — not some of them, the whole file. It is reported as a problem on the
   OWNING REALM, naming the file and the parse error, and logged as a warning, because a file of
   producers vanishing is not a detail to leave sitting in a list somebody has to go and read.
-
-  It used to be silent, and that is worth knowing if you are reading older material: the realm said
-  `problems: 0` while every producer in the failed file did not exist, and the only symptom was
-  `Unknown producer '<name>' in plan` when a query finally needed one — surviving a refresh and a
-  restart, because nothing was stale, the file had simply never parsed. Check each field against
-  the producer's own `kind`.
+  Check each field against the producer's own `kind`.
 - **A banner above the header does not become the schema.** With `headerRow: auto` (the default)
   the header is detected by column shape, so the "Generated on …" lines these exports carry are
   skipped rather than parsed as column names.
@@ -1682,7 +1678,7 @@ window the calls a family makes depend on the order it runs in: the broadest rea
 rest are served. No SPELLING changes that — a predicate written over a name a `WITH` introduced is
 the predicate on the property it names and is pushed exactly as that property's is (§9) — so views
 over different windows of one door pay one read per window however they are written. Three things a
-family can do instead, each measured on the shipping engine (2026-10-17):
+family can do instead:
 
 - **Let the broad view read first.** A complete unfiltered entry holds every record a pushed window
   would return, so every window after it is served with no call, in any order among them: one read
@@ -1763,8 +1759,14 @@ SELECT query ONCE; consumers only ever see the virtual join, and no query author
   TRUNCATED warning. A retryable refusal — a throttle, a gateway failure, a timeout — is attempted
   once more, honouring the endpoint's `Retry-After` where it sends one: the same law every producer
   kind gets (§9, *what a flaky source costs*), not a `sparql` speciality.
-- **Credentials stay out of YAML.** An authenticated endpoint names an environment variable
-  (`fetch.bearerTokenEnv`); public endpoints need nothing.
+- **Credentials stay out of YAML.** An authenticated endpoint names the key it needs
+  (`fetch.bearerTokenEnv`), never its value; public endpoints need nothing. Every producer field
+  ending in `Env` (`bearerTokenEnv`, `passwordEnv`, `apiKeyEnv`) names a key the way an `apis/`
+  entry's `token-env` does and resolves under the same [trust tiers](README.md#apis): from the
+  world's credential store, and from the process environment only in a local or first-party
+  installation. A marketplace realm cannot read the host's environment through one. Like
+  `token-env`, each may name only a `variable` the realm's own `keys.yml` declares; any other name
+  refuses the producer at load, naming the field and the undeclared variable.
 
 Cost every consumer should know: each key batch is one live query against an endpoint the realm
 does not control. Public endpoints enforce their own timeouts and rate limits; a realm should
@@ -1976,11 +1978,12 @@ Guarantees:
 - **A procedure-backed label's values are not enumerable.** There is no column to list
   distinct values of; discovery says so rather than guessing.
 - **SQL Server, Azure SQL and Sybase ASE datasources are supported**, for procedures and
-  tables alike. A `jdbc:sqlserver:` or `jdbc:sybase:` URL selects the T-SQL dialect on its
-  own; `dialect: sqlserver` or `dialect: sybase` on the producer names it explicitly.
+  tables alike. A host may select the T-SQL dialect on its own when the datasource's
+  connection identifies SQL Server or Sybase; `dialect: sqlserver` or `dialect: sybase` on the
+  producer names it explicitly, and a portable realm names it.
 
-**A join may declare a POLICY instead of one key.** _Partly implemented — see the implementation-status
-note at the end of this section for exactly which guarantees hold today._ `keyField` says "match this column"; a policy
+**A join may declare a POLICY instead of one key.** _Not every part is required of a host: the note at the
+end of this section says which guarantees a host must honour and which it may refuse._ `keyField` says "match this column"; a policy
 says how to try, in order, and what to do when the rules disagree:
 
 ```yaml
@@ -2030,8 +2033,8 @@ Guarantees:
   negative assertion, and no later automatic rule may re-link what a person has separated.
 - A join with no `policy:` behaves exactly as before: key on `keyField`, once.
 
-**Implementation status, and what a host must do about it.** In the reference host the **key ladder
-is implemented**: `key` rules run in order, each through its own producer, each fetching once for
+**What a host must honour, and what it may refuse.** A host implements the **key ladder**: `key`
+rules run in order, each through its own producer, each fetching once for
 the anchors still unresolved, and `none` ends the chain. A rung goes through the ordinary fetch path,
 so it inherits caching, cost budgets, diagnostics — and, where the anchor is a spine, the spine's key
 normalization.
@@ -2044,20 +2047,15 @@ normalization.
 - **"More than one match is not a match"** — enforced. A rung returning several records for one
   anchor settles none of them; that anchor falls through to the next rung, where a narrower key may
   still resolve it. Do NOT design around this by giving a fallback rung a key that is unique on the
-  far side — that workaround was advice for an earlier host and is no longer needed.
+  far side.
 
-**Refused, not ignored.** The host rejects these at validate/install time, naming the join, per the
-rule below:
+**Refused, not ignored.** A host that does not support these rejects them at validate/install time,
+naming the join, per the rule below:
 
-- **`ask`** — parking a query on a person's answer is not implemented.
-- **`ci: false`** — a case-SENSITIVE match is not something this engine can offer: the link side
-  lowercases both sides, on every rung. An explicit `false` is refused rather than silently given
-  the looser comparison it asked not to have. Omitting `ci` says nothing and is always fine.
-
-This block previously reported `confidence` and the ambiguity rule as unimplemented after both had
-shipped. That is the more damaging direction for a status note to be wrong in: an author who
-believes a safety property is absent designs around one that is already there, and declines
-provenance they are already entitled to.
+- **`ask`** — parking a query on a person's answer.
+- **`ci: false`** — a case-SENSITIVE match. Omitting `ci` means a case-insensitive match and is
+  always fine. A host that compares case-insensitively refuses an explicit `false` rather than
+  silently giving the looser comparison it asked not to have.
 
 The normative rule stands, and is why `ask` is refused rather than skipped:
 
@@ -2232,7 +2230,7 @@ one of the realm's own agents (README, `agents/`), naming a view of yours that t
 **A worked example: immutable records behind a date-filterable list.** GitHub's workflow-runs
 endpoint is not date-addressable by design, but its `created` filter takes a month (`2026-09`)
 or an exact date, and a completed run never changes — so the same endpoint declared twice gives
-two doors to one collection (realm-github-actions, 2026-09-23):
+two doors to one collection (an example over a CI system's run history):
 
 ```yaml
 - name: runsByRepo              # LIVE: newest first, a literal since pushed to `created`
@@ -2248,10 +2246,10 @@ two doors to one collection (realm-github-actions, 2026-09-23):
 ```
 
 `unit: month` sends `created=2026-09`. Two months always cover at least the last 31 days.
-Measured: a cold read of one busy repository is one page per hundred runs in the two months
-(13 calls, ~25 s); every later read of any window up to 31 days is 0 calls and 150–600 ms, because
+A cold read of one busy repository is one page per hundred runs in the two months; every later
+read of any window up to 31 days makes no call, because
 the history door declares no rule a window could be pushed into, so every view's read of a period is
-the same read whatever window the view asks for (§5.13). `unit: day` was tried first: 31 calls cold
+the same read whatever window the view asks for (§5.13). `unit: day` would cost 31 calls cold
 for the same coverage, and a bigger refresh surface. "Right now" questions can stay on the live
 door. State the edge in the realm's README: a record still changing when its period closed
 (a run in progress when the month turned, a run re-run in a later month) keeps in history the
@@ -2387,12 +2385,14 @@ RETURN f.name, a.method, a.access, a.lines
   and its `sha256` is of the classes, not of any file.
 - **Where a jar may be.** A relative path resolves against the world's `data/` tree, then against
   the declaring realm's own directory — so a realm can ship an example jar — and an absolute path
-  must lie under a root the operator trusts. A key that names no readable jar, war or folder there
-  yields no rows and a `PRODUCER_ERROR` naming the key; a jar or war larger than `maxJarMb` (default
+  must lie under a root the operator trusts. A key arrives in query text, so containment is checked
+  after `..` segments and symbolic links are resolved: a path that then lies outside those roots
+  names no readable jar. Every path later sections resolve as a jar path does is held to this rule.
+  A key that names no readable jar, war or folder there yields no rows and a `PRODUCER_ERROR`
+  naming the key; a jar or war larger than `maxJarMb` (default
   128) is refused the same way, never half read — for a war the size is what is read, its classes
   and the named libraries, and for a folder the size of its class files. A folder is read again when
-  a file in it is added, removed or changed. On an appliance, `embabel data add <file|folder> --to jars`
-  puts one under the world's `data/` and prints the key to read it by.
+  a file in it is added, removed or changed.
 - **Filters in the MATCH narrow the read.** An equality, `IN`, `CONTAINS` or list membership on a
   property of the emitted collection is applied before rows reach the graph:
   `(j:Jar {path: $jar})-[:HAS_CALL]->(c:MethodCall {calleeOwner: 'java.lang.System'})` does not
@@ -2609,8 +2609,9 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
 **The contract:**
 
 - **The key is a project's location**: an https git URL, optionally `@ref` (a commit, tag or branch;
-  the default branch without one), read at the commit it resolves to; or a folder under the world's
-  `data/` tree, an operator-trusted root, or the folder the operator mounted for project keys. A git
+  the default branch without one), read at the commit it resolves to and held to the same address
+  rule as any fetched URL; or a folder under the world's `data/` tree, an operator-trusted root, or
+  the folder the operator mounted for project keys, contained as a jar path is (§5.18). A git
   project is read once per commit and kept; a folder is read afresh for each fetch. A tag or branch,
   the default branch included, is resolved to its commit at most once a minute, so a pushed commit is
   read by the first fetch a minute after it.
@@ -2689,8 +2690,8 @@ RETURN d.language, d.owner, d.name, d.annotationText, d.path, d.fromLine
   ```
 
   Refused with a `PRODUCER_ERROR` warning and no rows: a query file the realm does not have, one with
-  a character outside ASCII (tree-sitter would silently lose its end; the warning names the line), and
-  one that does not compile against the grammar (the warning gives tree-sitter's row and column).
+  a character outside ASCII (the warning names the line), and one that does not compile against the
+  grammar (the warning gives the row and column).
   Refused when the realm is loaded: `query:` on another emit, `captures` without `query:`, a `query:`
   that leaves the realm (`..`, a leading `/`), and `captures` naming other than one language. A file
   capturing more than `maxCaptures` nodes (default 10000, at most 100000) answers its first
@@ -2966,7 +2967,8 @@ per-match edge vocabulary as documents and email threads, so a query that knows
 ```
 
 **`Memory` is a shared parent label; each memory system is a child.** The standard model declares
-`Memory` and the assistant's own `DiceMemory` with `parents: [Memory]`. A realm that brings another
+`Memory`, and the host's own memory system as a child with `parents: [Memory]` (`DiceMemory` in the
+reference host, used in the examples below). A realm that brings another
 memory system declares its own child — `ZepMemory`, `parents: [Memory]` — over its own producer
 (a `remote-search` with `recordScoreField`, or a host-provided index). Ancestors are physically
 present (LABELS_AND_COMPOSITION §2), so a query may name the parent and be answered by EVERY
@@ -2976,7 +2978,7 @@ system that has a join, or name one child and read that system alone:
 MATCH (:Concept {value:'coffee'})-[r:RELEVANT_TO]->(m:Memory)        -- every memory system
 RETURN m.source, m.text, r.score, r.mode ORDER BY r.rank
 
-MATCH (:Concept {value:'coffee'})-[r:RELEVANT_TO]->(m:DiceMemory)    -- the assistant's own
+MATCH (:Concept {value:'coffee'})-[r:RELEVANT_TO]->(m:DiceMemory)    -- the host's own (reference host)
 RETURN m.text, m.confidence, r.score
 
 MATCH (p:Person {name:'Ada Lovelace'})-[:REMEMBERED_IN]->(m:Memory)  -- by fact, not by name
@@ -2998,25 +3000,25 @@ lane falls back to lexical and says so (`r.mode:'keyword'`). The lexical lane (`
 answers "memories that MENTION X": every assertable term present, or an honest empty. The
 `participant` kind answers "what do you know about THIS entity": memories whose resolved mentions
 include the anchor's id — a fact, never a name's neighbourhood. An `agentic-rag` producer over
-`memory` is accepted and answers with the semantic lane today; `r.mode` reports what ran.
+`memory` is accepted and may answer with the semantic lane; `r.mode` reports what ran.
 
 **Scope and curation hold at the source.** A memory is read in the acting user's own context, and
 no user — or a user with no context — reads nothing (§6.4). Reads are ACTIVE memories only. A
 `status` constraint on the memory node pushes down and relaxes that to the statuses it names;
-a CONTRADICTED memory is known-false and never answers, even when asked for by name — the rule the
-scope rewriter already holds persisted `Proposition` nodes to (§15). A child label from another
+a CONTRADICTED memory is known-false and never answers, even when asked for by name — the rule persisted
+`Proposition` nodes are held to (§15). A child label from another
 system maps its own lifecycle onto the same vocabulary: ACTIVE for a current fact, SUPERSEDED or
 STALE for a retired one, CONTRADICTED for one proven false.
 
 **The lifecycle is declared, and every memory label is held to it.** `Memory` declares
 `lifecycle: { active: [ACTIVE], never: [CONTRADICTED] }` (DECLARING_TYPES.md §3.3a), and a child
-inherits it. So the rule above is not only the source's: a query naming `:Memory`, `:DiceMemory`
+inherits it. So the rule above is not only the source's: a query naming `:Memory`, the host's own child
 or a realm's `:ZepMemory` has the same curation predicate written into it that `:Proposition`
 gets, whichever system fetched the node and wherever the node came from — a persisted projection
 of a memory system's facts included. A memory node must therefore carry `status`; one without it
 answers nothing.
 
-**Systems a standard child exists for.** Beside the assistant's own `DiceMemory`: an Omnigraph graph
+**Systems a standard child exists for.** Beside the host's own memory child: an Omnigraph graph
 (`OmnigraphMemory`, a `remote-search` over the graph's stored BM25 query); markdown memory
 (`MarkdownMemory` and its children for Claude Code's memory directory, OpenClaw's `MEMORY.md` and
 daily logs, a Cline/Roo memory bank, plain notes — `files` search producers over the world's
@@ -3250,8 +3252,8 @@ retrieval lever, a learned relevance sort where no orderable property exists.
 - **Judge — the same batched 0..1 scoring** as `ai.relevant` (the two share one judgment; a query using
   both scores once and both filters and ranks off it). Every row is **kept** and its score **stamped** under
   the internal `ai_score` property.
-- **Rewrite & run.** Neo4j has no `ai.score` function, so the executor rewrites the call in the executed
-  query to `coalesce(n.ai_score, 0.0)` (0.0 for any row that wasn't scored), and `ORDER BY … DESC LIMIT k`
+- **Rewrite & run.** The graph store has no `ai.score` function, so the engine rewrites the call in the
+  executed query to `coalesce(n.ai_score, 0.0)` (0.0 for any row that wasn't scored), and `ORDER BY … DESC LIMIT k`
   ranks and truncates against the stamp.
 
 The idiomatic **filter-then-rank**: `WHERE ai.relevant(n, '…') … ORDER BY ai.score(n, '…') DESC LIMIT k` —
@@ -3376,8 +3378,8 @@ about the same row.
 ### 7.7 Aggregations — reduce a whole GROUP to one cell
 
 The primitives above judge rows one at a time. An **aggregation** goes the other way: it reduces the
-group a traversal produced to a single cell, as the model sibling of `count()` / `collect()`. Neo4j's
-implicit GROUP-BY supplies the grouping for free — `RETURN topic.name, summarize(n.description)`
+group a traversal produced to a single cell, as the model sibling of `count()` / `collect()`. Cypher's
+implicit grouping supplies the groups for free — `RETURN topic.name, summarize(n.description)`
 yields one digest per topic.
 
 ```cypher
@@ -3726,7 +3728,7 @@ judged again on its own rather than guessed. `llmCalls` in the result counts the
 `score` shares a call the same way — `ORDER BY score(…)` over many rows is batched, not one call
 per row — and keeps its contract: a batched score is the same 0–1 number, clamped, and a group
 whose evidence is too long for one call is scored on its own. `holds` is **not** batched: a
-verdict read from a numbered list was measured to differ from the verdict the same evidence
+verdict read from a numbered list can differ from the verdict the same evidence
 gets on its own (a small judge answered FALSE in a batch where it answers TRUE alone), and a
 confidently wrong negative is a row silently missing from `WHERE holds(…) = true` — a
 `holds` over many rows still costs one call per group.
@@ -4026,9 +4028,8 @@ system; a *view* is a view over the graph (real + virtual) itself. Two kinds, by
 
 ### 8.1 No new grammar — usage is a label, definition is metadata
 
-There is **no `DEFINE VIEW` statement.** The engine parses queries with the official Neo4j parser
-(cypher-dsl); a non-standard statement would reintroduce pre-parse interception, and Neo4j never executes DDL
-anyway. The concept splits cleanly:
+There is **no `DEFINE VIEW` statement.** A query is standard Cypher; a non-standard statement would
+need interception before parsing, and a view is not schema the graph store executes. The concept splits cleanly:
 
 - **Usage needs zero syntax** — a view is a plain label (`MATCH (c:my_key_accounts)-[:…]`); the parser accepts
   any label, the registry resolves it. Exactly how `Document` / `HubSpotContact` are used today.
@@ -4047,9 +4048,8 @@ anyway. The concept splits cleanly:
 ```
 
 The same body can be authored at runtime by the assistant on the acting principal's behalf
-(`viewService.define(hostScope, name, cypher, materialized)`, surfaced as a `define_view` tool) —
-"save this as my key accounts." `hostScope` contains the host-bound world, context, policy revision,
-and principal; it is never a guest-supplied tool argument.
+("save this as my key accounts"). The host binds the world, context, policy revision and
+principal the view is saved under; they are never a guest-supplied tool argument.
 
 A view's query is checked when the realm is validated: a label that is a near miss for one the
 realm or its world knows (`GitHubIsue` beside `GitHubIssue`) is an error at the view's file and line,
@@ -4125,57 +4125,23 @@ fire:
 MATCH (d:breach_mentions) RETURN count(DISTINCT d) AS incidents      -- an aggregate over a precomputed view
 ```
 
-### 8.4 The materialization cache is pluggable
+### 8.4 What a materialized view caches
 
-The materialized-view cache is a **strategy behind an interface**, not a fixed mechanism. The default strategy
-is graph-colocated and transactional: a
-`MaterializedView {view, worldId, contextId, accessPolicyRevision, principalId?, expiresAt}` marker node with
-`[:MEMBER]` edges to the cached result nodes, swept by TTL. But the store is an SPI:
+Where a materialized view's cache lives is the host's choice: in the graph beside the data, in
+memory, or in an external store. Whichever it chooses, these hold:
 
-```kotlin
-interface ViewMaterializationStore {
-  data class CacheState(val expiresAt: Long, val memberCount: Long)
-  data class RowSnapshot(val columns: List<String>, val rows: List<Map<String, Any?>>, val expiresAt: Long)
-
-  fun state(view: String, scope: String): CacheState?
-  fun clear(view: String, scope: String)
-  fun sweepExpired()
-
-  // A view whose body returns a NODE caches its members.
-  fun materialize(view: String, scope: String, memberIds: List<String>, expiresAt: Long)
-  fun bindClause(alias: String, outputLabel: String, view: String, scope: String): String
-
-  // A TABULAR view has no node to point a MEMBER edge at, so it caches the rows themselves.
-  fun materializeRows(view: String, scope: String, columns: List<String>, rows: List<Map<String, Any?>>, expiresAt: Long)
-  fun rows(view: String, scope: String): RowSnapshot?
-}
-```
-
-Two things in that shape are load-bearing.
-
-**A view without an `outputLabel` is a row snapshot, not a member set.** Its body returns columns, and
-there is no node to point a `MEMBER` edge at — so what is cached is the rows, which is what a client
-reading the view by name wanted anyway. A store that implements only the member half silently fails
-every tabular view.
-
-**Members are bound by a clause, not returned as ids.** `bindClause` lets the default
-graph-colocated store prepend pure Cypher (`-[:MEMBER]->` off its marker node) with no ids threaded
-through the query; an off-graph store returns `elementId(alias) IN [...]` instead. Returning a member
-list would have forced every store to pay the graph store's worst case.
-
-`scope` is the acting caller's scope as §2 defines it; the store never interprets it, only keys on it.
-
-**Every entry is keyed per caller**, unconditionally. A view body may use caller-specific
-credentials, policy, inputs or anchors, and the reference host does not attempt to prove otherwise —
-there is no analysis that marks a view caller-invariant and no sharing of one entry between callers.
-That is the conservative choice and it costs: two callers asking for the same view materialize it
-twice. A host that wants to share reference-data views across callers needs an invariance proof this
-one does not have, and must not assume the absence of the parameter implies one.
-
-An alternative strategy swaps in without touching the query path: an **in-memory LRU** for a single-process
-deployment, an **external KV / Redis** for a horizontally-scaled one, or an **`immutable`** strategy (no TTL,
-explicit invalidation only) for reference data. The refresh policy (`ttl`, cron `refresh:`) is orthogonal to
-the store.
+- **A node view caches its members; a tabular view caches its rows.** A view with an `outputLabel`
+  caches the nodes its body returned, and a reference reads those nodes. A view without one has no
+  node to point at, so it caches its returned columns and rows, which is what a client reading the
+  view by name receives. A host must cache both shapes; one that cached only members would fail
+  every tabular view.
+- **Every entry is keyed per caller**, by the acting caller's scope as §2 defines it,
+  unconditionally. A view body may use caller-specific credentials, policy, inputs or anchors, and
+  nothing marks a view caller-invariant, so no entry is shared between callers. Two callers asking
+  for the same view materialize it twice. A host that wants to share reference-data views across
+  callers needs an invariance proof, and must not take the absence of a parameter as one.
+- **Freshness is the view's refresh policy**, whichever store holds the entry: `ttl`, a cron
+  `refresh:`, or `immutable`, which has no TTL and changes only on explicit invalidation.
 
 ### 8.5 A general result / entity cache — and negative results
 
@@ -4193,9 +4159,8 @@ dataset revision. Caching is governed by the §9 diagnostics:
   nothing) is cached too, so a fan-out doesn't re-probe a dead key every query. This is a store with a
   TTL and **invalidate-on-reconnect**: reconnecting an integration re-attempts every key previously
   missed for that caller, so a miss recorded under a broken credential is never written off permanently.
-  The miss is keyed, not stamped — earlier hosts wrote a `_bridgeMissAtMs_<target>` timestamp onto the
-  **anchor itself**, which put a system property into `keys(n)` where schema snapshots, property
-  enumerators and a plain `RETURN n` could all see it. A cache must not leak into the data model, and
+  The miss is keyed, not stamped on the anchor: a stamp would put a system property into `keys(n)`,
+  where schema snapshots, property enumerators and a plain `RETURN n` could all see it. A cache must not leak into the data model, and
   eviction must not be a scan of every property of every node a caller owns; keying the entry gives both.
 - **Never cache a FAILURE.** A timeout / 5xx / expired-auth fetch is **not** a result — caching its emptiness
   would hide the data once the integration heals. Only a `PRODUCER_ERROR`-free outcome is cacheable (§9).
@@ -4388,8 +4353,8 @@ caller sees:
 Loading reports two things about it: `readWhole: true` without a `ttl` or `immutable` cache is a
 warning — nothing keeps the read for the next view, so the door only fetches more — and with
 `requiresFilter: true` it is refused, since the door would refuse every read. A read-whole door is not
-warned for declaring no rules or for leaving source filters unused. The config catalog's
-producer rows and `realm_status`'s surface name the doors that declare it.
+warned for declaring no rules or for leaving source filters unused. A host's producer
+catalogue and realm status name the doors that declare it.
 
 **Two ways to write a rule.** A rule renders either **text** or a **structured clause**, and it
 declares exactly one of them.
@@ -4552,7 +4517,7 @@ a column that `expose` does not list is refused too — a total over a column th
 is an oracle over hidden values — and so is one over a masked column, since a number computed in the
 database arrives past the mask.
 
-**A declaration on a kind that cannot honour it is an ERROR, not a dropped line.** `realm_validate`
+**A declaration on a kind that cannot honour it is an ERROR, not a dropped line.** Validation
 names the kind, says it has no way to answer a number without returning its records, and lists the
 kinds that can. That is deliberate: silently dropping it would leave a realm that reads as though
 its source counts for itself, and the only symptom would be a query that stays exactly as slow as it
@@ -4682,16 +4647,15 @@ spelling that answers. A rule body (§13) meets the nesting and regular-expressi
   A match cannot be stopped once it has started, so it is refused rather than tried. `([a-z]+,)*`
   and `(cat|car)+` are linear and run.
 
-What an expression costs is bounded as it runs, too. On the in-process engine a regular-expression
+What an expression costs is bounded as it runs, too. A regular-expression
 match is charged to the statement's work budget for every character it reads, and a STRING is
 charged for the characters it builds, so a pattern only the run can see is still bounded. No STRING
-may exceed 16,777,216 characters: the in-process engine refuses to build a longer one, and an answer
-holding one is refused on either engine, as `BUDGET_EXCEEDED`, naming the expression that grew it.
+may exceed 16,777,216 characters: a host may refuse to build a longer one, and an answer holding one
+is refused, as `BUDGET_EXCEEDED`, naming the expression that grew it.
 
 **Query-shape advice:** `EXPLAIN` also names a shape the store runs correctly but quadratically —
 an equality join between two matched sets with a function wrapping one side, `WHERE k.id =
-toString(n.res_id)`, which a planner cannot hash-join and so filters every pair (measured: 13.6 s
-against 2.5 s on 6,000 × 4,010 rows). The advice line quotes the clause and the spelling that
+toString(n.res_id)`, which a planner cannot hash-join and so filters every pair. The advice line quotes the clause and the spelling that
 hashes: project the function first (`WITH n, toString(n.res_id) AS nResId`), then compare the two
 plain values (`WHERE k.id = nResId`). Advice never changes what the query runs or answers; the
 advised spelling answers the same rows and draws no advice of its own.
@@ -4981,13 +4945,12 @@ ceiling, exactly as before.
 ### 9.1 Fills — driving a large materialization slowly
 
 Some materializations are too big for one query's patience: a 12-month history over many anchors,
-an open catalog sweep. A **fill** drives one durably, slowly, and idempotently:
-
-```
-POST /api/v1/admin/kg/fills        { "cypher": "...", "budgetPerTick": 60, "label": "crime history" }
-GET  /api/v1/admin/kg/fills        → [{ id, state, ticks, liveCallsTotal, lastError, warning, ... }]
-DELETE /api/v1/admin/kg/fills/{id} → cancelled (completed work stays cached; nothing rolls back)
-```
+an open catalog sweep. A **fill** drives one durably, slowly, and idempotently. An operator
+starts one with a query (`cypher`), a per-pass call budget (`budgetPerTick`) and a `label`; lists
+fills with their `id`, `state`, `ticks`, `liveCallsTotal`, `lastError` and `warning`; and cancels
+one by `id`, which keeps completed work cached and rolls nothing back. How an operator reaches
+those three operations is the host's surface; the reference host offers them under
+`/api/v1/admin/kg/fills`.
 
 The engine re-runs the fill's query on a schedule, each pass under a **call budget**: at most
 `budgetPerTick` producer calls, stopped CLEANLY when spent — everything fetched stands, nothing
@@ -5089,6 +5052,33 @@ rather than failing a pass at a time. A host may cap `budgetPerTick`, and the nu
 advances per tick is the host's, so several sweeps in one world each advance more slowly.
 
 
+### 9.2 Host-defined limits and defaults
+
+Some limits and defaults are the host's to set rather than the spec's. For each one below, the
+host sets the value, documents it with its unit where a realm author can read it, and applies the
+behaviour the cited section states when it is reached. A realm may rely on the documented value of
+the host it runs on and on nothing more, except where a row names a floor or ceiling the spec
+already fixes. A field a realm may set takes the host's documented default when it is omitted.
+
+| Limit | Where | What a realm may rely on |
+|---|---|---|
+| `fileCacheSeconds` default | `tabular` (§5.8) | None beyond the documented default. |
+| `maxRows` default | `tabular` | Exceeding it truncates and is reported, never silent. |
+| `maxRowsPerKey` default | `tabular` | Bounds one key's contribution; none beyond the documented default. |
+| `partition.maxUnits` default | partitioned producers | A range past it keeps the most recent sub-ranges and reports the uncovered head (§5.9). |
+| `keyTransform.cacheSeconds` default | §5.7 | None beyond the documented default. |
+| `maxKeysPerCall` default, per producer kind | every keyed producer | At least one key per request; a larger batch is split, never refused. A `sql` producer defaults to 500. |
+| Default `maxGroups` for a filterable aggregation | §7 | A query may set its own, up to 2000. |
+| Default `sample.size` and `text.chars` for `score` and `classify` | §7 | None beyond the documented default; a query may set its own. |
+| `wordcount` range | prose reductions (§7) | A value outside the range is clamped to it, never refused. |
+| Feed connect and read timeouts | feed sources (§5.10) | Fixed per host; a realm cannot change them. |
+| Patience budget field, unit and maximum | §9 | An answer inside the budget returns normally; past it, a run reference. |
+| Work bound, in match steps | §9 | Always set. A statement past it returns nothing and is told why. |
+| Time bound, in milliseconds | §9 | Off unless the host sets one. |
+| Deployment maximum for an annotation write limit | §12 | At least one. |
+| Dry-run plan lifetime | §12 | An expired plan applies nothing and needs a new dry-run. |
+| Default `rankWindowSize` and `rankConstant` | `elasticsearch` (§5.16) | None beyond the documented default. |
+
 ## 10. Steering the generator — type-level `examples:`
 
 The schema tells the text-to-Cypher generator what *exists*; it does not tell it what to *prefer*.
@@ -5159,10 +5149,10 @@ schema-level engineering could not touch.
   a statement must label for it to be scopable is §15.5, the same in either spelling of a subquery.
 - **Bounded.** Every fetch is bounded by a bound anchor, `maxAnchors`/`maxFanoutTotal`, `paging`
   caps, `k`, and rate budgets. Truncation is reported.
-- **One answer whichever engine holds the graph.** A deployment may keep the graph in Neo4j or in
-  the appliance's own in-process engine, and a query answers the same on both: the same values,
+- **One answer whichever engine holds the graph.** A deployment may keep the graph in any
+  conforming store, and a query answers the same on every one: the same values,
   nulls and conversions, the same column names, the same refusals by type. A statement that fails
-  changes nothing on either. A difference between the two is a defect in the engine that differs,
+  changes nothing on any. A difference between two is a defect in the engine that differs,
   not a dialect for queries to allow for.
 - **Idempotent re-runs.** A re-run re-fetches; caching (`ttl`/`immutable`) makes repeated runs of the
   same query agree, including on any LLM-derived value — repeatability is a correctness property, not
@@ -5298,7 +5288,8 @@ params:
 A query that merely MATCHes the derived label evaluates the rules **implicitly, on defaults** —
 so a rule set meant for implicit evaluation should default every param. Anchoring a rule set to
 one entity is nothing special: declare the key as a param (`{officerId: $officer}`). Param names
-may not shadow the engine's reserved names or the scope pair (`userId`, `worldId`).
+may not shadow the engine's reserved names or a scope field (`userId`, `worldId`, `workspaceId`);
+a rule set declaring one is refused, naming the param.
 
 ### 13.2 What a rule may say — the validated fragment
 
@@ -5623,9 +5614,8 @@ scope into typed instances) are §8.
 
 ## 15. Scope — per-user accessibility, per-world focus
 
-An earlier draft of this section read the reference host's scope handling as a defect against §2.
-It is not. It is the intended model, and §2 overstated it; this section states what scope actually
-guarantees so that no one else has to reverse-engineer the answer from a scope predicate.
+This section states what scope guarantees, so that no one has to reverse-engineer the answer
+from a scope predicate.
 
 ### 15.1 The model
 
@@ -5686,11 +5676,11 @@ deployment — which is also why a realm may not widen a label into either class
 own public register stays per principal in the cache, because its rows are its world's and not the
 organisation's.
 
-What stays per principal whatever the label says: nothing is inferred from a producer's
-CREDENTIALS. If your producer authenticates as the acting user and you point it at a label the
-deployment declares shared, you are declaring that its records are that label's — one row per
-identity, the same for everybody — and they will be kept that way. Fill a label of your own
-instead.
+What stays per principal whatever the label says: the results of a producer that authenticates
+as the acting user. Its records are what that user could fetch, so they are cached for that
+principal, never for the deployment or the organisation, even when the label it fills is one the
+deployment declares reference or shared. The table above sets the scope only for a fetch that does
+not depend on who asked, and a second asker of a user-credentialed fetch pays its full price.
 
 ### 15.5 Which positions you must label, and what holds the rest
 

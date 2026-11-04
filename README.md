@@ -53,7 +53,7 @@ Each entry exposes the realms whose name matches `realm-*` from the given GitHub
 
 ```
 realm-name/
-├── realm.yml              # Required: realm metadata
+├── realm.yml              # Required only in this legacy YAML layout
 ├── icon.svg               # Realm icon (optional) — any path, named by realm.yml `icon`
 ├── actions/              # Action specifications (YAML) — framework + host-extension stepTypes
 │   └── my-action.yml
@@ -94,7 +94,8 @@ realm-name/
 ├── channels/             # Realm-shipped provider connector drafts (YAML)
 │   └── my-channel.yml
 ├── agents/               # Agents — named colleagues whose routines react to signals/cron, adopted by the world
-│   └── my-handler.yml
+│   ├── my-handler.yml
+│   └── my-handler.md     # optional; the agent's prompt for a conversation
 ├── decorations/          # Scheduled KG node-decoration manifests
 │   └── my-decoration.yml
 ├── apps/                 # Bundled HTML apps served at /apps/{name}
@@ -118,7 +119,7 @@ realm-name/
     └── my-focus.yml
 ```
 
-All directories are optional. A realm needs only `realm.yml` and at least one capability directory.
+All directories are optional in the legacy layout. A legacy realm needs `realm.yml` and at least one capability directory. New realms use `realm.ts`; see [Realm source](#realm-source).
 
 ## Realm shapes
 
@@ -170,7 +171,7 @@ for declarative realms. Authors choose freely per file.
 ### Choosing a shape
 
 - Start declarative. If a YAML `stepType: action` (or any
-  host-extension `ActionSpec` referenced by FQN) can express what
+  host-extension `stepType` identifier) can express what
   you need, that's the right tool — no build step, no runtime code
   path, the host's planner reasons about it directly.
 - Reach for handlers when the operation has invariants the planner
@@ -179,6 +180,25 @@ for declarative realms. Authors choose freely per file.
   rich enough that surfacing it as one tool collapses too much.
 - A realm can mix freely. `actions/` and `src/` coexist; nothing in
   the spec says "if you ship handlers, ship only handlers."
+
+## Realm source
+
+`realm.ts` is the preferred realm definition format; the host reads it directly. The file can import
+as many local definition files as needed. See [TypeScript realms](TYPESCRIPT_REALMS.md) for
+the normative source, import and precedence rules, and [Composing a realm](REALM_COMPOSITION.md)
+for complete examples. No tool converts it to YAML or manifests, and no generated declaration
+files are committed.
+
+YAML realms are legacy and remain supported, including their committed `dist/` and
+`dependencies/manifest.json`, subject to capability-specific migrations. In particular,
+producers using `kind: source` must follow the [`source-tree` migration](VIRTUAL_CYPHER.md#519-source-tree-with-from-jar--the-source-a-jar-was-compiled-from).
+YAML receives no new features. When `realm.ts` is present,
+its evaluated value supplies the whole declaration; adjacent legacy declarations are reported
+and ignored, even if they differ. Invalid TypeScript never falls back to YAML.
+
+The directory and YAML examples below document legacy loading and the meaning of existing
+capabilities. Their presence is not an instruction to create a second declaration for a
+TypeScript realm. New declaration features belong in `realm.ts`.
 
 ## `realm.yml`
 
@@ -208,7 +228,8 @@ tags:
 | `category` | No | What the realm is for: one id from the published list of categories. See [Category](#category). |
 | `tags` | No | Free-text keywords, for finding the realm. They are not its category. |
 | `maturity` | No | The author's own readiness claim: `experimental`, `beta`, `stable` or `deprecated`. Absent means the realm makes no claim — which is **not** a claim of being finished. See [Maturity](#maturity). |
-| `host` | No | Execution host for the Realm's Functions: `docker` or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
+| `host` | No | Execution host for the Realm's Functions: `docker` (the Node bundle host, which needs no container) or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
+| `capabilities` | No | Captured realms only. What the realm asks the owner to grant at admission beyond its handlers and resources. The one value is `model`, which asks for [the model call](HOSTED_EXECUTION.md#the-model-call). The owner may grant none of them. |
 | `optionalLabels` | No | Labels this realm's views read but do not need: each owned by a companion realm that may be absent, and read only under `OPTIONAL MATCH`. See [Optional labels](#optional-labels--reading-a-companion-realm-that-may-be-absent). |
 
 ### Icons
@@ -226,7 +247,7 @@ on it, and a host that ignores the field entirely is still conformant.
 
 **It must be a file the realm ships**, addressed relative to the realm root.
 Hosts are required to refuse anything else — an absolute path, a `..` that
-climbs out of the realm, or a URL:
+climbs out of the realm, a symbolic link that resolves outside it, or a URL:
 
 | Declared | Result |
 |---|---|
@@ -351,19 +372,19 @@ uncategorised rather than infer one.
 
 ## `actions/`
 
-Me keeps this legacy host configuration outside Realm execution. Use the
-[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for Me Realms.
+A captured host keeps this legacy host configuration outside Realm execution. Use the
+[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for captured Realms.
 
-Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape; the framework's `NameOrClassTypeIdResolver` resolves either a registered short name (e.g. `action`, `goal`) **or a fully-qualified class name** (`com.example.MyCustomActionSpec`) to an `ActionSpec` class on the classpath. Host extensions can use either path.
+Action specifications — YAML files that define executable operations. The host's planner picks them by their declared input / output types and runs them as GOAP actions. The `stepType` discriminator selects the shape. Its value is an identifier the realm writes: either a registered short name (e.g. `action`, `goal`) **or a host-extension identifier spelled like a fully-qualified class name** (`com.example.MyCustomActionSpec`). The identifier is an opaque string to the realm; how a host maps it to a shape is the host's. A host refuses an identifier it does not recognise, naming the file.
 
 | `stepType` value | Shape |
 |---|---|
-| `action` | Framework `PromptedActionSpec` — typed LLM call producing `outputTypeName` |
-| `<FQN>` | Any other `ActionSpec` subtype on the classpath. Use this when shipping a host-extension shape whose YAML contract isn't yet stable enough to claim a short name. |
+| `action` | A typed LLM call producing `outputTypeName` |
+| `<identifier>` | A host-extension shape named by its identifier. Use this when shipping a host-extension shape whose YAML contract isn't yet stable enough to claim a short name. |
 
-**Short name vs FQN dispatch.** A short name like `action` is a public contract; once realm authors write it, you can't change the spec's shape without breaking their YAML. Reserve short names only for shapes that have stabilised. FQN dispatch lets a host iterate freely on field names, parsing, and dispatch semantics without committing to a YAML slot upstream. The flip side: an FQN that appears in published realm YAML is itself a public identifier — a host that moves or renames the class must keep the old name resolvable, or every realm that wired against it breaks.
+**Short name vs extension identifier.** A short name like `action` is a public contract; once realm authors write it, you can't change the spec's shape without breaking their YAML. Reserve short names only for shapes that have stabilised. An extension identifier lets a host iterate freely on field names, parsing, and dispatch semantics without committing to a YAML slot upstream. The flip side: an identifier that appears in published realm YAML is itself public — a host must keep accepting it, whatever it renames internally, or every realm that wired against it breaks.
 
-Example host extension (the assistant's predicate-driven `PolicyActionSpec`):
+Example host extension (the reference host's predicate-driven policy action, identifier `com.embabel.world.policy.spec.PolicyActionSpec`):
 
 ```yaml
 # realm-email/actions/policy_email_unreplied.yml
@@ -381,7 +402,7 @@ The framework's resolver calls `Class.forName(stepType)` and deserializes the re
 
 ### `stepType: action` — typed LLM call
 
-The framework's general-purpose `PromptedActionSpec`. The LLM produces a typed object the planner can chain into other actions. `nullable: true` declares that the LLM may return null (no output) — the planner sees the missing binding and replans.
+The general-purpose prompted action. The LLM produces a typed object the planner can chain into other actions. `nullable: true` declares that the LLM may return null (no output) — the planner sees the missing binding and replans.
 
 ```yaml
 # actions/triage-issue.yml
@@ -403,7 +424,7 @@ Fields: `name`, `description`, `llm` (LlmOptions, optional), `inputTypeNames`, `
 
 ### LLM-judged signals — `stepType: action` producing `AttentionVerdict`
 
-LLM-judged attention rules are vanilla `stepType: action` PromptedActionSpecs whose output is an `AttentionVerdict` (a typed `{reason, confidence, tier}` value) and which declare `nullable: true` so the LLM can return null = "skip". The host provides a generic wrap action that lifts `(AttentionVerdict, Signal)` to `AttentionCandidate`, closing the catchup chain.
+LLM-judged attention rules are plain `stepType: action` prompted actions whose output is an `AttentionVerdict` (a typed `{reason, confidence, tier}` value) and which declare `nullable: true` so the LLM can return null = "skip". The host provides a generic wrap action that lifts `(AttentionVerdict, Signal)` to `AttentionCandidate`, closing the catchup chain.
 
 ```yaml
 # realm-email/actions/triage_email_attention.yml
@@ -428,11 +449,11 @@ cost: 0.5
 value: 1.0
 ```
 
-The wrap is a two-step GOAP chain per signal: the PromptedActionSpec emits an `AttentionVerdict`, then the host's wrap action emits the final `AttentionCandidate`. The wrap is keyed off `(AttentionVerdict, Signal)` inputs so it composes generically with *any* LLM-judgment realm — realm-email, realm-slack, realm-calendar, etc. — without needing per-signal-type wrap classes.
+The wrap is a two-step GOAP chain per signal: the prompted action emits an `AttentionVerdict`, then the host's wrap action emits the final `AttentionCandidate`. The wrap is keyed off `(AttentionVerdict, Signal)` inputs so it composes generically with *any* LLM-judgment realm — realm-email, realm-slack, realm-calendar, etc. — without needing per-signal-type wrap classes.
 
 ### Deterministic rules — host-extension via FQN
 
-The assistant ships an in-tree `PolicyActionSpec` for cheap, no-LLM rules over a single signal — fires when its predicate matches and writes an `AttentionCandidate`. **No `surface:` block** — how the candidate gets rendered into a notification is a downstream concern, not the producer's call.
+The reference host ships a policy action for cheap, no-LLM rules over a single signal — fires when its predicate matches and writes an `AttentionCandidate`. **No `surface:` block** — how the candidate gets rendered into a notification is a downstream concern, not the producer's call.
 
 The YAML uses FQN dispatch (the predicate DSL is still iterating, so we don't reserve a short stepType slot upstream yet):
 
@@ -447,7 +468,7 @@ inputTypeNames:
 
 whenExpr: "reviewer == $self and age >= 48h"
 
-# Same top-level cost / value as PromptedActionSpec. Cheap predicate:
+# Same top-level cost / value as a prompted action. Cheap predicate:
 # low cost, standard value — the planner picks this before any LLM
 # judgment on the same signal type.
 cost: 0.01
@@ -456,7 +477,7 @@ value: 1.0
 
 #### `whenExpr` — the predicate DSL
 
-A boolean expression over the matched signal's fields. Parser source: `com.embabel.world.policy.PolicyExprParser`. Grammar (today; expect additions as concrete rules need them):
+A boolean expression over the matched signal's fields. Grammar (today; expect additions as concrete rules need them):
 
 **Operators**, lowest to highest precedence:
 
@@ -508,8 +529,8 @@ Actions are deployed to the host's planner on world load.
 
 ## `goals/`
 
-Me keeps this legacy host configuration outside Realm execution. For Me Realms, declare a
-version-1 [captured goal](HOSTED_EXECUTION.md#me-captured-goal-profile) that binds one approved
+A captured host keeps this legacy host configuration outside Realm execution. For captured Realms, declare a
+version-1 [captured goal](HOSTED_EXECUTION.md#captured-goal-profile) that binds one approved
 handler to Realm-declared input and output types; a legacy file of the shape below inside a
 captured Realm is reported and never parsed. See the
 [captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration).
@@ -1093,7 +1114,7 @@ the declared default, and only a full page reports `PARTIAL_RESULT` (`TRUNCATED`
 >
 > This bites hardest on a paged walk of a slow or throttling source: latency climbs page over page until the request is cancelled part-way, so the fetch that fails is the one that would have returned the *most* data — the large result set, not the empty one.
 
-**Chunking (`maxKeysPerCall`).** Producers chunk the unioned anchor keys into batches of `maxKeysPerCall` — so a traversal over many anchors stays within the endpoint's limit and never becomes N+1. Set it to the endpoint's documented cap: a search `IN`/`OR` (query-length bound, ~50, the `api` default), a dedicated **bulk-by-ids** endpoint (HubSpot `/batch/read` 100, Jira `bulkfetch`), or a `$batch`/composite multiplex (Microsoft Graph 20, Salesforce 25). `sql` defaults to 500.
+**Chunking (`maxKeysPerCall`).** Producers chunk the unioned anchor keys into batches of `maxKeysPerCall` — so a traversal over many anchors stays within the endpoint's limit and never becomes N+1. Set it to the endpoint's documented cap: a search `IN`/`OR` (query-length bound; the `api` default is host-defined and documented, about 50 on the reference host), a dedicated **bulk-by-ids** endpoint (HubSpot `/batch/read` 100, Jira `bulkfetch`), or a `$batch`/composite multiplex (Microsoft Graph 20, Salesforce 25). `sql` defaults to 500.
 
 **Per-key vs batched (`batchSafe`).** A producer batches up to `maxKeysPerCall` keys per call by default. Set **`batchSafe: false`** when one call covering many keys is **not complete per key** — a globally-ranked, capped search is the classic case: GitHub issue search `author:a author:b` returns ONE `updated`-desc list capped at `paging.maxPages × size`, so a prolific author fills the cap and a low-volume colleague's results fall off the end (you'd list them for one question and find nothing for the next). With `batchSafe: false` Virtual Cypher fetches **one key per call**, giving each key its own budget. It is a declared **capability**, not a magic number — you do NOT also shrink `maxKeysPerCall`, so a realm can't reintroduce the starvation bug by forgetting to. (`echoKeyAs` already implies per-key.)
 
@@ -1201,7 +1222,9 @@ for (const p of busy) {
 }
 ```
 
-`params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below. Virtual Cypher calls are available to a captured handler once the owner separately approves `cypher_query`, following [the captured graph-query profile](HOSTED_EXECUTION.md#me-captured-graph-query-profile).
+`params` supplies bound query values as a JSON object; a JSON-encoded object is also supported. Bind values with `$name` parameters. Reads and model calls can expose private data and require the applicable host approvals. A handler's `dryRun` flag controls its proposed effects; it does not provide authorization. Compatibility lenses can use the host code-mode gateway. Captured installations use the handler-binding profile below. Virtual Cypher calls are available to a captured handler once the owner separately approves `cypher_query`, following [the captured graph-query profile](HOSTED_EXECUTION.md#captured-graph-query-profile).
+
+A captured handler has no `gateway.ai`: it reaches a model only through the `model` capability, described in [the model call](HOSTED_EXECUTION.md#the-model-call).
 
 ## `views/` — saved queries, and the two shapes they come in
 
@@ -1354,7 +1377,7 @@ The host retains the same target and serialized arguments through refresh, reche
 owner World and approval on reads, and disables cache reuse. API calls inside the
 handler require their own operation and credential approvals.
 
-This is independent of the selected sandbox backend. The Me implementation exposes
+This is independent of the selected sandbox backend. The reference host exposes
 it through `/api/v1/lenses/{id}/invoke` and the JSON view endpoint. Add
 `background=true` or `waitSeconds` for deferred execution. Preparation retains the
 selected target and serialized arguments; queued work cannot select a new revision.
@@ -1363,8 +1386,8 @@ data; new approval cannot revive an old run. Results and handles are in memory.
 
 The reference host limits active work to 64 runs globally and eight per owner,
 returning HTTP 429 at capacity. Cancelled workers consume capacity until they exit.
-It retains up to 200 settled runs and cancels overdue work using the configured
-background timeout. Cancellation cannot undo completed effects.
+It retains up to 200 settled runs and cancels overdue work after the background timeout,
+which a host sets and documents. Cancellation cannot undo completed effects.
 See [hosted execution](HOSTED_EXECUTION.md) for supported routes and limits.
 
 ### Host-specific legacy definitions
@@ -1607,7 +1630,7 @@ The declaration is narrow, and the engine holds it there:
 - **`Public` is opt-in per label and never inferred.** The rewriter's default stays fail-closed at
   PRIVATE, and a label no source in the world declares public is private.
 
-### Me source authority profile
+### Source authority profile
 
 Source contracts are kept per world. The contracts a world's realms declare decide how that world's
 reads are served — which mirror answers, which coverage record judges a partition, what age limit
@@ -1799,7 +1822,7 @@ cannot meet the deployment's marketplace credential policy, that integration is 
 marketplace tier. The `token-env`, custom-header interpolation, and credential-bearing MCP forms
 documented below are compatibility features for local or explicitly first-party/org-reviewed
 installations. Their trust tier is adoption-visible and they never become marketplace-safe merely
-because they run in Docker.
+because they run in a sandbox or a container.
 
 The typed credential slot is a [key entry](#keysyml--the-keys-a-realm-needs) in a conventional
 realm and a declared credential the owner binds in a captured realm. See
@@ -1818,11 +1841,11 @@ realm and a declared credential the owner binds in a captured realm. See
 
 | Field | Required | Notes |
 |---|---|---|
-| `url` | yes | Spec source. HTTP(S), `file://`, or a bare relative path resolved against the apis.yml file's parent directory (used for vendored specs — see below). |
+| `url` | yes | Spec source. HTTP(S), `file://`, or a bare relative path resolved against the apis.yml file's parent directory (used for vendored specs — see below). A relative path that resolves outside the realm, through `..` or a symbolic link, is refused at load, and `file://` follows the [trust tiers](#apis). |
 | `name` | recommended | Gateway namespace — `gateway.<name>.*`. Falls back to a slugified spec title if omitted. **Always set this** in published realms so the prompt examples work regardless of the spec's `info.title`. |
 | `type` | no | `openapi` (default) or `graphql`. |
 | `auth` | no | `none` (default), `bearer`, `api-key`, `oauth2`. See **Auth** below. |
-| `token-env` | with bearer / api-key | Env-var or credential-store key holding the token. Deprecated in favour of a [key entry](#keysyml--the-keys-a-realm-needs) for the same variable, or of a declared credential in a captured realm. |
+| `token-env` | with bearer / api-key | The name of the key holding the token, which must be a `variable` the realm's own `keys.yml` declares (see [a realm names only its own keys](#auth)). Deprecated in favour of a [key entry](#keysyml--the-keys-a-realm-needs) for the same variable, or of a declared credential in a captured realm. |
 | `headers` | no | Custom HTTP headers; values support `${VAR}` interpolation from credential store / env. |
 | `oauth2` | with `auth: oauth2` | OAuth2 config — see **OAuth2** below. |
 | `tags` | no | Allowlist of OpenAPI tag names. Filters huge specs to a coarse subset. |
@@ -1927,7 +1950,13 @@ Credential references resolve through a host binding keyed by world, context, pr
 grant revision, with context access checked on every call. In the local/first-party compatibility
 tier, `token-env` and `${VAR}` may then resolve from that world's credential store (set via
 `set NAME = ...` in chat or via the admin UI), followed by the process environment. Process fallback
-is unavailable in shared multi-world or untrusted marketplace deployments. Missing credentials mean
+is unavailable in shared multi-world or untrusted marketplace deployments.
+
+**A realm names only its own keys.** A conventional realm's `token-env` and
+`webhook.signature-secret` may name only a `variable` its own [`keys.yml`](#keysyml--the-keys-a-realm-needs)
+declares, so a realm cannot reach a key the owner stored for another realm or the host's own
+environment by guessing its name. Any other name is refused at load, naming the field and the
+undeclared variable. Missing credentials mean
 the entry is skipped at world load with a logged warning; the API never appears in the gateway.
 A captured realm's API operations read only the owner's wallet, through the credential the owner
 bound, and never fall back to the process environment.
@@ -1978,6 +2007,14 @@ The `identity:` block tells the host how to call the provider's `/userinfo` or `
 | `account-id-field` | yes | Top-level JSON field name to read as the stable account identifier. |
 | `display-name-field` | no | Top-level JSON field name for the human-readable label. Falls back to `account-id-field` if absent or blank in the response. |
 
+**Where tokens may go.** `auth-url`, `token-url` and `identity.url` must be `https://` URLs, or the
+entry is refused at load. The client secret and the refresh token go only to `token-url`, and the
+access token only to `identity.url` and the servers of the entry's own OpenAPI document. The host
+follows no redirect on a request carrying any of them, and never logs a URL into which `{token}` was
+substituted. Client credentials are looked up by provider name, so a host sends them only to a token
+endpoint whose host the deployment has accepted for that provider name; an entry naming another host
+is refused at load rather than given them.
+
 Examples:
 
 ```yaml
@@ -2020,7 +2057,7 @@ Two properties a pack author can rely on:
 **Lookup order** for client_id / client_secret:
 1. The user's own **wallet** (per-user override — encrypted and self-service, replacing the retired per-workspace file)
 2. The deployment's **org vault** (the default everyone gets)
-3. `${VAR}` from the pack's `oauth2.client-id` / `client-secret` (escape hatch for power users)
+3. `${VAR}` from the pack's `oauth2.client-id` / `client-secret` (escape hatch for power users, in the local or first-party tier only; a marketplace realm's `${VAR}` is refused at load under the [trust tiers](#apis))
 
 If none resolve, the provider's status reports `not-configured` and Authorize returns an actionable error message instead of silently failing.
 
@@ -2028,7 +2065,7 @@ If none resolve, the provider's status reports `not-configured` and Authorize re
 
 End users **never** paste tokens, IDs, or secrets. Settings → Connected Services → click **Authorize** → consent on the provider's page → done. ConnectedAccounts holds the real account label; `gateway.<name>.*` is live in chat.
 
-**Token refresh** is automatic — the host's `OAuth2Service` rotates expired access tokens using the stored refresh token and writes back any new refresh token the provider issues (HubSpot rotates them on every refresh).
+**Token refresh** is automatic — the host rotates expired access tokens using the stored refresh token and writes back any new refresh token the provider issues (HubSpot rotates them on every refresh).
 
 ## `keys.yml` — the keys a realm needs
 
@@ -2146,8 +2183,10 @@ anything from the response that could identify the key.
 
 ### Realms that declare nothing
 
-`keys.yml` is optional, and a realm without one behaves as before. A host still derives one entry per
-credential variable the realm's APIs refer to (`token-env`, `${VAR}` in `headers`), and presents it as:
+`keys.yml` is optional for a realm that names no key by `token-env`, `webhook.signature-secret` or a
+producer's `*Env` field: each of those must name a `variable` the realm declares here, as
+[a realm names only its own keys](#auth) requires, and the one-line shorthand is enough. For a
+`${VAR}` in `headers`, a host still derives one entry per variable, and presents it as:
 
 | | Derived from the variable |
 |---|---|
@@ -2159,7 +2198,7 @@ credential variable the realm's APIs refer to (`token-env`, `${VAR}` in `headers
 A declared entry takes precedence over a derived one for the same variable, so a realm can adopt
 `keys.yml` one key at a time.
 
-A derived entry resolves the way `token-env` does, so the process environment fallback applies
+A derived entry resolves the way a declared key does, so the process environment fallback applies
 only in the local or first-party tier described under [Auth](#auth).
 
 **Load problems.** A `validate.api` the realm does not declare, a `validate.operation` that API does
@@ -2323,7 +2362,7 @@ realm-name/
 
 ### Handler signature
 
-Every exported async function with a `(ctx, args)` signature becomes a manifest entry at build time; the host registers from the manifest, never by introspecting the code.
+Every exported async function with a `(ctx, args)` signature becomes a manifest entry at build time; the host registers from the manifest, never by introspecting the code. A manifest with no `handlerAbi` is invoked in this form; see [one signature across hosts](#single-file-or-a-typed-project) for `handlerAbi`.
 
 ```ts
 // src/api/docs-editor.ts
@@ -2520,7 +2559,9 @@ design them for that caller:
 
 ### Manifest format
 
-For a TS realm, generated by `embabel-build-manifest` (provided by `@embabel/runtime-types`) — never hand-authored. A wasm realm with no TS build hand-authors the same format (see [Execution hosts](#execution-hosts)). The host reads it at install time.
+Legacy realms use this handler manifest format, either from their existing handler build
+or authored with their single-file JavaScript handler. The host keeps reading it at install.
+A realm with `realm.ts` declares handlers there directly and generates no manifest.
 
 ```json
 {
@@ -2545,7 +2586,7 @@ For a TS realm, generated by `embabel-build-manifest` (provided by `@embabel/run
 | `description` | first JSDoc paragraph | LLM-visible documentation. |
 | `inputSchema` | TS type of `args` parameter | JSON Schema; drives the typed surface on the LLM side. |
 | `outputSchema` | TS type of the unwrapped `Promise<T>` | Same. |
-| `schedule` | manifest author | Optional cron expression (Spring 6-field); the host also runs the Realm Function on this cadence. See [Execution hosts](#execution-hosts). |
+| `schedule` | manifest author | Optional six-field cron expression (second, minute, hour, day of month, month, day of week); the host also runs the Realm Function on this cadence. See [Execution hosts](#execution-hosts). |
 | `onType` | `export class X extends Entity` methods (or manifest author) | The entry is a method on a declared type, surfaced as `<obj>.<name>(args)` rather than a bare gateway function. |
 | `className` | exported class name | Set for class-based type methods; the class to instantiate before invoking `name`. Absent for the function form. |
 
@@ -2611,7 +2652,7 @@ Handlers run with the same trust as LLM-generated code (both are inside the sand
 
 ### Author tooling
 
-The host ships a thin wrapper (`embabel-realm`) that drives the JVM-side surface generation. Most realm authors only ever need `npm run build` for everyday work; `embabel-realm sync` regenerates `.embabel/gateway.d.ts` when the host's surface changes (new realms, new APIs).
+The host ships a thin wrapper (`embabel-realm`) that drives the host-side surface generation. Most realm authors only ever need `npm run build` for everyday work; `embabel-realm sync` regenerates `.embabel/gateway.d.ts` when the host's surface changes (new realms, new APIs).
 
 ```bash
 embabel-realm sync                        # from inside any realm repo
@@ -2620,7 +2661,7 @@ embabel-realm sync ~/dev/realm-hubspot     # or pass an explicit path
 
 ## World execution and isolation boundary
 
-> **Forward-looking contract.** Current Me commonly derives `worldId` from `user.id` and accepts
+> **Forward-looking contract.** The reference host commonly derives `worldId` from `user.id` and accepts
 > legacy user/workspace scope alternatives. The guarantees below are release gates for multi-world
 > and shared-store deployment, not a description of current isolation.
 
@@ -2680,6 +2721,12 @@ in different worlds do not share data, credentials, routes, receipts, canonical 
 caches, even when the same person owns both. Deployment-approved `Public`/reference datasets are the
 only exception.
 
+Composition never widens authority. When an execution reaches a surface another realm contributed,
+effective authority is the intersection of the calling adoption's grants, the callee's, and the
+principal's: a realm never gains a capability by calling one that holds more. The originating realm
+stays attributable on every downstream call and write for the life of the execution, and a nested
+call never replaces it. Two realms that compose must not assemble a capability neither holds alone.
+
 A host may share immutable code only when the canonical full-package `realmDigest` addresses it.
 Sharing a worker never relaxes world scoping. Local and single-tenant deployments run the same path
 with one world; deployment topology is not an authorization control.
@@ -2717,19 +2764,20 @@ require adoption in the fork.
 
 ## Execution hosts
 
-> **Forward-looking contract.** The portable Docker capability boundary, fail-closed unknown-host
-> behavior, and atomic artifact-set publication below require host changes. Until implemented and
-> tested, current Docker/source-validation behavior is not a marketplace security boundary.
+> **Forward-looking contract.** The portable capability boundary of the `docker` host, fail-closed
+> unknown-host behavior, and atomic artifact-set publication below are requirements a host may not
+> yet meet. A host that does not enforce them must not treat its `docker` host or its source
+> validation as a marketplace security boundary.
 
 A realm ships logic and declarations. The platform supplies the sandbox, identity binding, resource
 limits, triggers, and observability. Data enters through declared surfaces and leaves through gateway
 calls. A portable realm never reaches around that boundary: no ambient credentials, direct
 infrastructure, or mutable runtime shared with another realm.
 
-Two consequences are normative:
+Three consequences are normative:
 
 - **Isolation.** Each dispatch runs in a sandbox with exactly the capability set its host defines. One realm's dispatches cannot observe or interfere with another's mutable runtime state, and no realm can change the host-bound world, context, principal, or execution. Realms deliberately share declared types inside a world; graph data is readable only through the current context/access policy or an explicit policy-authorized bridge. An implementation may pool processes and immutable content-addressed code, but every mutable object and gateway call remains world-, context-, and where principal-dependent, principal-scoped.
-- **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway. This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
+- **Statelessness between dispatches.** A handler must assume nothing survives from one dispatch to the next — no globals, no accumulated caches, no in-memory session. Durable state lives in the graph, written and read through the gateway, or in an admitted persistent dependency under the [dependency state rules](TYPESCRIPT_REALMS.md#dependency-state). This is what lets a host run one instance or a thousand: any dispatch can land on any instance, so a realm scales independently of every other realm and of the platform itself.
 - **A binding the runner was not given is NOT DECLARED.** Referencing it throws a `ReferenceError`
   rather than yielding `undefined`, so `if (violation)` does not guard it and neither does
   `violation ?? null`. Only `typeof` does, and it holds whether the identifier was never declared or
@@ -2760,7 +2808,12 @@ Two hosts exist:
 | Host | What runs | Choose it when |
 |---|---|---|
 | `docker` | the compiled `dist/` JS modules, in the host's Node code sandbox | Default. Handlers need npm dependencies or the full TS project layout. Portable realm code still has no raw network or ambient credential access. |
-| `wasm` | `dist/handlers.wasm`, in-process inside the host runtime | Functions are small and dependency-free, per-dispatch latency matters, or the deployment has no container runtime. |
+| `wasm` | `dist/handlers.wasm`, in-process inside the host runtime | Functions are small and dependency-free, per-dispatch latency matters, or the deployment offers no Node code sandbox. |
+
+The `docker` value names the Node bundle host, not a container technology. A host runs a realm's
+Node bundle in whatever conforming way it chooses, natively or in a container, unless the realm
+itself declares a requirement. A realm observes only the capability set below, whichever way the
+host runs it.
 
 The portable contract is capability-based on both hosts: no sockets, DNS, arbitrary `fetch`, process
 environment, inherited file descriptors, or ambient credentials. External access goes through the
@@ -2778,13 +2831,13 @@ Adding a host that consumes an existing artifact class changes nothing for a Rea
 | declared | on disk | placement |
 |---|---|---|
 | absent | `dist/handlers.wasm` present | wasm |
-| absent | no wasm bundle | docker |
+| absent | no wasm bundle and no handler source under `wasm/` | docker |
 | `docker` | no wasm bundle | docker |
 | `docker` | wasm bundle present | **conflict** |
 | `wasm` | bundle present | wasm |
 | `wasm` | no bundle, `wasm/handlers.js` present | wasm — bundle built on load |
 | `wasm` | no bundle, `wasm/handlers.ts` present | wasm — TypeScript compiled and bundled on load |
-| absent | `wasm/handlers.ts` present, nothing else | wasm — handler source under `wasm/` **is** the declaration. It placed such a realm on docker until me#1565, which loaded no functions and showed `verbs: []`; if a host still does that, declare `host: wasm`. |
+| absent | no bundle, `wasm/handlers.js` or `wasm/handlers.ts` present | wasm, built on load: handler source under `wasm/` **is** the declaration |
 | `wasm` | neither | **conflict** |
 
 A conflict surfaces as a world-loading problem with a one-sentence reason and a suggested `host:` fix; the realm's declarative content still loads. `docker` with a bundle present is a conflict deliberately: a stale bundle must never sit silently beside a host that isn't running it.
@@ -2800,10 +2853,10 @@ Three consequences of the table worth stating:
 
 ### Authoring a wasm realm
 
-A realm written with `defineRealm` gets `realm.yml` and `dist/manifest.json` generated from one
-`realm.ts`, and synth copies the handler entry it names (`wasm/handlers.ts` by default) beside
-them; see [TypeScript realms](TYPESCRIPT_REALMS.md). By hand, a realm needs at least the three
-files below: the realm, the handlers and the manifest that registers them.
+A new Wasm realm declares its metadata and handlers in `realm.ts` and ships its handler source.
+The host reads the declaration directly; see [TypeScript realms](TYPESCRIPT_REALMS.md).
+The three-file example below is the existing **legacy YAML** form, which remains readable.
+It is not output to generate from `realm.ts`.
 
 ```yaml
 # realm.yml
@@ -2863,7 +2916,12 @@ The name a form contributes is the export identifier, the property key, or the `
 | `ctx.log(message)` | Guest logging, surfaced in the host's logs against the dispatch. |
 | `ctx.reply({ text, idempotencyKey })` | Dispatch-scoped reply to the triggering channel thread ([routines that call a Realm Function](#routines-that-call-a-realm-function-and-dispatch-scoped-replies--forward-looking)). Returns `{ status }` (one of the reply results listed there). Always present; on a dispatch with no live route it returns `{ status: "NOT_REPLYABLE" }` rather than being absent. |
 
-**Statelessness applies to every form.** Every dispatch runs in a fresh instance, so nothing in the file survives between dispatches — a module-level variable and a value closed over by a default-export object both reset each dispatch. Durable state lives in the graph, through the gateway. `wasm/handlers.js` is compiled as a module; `defineHandler` is a host-provided global available both in that module and in a file with no `export` syntax — reach for it when generating a file that cannot use export syntax.
+**Handler instances are fresh for every dispatch.** Module-level variables and values closed
+over by a default-export object reset each time. Durable state may live in the graph through
+the gateway, or in an admitted persistent SQLite dependency under the
+[dependency state rules](TYPESCRIPT_REALMS.md#dependency-state). `wasm/handlers.js` is compiled
+as a module. `defineHandler` is a host-provided global available both in that module and in
+the legacy form without `export` syntax.
 
 A realistic Realm Function — an activity digest over signals the realm's own event source ingests:
 
@@ -2909,11 +2967,14 @@ The absences are the point: a wasm function is pure logic over gateway calls. A 
 
 ### Single file, or a typed project
 
-Two authoring shapes carry the same function contract:
+The following two layouts describe legacy realms without `realm.ts`. New definitions use
+[source composition](REALM_COMPOSITION.md); their handlers use the separate [handler import rules](TYPESCRIPT_REALMS.md#handler-imports).
 
-- **`wasm/handlers.js` — the zero-toolchain single file.** Plain JavaScript, no `package.json`, no npm. Compiled to `dist/handlers.wasm` on load. The whole realm is `realm.yml` + this file + a hand-authored `dist/manifest.json`. This is the floor.
-
-- **`src/` — a TypeScript project.** When a realm outgrows one file — multiple handlers, shared helpers, real types — it authors a normal TypeScript project: many `.ts` files under `src/`, ordinary `import` semantics between them, a `package.json`, and a typed view of the gateway. The build type-checks, bundles the reachable module graph into one module, **extracts `dist/manifest.json` from the typed exports** (function names, `inputSchema`/`outputSchema` from the handlers' parameter and return types — the same schema-from-types generation TS handlers already use), and compiles the bundle to `dist/handlers.wasm`. The author runs the build; the shipped artifacts are the bundle and the generated manifest. Extraction sees exports only: `defineHandler` is a single-file form, so a `defineHandler` call in a `src/` project contributes no manifest entry and the build warns.
+- **Legacy single file:** `wasm/handlers.js`, `realm.yml` and a hand-authored
+  `dist/manifest.json`. The host compiles the JavaScript handler on load.
+- **Legacy typed project:** `src/` handlers and their existing build artifacts, including
+  `dist/handlers.wasm` and `dist/manifest.json`. The host keeps loading those committed
+  artifacts as before. This is not a declaration-generation path for `realm.ts`.
 
 Types come from two places, both already in the ecosystem: `@embabel/runtime-types` supplies the `Ctx`, event, and envelope types, and a generated `.embabel/gateway.d.ts` (via `embabel-realm sync`) types `ctx.gateway.<namespace>.<method>` against the world's actual tool surface. So `ctx.gateway.signals.recent({ … })` autocompletes and type-checks, and a handler's declared `input`/return types drive the manifest schemas rather than being hand-copied into JSON.
 
@@ -2942,18 +3003,22 @@ events/mappings, channels, types, producers, APIs, MCP/webhook declarations, pro
 surfaces. Adoption and dispatch pin `realmDigest`; changing a non-code declaration can change
 behavior just as surely as changing code.
 
-Two points of this are _forward-looking_ convergence, not shipped today:
+The handler ABI is selected per manifest, not per handler:
 
-- **One signature across hosts.** The canonical handler signature is `(input, ctx)` with the gateway under `ctx.gateway` (as shown throughout). The docker `src/` handler today is `(ctx, args)` with the gateway passed directly as the first argument. The invocation convention is selected by a top-level manifest field `handlerAbi` — one of `"input-ctx"` (the default when absent) or `"ctx-args-legacy"` — applying to the whole artifact, never inferred from parameter names or arity (both are arity-two). Unifying on `(input, ctx)` so one `src/` serves both hosts is the convergence; the `(ctx, args)` form persists only under an explicit `handlerAbi: "ctx-args-legacy"`.
-- **Manifest from types.** The single-file JS path hand-authors `dist/manifest.json`; the TS build extracting it from the typed exports is the same generation the docker `src/` build already points at.
+- **One signature across hosts.** The canonical handler signature is `(input, ctx)` with the gateway under `ctx.gateway` (as shown throughout). A manifest selects the invocation convention for the whole artifact with the top-level field `handlerAbi`, `"input-ctx"` or `"ctx-args-legacy"`, never inferred from parameter names or arity (both are arity-two). Any other value refuses handler binding, naming the field. A manifest with no `handlerAbi` is read as it always has been: on the `docker` host as `"ctx-args-legacy"`, the `(ctx, args)` form with the gateway passed directly as the first argument, and on the `wasm` host as `"input-ctx"`, the only form that host has run. A `docker` realm moves to `(input, ctx)` by declaring `handlerAbi: "input-ctx"`, so one `src/` can serve both hosts. A `realm.ts` declaration has no manifest, and its handlers are always `(input, ctx)`.
+New `realm.ts` definitions keep handler schemas in their `handlers` record. Legacy manifest
+extraction is not a proposed authoring step for those definitions.
 
 ### The manifest, schedules, and type methods
 
-A wasm realm ships `dist/manifest.json` in the same [manifest format](#manifest-format) as TS handlers — hand-authored for the single-file JS path, generated by the build for a `src/` TypeScript project. The schemas drive the typed LLM surface exactly as for docker-hosted functions and are enforced by the host at invocation. `outputSchema` describes the unwrapped payload — the value the handler returns, before the host wraps it in the wire envelope — never the envelope itself. Two entry fields matter here:
+A legacy Wasm realm ships `dist/manifest.json` in the existing [manifest format](#manifest-format).
+A source realm supplies the same callable facts through `realm.ts` `handlers`. In both cases,
+schemas describe the unwrapped handler result and are enforced at invocation. Two fields
+affect scheduling and type methods:
 
 | Field | Meaning |
 |---|---|
-| `schedule` | A cron expression (Spring 6-field, evaluated in the host's timezone). Installation makes the schedule available but **does not activate it**. It starts only after adoption under the same digest-bound grant as a routine, and a realm update pauses it until that grant is valid again. A host shows a realm's Manifest Schedules as routines of an agent it proposes for the realm, so they are adopted the same way. A **Manifest Schedule** passes empty args (`{}`), so every `inputSchema` field must be optional. (A scheduled routine in `agents/` instead passes `{trigger: "cron", firedAt}` under a different input contract; see [routines that call a Realm Function](#routines-that-call-a-realm-function-and-dispatch-scoped-replies--forward-looking).) |
+| `schedule` | A six-field cron expression (second, minute, hour, day of month, month, day of week), evaluated in the host's timezone. Installation makes the schedule available but **does not activate it**. It starts only after adoption under the same digest-bound grant as a routine, and a realm update pauses it until that grant is valid again. A host shows a realm's Manifest Schedules as routines of an agent it proposes for the realm, so they are adopted the same way. A **Manifest Schedule** passes empty args (`{}`), so every `inputSchema` field must be optional. (A scheduled routine in `agents/` instead passes `{trigger: "cron", firedAt}` under a different input contract; see [routines that call a Realm Function](#routines-that-call-a-realm-function-and-dispatch-scoped-replies--forward-looking).) |
 | `onType` | The function is a method on a declared type — callable as `<obj>.<name>(args)` on an in-scope object, not as a bare gateway function. The handler receives the object as `input.self` and the caller's arguments as `input.args`. `schedule` does not combine with `onType`: a scheduled invocation has no receiver. |
 
 A Trigger Registration has one discriminated identity everywhere it appears in adoption, dispatch,
@@ -2997,7 +3062,10 @@ A realm that ships `wasm/handlers.js` is compiled to `dist/handlers.wasm` by the
 - A content fingerprint over the handler source, manifest, and host build-toolchain identity decides whether to rebuild — a change to any member rebuilds, timestamp games don't.
 - The build writes a candidate and atomically replaces the published bundle only on success. A failed build — bad JavaScript, a hung compiler, a missing toolchain — leaves the previous good bundle (or no bundle) in place and the realm's declarative content loaded, with a warning.
 - The host publishes the bundle and manifest atomically as one artifact set. A failed rebuild keeps the previous complete set; a new manifest can never pair with a stale bundle.
-- Bundles are build output. Don't commit them from a `wasm/handlers.js` realm — the host rebuilds on load. A `src/` project is different: the host does not build `src/` on load, so the project ships its built `dist/handlers.wasm` (and generated manifest), and that bundle is the truth if it disagrees with the source.
+- Legacy single-file JavaScript realms are rebuilt on load. Legacy `src/` projects keep
+  shipping their existing built handler artifacts and manifests; the host does not build
+  their `src/` tree on load. New source realms declare handlers only in `realm.ts` and do
+  not generate declaration files.
 
 A realm may instead ship a prebuilt `dist/handlers.wasm` and no source — a **self-contained** realm. The host loads the bundle as-is. This is the right shape when the module is compiled from a language the host has no toolchain for.
 
@@ -3005,11 +3073,11 @@ A realm may instead ship a prebuilt `dist/handlers.wasm` and no source — a **s
 
 Normative for every host: dispatch time, guest memory, and payload sizes are bounded, and crossing a bound is an error the caller sees — never a truncation, never a hang. The concrete values are host operations, not something a realm can declare or rely on. The reference host's defaults:
 
-| Setting | Default | Behaviour at the limit |
+| Limit | Default | Behaviour at the limit |
 |---|---|---|
-| `assistant.wasm.enabled` | `true` | `false` rejects every dispatch with a clear error — the kill switch. Declarative content is unaffected. |
-| `assistant.wasm.dispatch-timeout` | 30s | The dispatch is interrupted and returns an error. Work longer than the budget cannot run on this host. |
-| `assistant.wasm.max-memory-pages` | 1024 (64 MiB) | A module declaring more is rejected with a clear message. |
+| wasm enabled | yes | Turned off, it rejects every dispatch with a clear error: the kill switch. Declarative content is unaffected. |
+| dispatch timeout | 30 seconds | The dispatch is interrupted and returns an error. Work longer than the budget cannot run on this host. |
+| guest memory | 1024 pages (64 MiB) | A module declaring more is rejected with a clear message. |
 | guest I/O | 1 MiB per payload | Each of the function's args, its result, and every host-call request/response is bounded — at 1 MiB or the module's memory cap, whichever is smaller. Oversized payloads error rather than truncate. |
 
 In the reference host, every dispatch is observable: it records the bundle, function, elapsed time, error if any, and how many gateway calls the guest made.
@@ -3059,7 +3127,7 @@ description: "Translates document batches on demand."
 `isolate` is not part of this spec. It is here to state the test every proposed host must pass: if supporting it forces a realm author to change anything beyond `host:`, the design is wrong.
 
 
-### Me captured handler schema profile
+### Captured handler schema profile
 
 The host checks manifest schemas before binding an approved handler, validates input
 before entering its backend, and validates the unwrapped result before returning it.
@@ -3109,11 +3177,11 @@ after output validation. Validation cannot reverse effects the handler already m
 
 ### Captured handler producers
 
-The current Me captured-execution profile excludes producers and virtual joins loaded from live
+The captured-execution profile excludes producers and virtual joins loaded from live
 Realm files. Owner-authored definitions remain available. Producer execution and cache reuse
 retain World and declaration checks; shared cache partitions include both. The legacy Wasm
 producer example demonstrates the compatibility route, not captured resource admission.
-Me also accepts the following captured handler producer profile. Each flat
+A captured host also accepts the following captured handler producer profile. Each flat
 `producers/*.yml` or `.yaml` file contains one version-1 object:
 
 ```yaml
@@ -3138,9 +3206,9 @@ scope and overlay metadata; records cannot supply `userId`, `worldId`, `workspac
 `visibleTo` or `__vc*` properties. Sharing uses an explicit host operation.
 Owner producer names take precedence and suppress conflicting captured joins.
 
-This profile has no caching. A producer may declare [filter pushdown](HOSTED_EXECUTION.md#me-captured-producer-pushdown-profile)
+This profile has no caching. A producer may declare [filter pushdown](HOSTED_EXECUTION.md#captured-producer-pushdown-profile)
 so its handler filters at the source, and the separate
-[paging profile](HOSTED_EXECUTION.md#me-captured-producer-paging-profile) to walk a
+[paging profile](HOSTED_EXECUTION.md#captured-producer-paging-profile) to walk a
 handler's own cursor across multiple calls within one fetch.
 
 ```yaml
@@ -3178,7 +3246,7 @@ A query reaches the producer only by traversing one of its joins from a bound an
 target may anchor another producer's join, so producers chain. Declare a pushdown rule for
 every property the handler can filter on, since a filter left undeclared makes the handler
 fetch everything the key allows. [TypeScript realms](TYPESCRIPT_REALMS.md#producers) shows the
-same producer written with `defineRealm`. Me limits each fetch to
+same producer written with `defineRealm`. The reference host limits each fetch to
 256 keys, 2,048 characters per key, 64 KiB of encoded arguments, 1 MiB of output and
 1,024 rows. It accepts 32 flat declaration files, 8 KiB per file, 64 KiB total and
 eight joins per binding. `page` and `pushdown` are optional; every other field shown is
@@ -3186,16 +3254,16 @@ required. Unknown fields, duplicate names or joins, aliases, tags and undeclared
 profile limits, independent of backend placement.
 
 A handler grant does not grant API or datasource access. Each host call still needs
-its resource approval. Me supports an explicitly approved owned-data query profile:
+its resource approval. A captured host supports an explicitly approved owned-data query profile:
 `gateway.cypher.query({cypher, params})` returns `{rows, warnings, coverage}` and invokes only
 same-installation captured producers. Statements require named owned nodes and a
-final literal LIMIT from 1 to 512. See [hosted execution](HOSTED_EXECUTION.md#me-captured-graph-query-profile)
+final literal LIMIT from 1 to 512. See [hosted execution](HOSTED_EXECUTION.md#captured-graph-query-profile)
 for limits, owner approval and excluded host operations.
 
 ## `mcp/`
 
-Me keeps this legacy host configuration outside Realm execution. Use the
-[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for Me Realms.
+A captured host keeps this legacy host configuration outside Realm execution. Use the
+[captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for captured Realms.
 
 MCP server configurations — each file lists Model Context Protocol servers to connect.
 
@@ -3284,6 +3352,11 @@ binds registration and callback authentication to the world, context, access-pol
 also verifies the current `worldEpoch`. The templated form below is local/first-party compatibility
 syntax.
 
+A `webhooks/` receiver declares no signature verification, so it is a local or first-party
+compatibility form, like a `none` signature on a [webhook event source](#webhook-event-source).
+A marketplace realm shipping one is refused at load, naming the file. A realm that needs inbound
+webhooks there declares an `events/` webhook source with a verified signature.
+
 ```yaml
 # webhooks/github-issues.yml
 - name: github-issues
@@ -3357,9 +3430,9 @@ into the consequence engine. The payload cannot select or override that route.
 | Field | Required | Meaning |
 |---|---|---|
 | `type` | yes | Name of a type declared in this realm (or another loaded realm) whose `parents` includes `Signal`. |
-| `webhook.signature` | yes | Signature scheme the host's built-in verifiers handle. |
-| `webhook.signature-secret` | conditional | Env-var name holding the shared secret. Required for any non-`none` scheme. Conventional realms only: a captured realm's webhook channel names a declared credential in `signature.credential` (see [TypeScript realms](TYPESCRIPT_REALMS.md#channels)). |
-| `webhook.tenancy` | yes | Strategy for routing the inbound webhook to a world. |
+| `webhook.signature` | yes | Signature scheme the host's built-in verifiers handle: `hmac-sha256`, `hmac-sha1`, `jwt` or `none`. Any other value refuses the event source at load. A request whose signature does not verify is rejected before mapping, and emits no signal. `none` is a local or first-party compatibility form under the [trust tiers](#apis); a marketplace realm declaring it is refused at load. |
+| `webhook.signature-secret` | conditional | The name the shared secret is stored under, never the secret itself, under the same trust-tier rules as `token-env`. Required for any non-`none` scheme. Conventional realms only: a captured realm's webhook channel names a declared credential in `signature.credential` (see [TypeScript realms](TYPESCRIPT_REALMS.md#channels)). |
+| `webhook.tenancy` | yes | Strategy for routing the inbound webhook to a world: `path-token`, `payload-field` or `header`; any other value refuses the event source at load. Under `payload-field` a field of the verified payload only chooses among the routes registered for the verified secret, and a value naming no such route is rejected, so the payload never reaches another world. |
 | `webhook.mapping` | yes | Map of type-property → JSONPath. Every required property of the `Signal` parent (`id`, `occurredAt`, `sourceKind`, `sourceId`) must be covered. |
 | `webhook.tier-when` | no | Tier-override map. Each entry's value is a Jinja boolean expression evaluated against the parsed payload. First true wins; default tier is `AMBIENT`. |
 
@@ -3426,7 +3499,7 @@ starting a provider connector. A Realm declaration, `auto-start` value or proces
 variable grants no runtime authority. The following legacy connector format applies only
 where the host explicitly supports it; it does not replace the owner lifecycle API.
 
-A realm configures a connector the host implements — host-extension via FQN, the same dispatch pattern as `PolicyActionSpec`:
+A realm configures a connector the host implements, named by a host-extension identifier as a `stepType` is (this one is the reference host's):
 
 ```yaml
 # channels/discord.yml
@@ -3502,10 +3575,12 @@ sweeps:                               # cold materializations it keeps filled �
 | Field | Required | Meaning |
 |---|---|---|
 | `name` | yes | Stable id. A world agent of the same name shadows the realm's. |
-| `job` | yes | One sentence, in the words of the person who will answer for it. |
+| `job` | yes | One sentence, in the words of the person who will answer for it. It is the one-line description a host shows beside the agent in a pick list. |
 | `routing` | no | What to ask this agent about, for a host that routes questions to colleagues. |
 | `persona` | no | A personality the host already has, or one this realm ships under `personalities/`, named `<realm>/<slug>` to say which realm's (`realm-bible/jonathon`). A persona confers no authority, but it is part of what the sponsor signs: for an agent people talk to it is the behaviour, guardrails included (see [Signed versions](#signed-versions)). |
 | `conversation` | no | How the agent is talked to: the realms it reaches, the host tools it keeps, the skills it brings in by name, its model role and the sampling a caller may ask for. See [Talking to an agent](#talking-to-an-agent). |
+| `prompt` | no | A markdown file beside the agent file under `agents/`, named by its plain file name (`coder.md`). Its text is the agent's instructions for a conversation. A host that runs a conversation through an outside coding agent gives it these instructions at the start of the session. A value with a `/`, a `..`, an absolute path, or a file that is a symbolic link is refused as a loading problem naming the agent. A missing or unreadable file is reported as a loading problem, and the agent loads with no prompt. |
+| `asks` | no | Suggested first questions, a list of short strings a host may offer as one-click asks. |
 | `routines[]` | no | The work it does without being asked. Fields below. |
 | `duties[]` | no | Conditions it keeps true, each naming the view, lens or DERIVE label that should hold. _Forward-looking._ |
 | `sweeps[]` | no | Cold materializations it keeps filled, each naming a view of this realm's. See [Sweeps](#sweeps--the-cold-materializations-an-agent-keeps-filled). |
@@ -3652,6 +3727,45 @@ authority:
 `sampling` declares no temperature. Current models ignore a sampling temperature or reject one, so a
 host sets none; a `temperature` an agent file still declares is ignored.
 
+> **Open question: what `realms: []` means.** The table says what an omitted `realms` reaches, the
+> realm that ships the agent, but not what an empty list reaches: no realm, or every realm the world
+> has. A focus already says an empty `realms` means no realm skills. Options: `[]` reaches no realm,
+> as for a focus; `[]` reaches every realm in the world; or `[]` is a validation error, so the author
+> says which they meant.
+
+> **Open question: whether `builtins` covers only the host's own tools.** The table says `builtins`
+> keeps the host's own tools and that `realms` governs a realm's tools. It does not say what happens
+> to the tools an agent runtime brings with it, such as a coding agent's shell and file editing, when
+> a host runs the conversation on such an agent. Options: state that `builtins` governs only the
+> tools the host serves, and the runtime's own tools are out of its reach; or extend `builtins` to
+> them, so a host must turn off what a category does not keep, or refuse to run the agent on that
+> runtime.
+
+> **Open question: what `views`, `memory`, `attachments`, `images` and `apps` keep.** The table
+> names eleven categories and defines none. Most read plainly enough for a host to place its tools,
+> but these five leave real choices open: whether `views` runs a realm's saved views or also writes
+> them, whether `memory` is the speaker's memory, the agent's, or both, whether `attachments` and
+> `images` are the files a person sends or files the agent makes, and whether `apps` runs a realm's
+> apps or builds new ones. Options: define each category by what its tools do; define each by a list
+> of reference tools; or leave them to the host and require it to report which categories it honours.
+
+**A prompt and suggested asks.** An agent people talk to may also carry a `prompt` and a list of
+`asks`. Here `coder.md` sits beside `coder.yml` under `agents/` and holds the agent's instructions
+for a conversation:
+
+```yaml
+# agents/coder.yml
+name: coder
+job: Answers questions about this repository's code from the realm's index.
+prompt: coder.md
+asks:
+  - Where is the Router type defined, and which modules use it?
+  - What would a change to the Router type touch?
+```
+
+A host lists every agent a loaded realm ships, qualified by realm (`code.coder`), and a realm with
+no agents is absent from that list.
+
 #### Scope it to the job
 
 An agent's conversation SHOULD reach the fewest tools its job needs, and a realm SHOULD name its
@@ -3683,6 +3797,21 @@ one of those categories; the skills `skills` names; and the few a host keeps on 
 world's own APIs, not a host tool or skill that belongs to no named category. A host SHOULD report the tool surface each turn
 was offered, so an author can check it, and an author SHOULD check it before judging how the agent
 behaves: an agent that misbehaves with tools it should not have is a scoping defect first.
+
+> **Open question: which tools every conversation keeps.** The paragraph above names "the few a host
+> keeps on every conversation" by example, its notes and progress reporting, but does not list them,
+> so an author cannot tell what `builtins: false` with `realms: []` still leaves. Options: the spec
+> lists the kept tools by purpose and a host keeps nothing else; each host decides and reports them
+> with the turn's tool surface; or the kept tools become a category of their own that `builtins:
+> false` can drop.
+
+> **Open question: how categories apply when namespaces are reached only through scripts.** On some
+> hosts the model reaches a host namespace only by writing a script that calls
+> `gateway.<namespace>.*`. A category then could apply in two places, the script tool and the
+> namespaces a script may call, and the spec does not say how they combine. Options: `code` keeps
+> the script tools and every other category only filters what a script may call; naming any such
+> category also keeps the script tools, limited to its namespaces; or a category covers only tools
+> offered to the model directly, and a script reaches every host namespace.
 
 **Who can be talked to.** Only an agent that may work: signed, with a sponsor, active, not off duty,
 and in a world that is not halted. A host refuses a conversation with any other agent and says
@@ -3746,9 +3875,8 @@ The triggering event is bound in scope as one normalised shape, whatever the sig
 
 ```ts
 signal.id, signal.typeName, signal.subject, signal.occurredAt
-signal.source.{ kind, id, label, url }
-signal.properties.<field>   // type-specific fields — for a realm signal these are the event's
-                            // mapping keys (repo, number, author, …); read them from here
+const { kind, id, label, url } = signal.source
+signal.properties[field]   // Use an event mapping key, such as repo, number or author.
 trigger                     // "signal" | "cron"
 now                         // ISO-8601 timestamp of this run
 dryRun                      // true when being tested — GUARD every external effect with if (!dryRun)
@@ -3896,7 +4024,7 @@ execution out of band; none is serialized into the action input. The action stay
 | `nodeLabels` | list&lt;string&gt; | Every Neo4j label on the node |
 | `nodeProperties` | object | Map of realm-visible properties on the node. Reserved host metadata is redacted. |
 
-**Output type**: `DecorationResult` (a host-provided domain type). Action declarations set `outputType: com.embabel.world.kg.decoration.DecorationResult`.
+**Output type**: `DecorationResult` (a host-provided domain type). Action declarations set `outputType: com.embabel.world.kg.decoration.DecorationResult`, the reference host's identifier for that type.
 
 ```ts
 interface DecorationResult {
@@ -4172,9 +4300,9 @@ duties need `vc_relevance` mapped to something better than the cheapest model. _
 
 Prompt contributions — optional content **appended to every chat system prompt** for every user with the realm installed. Currently supports `examples.md`.
 
-> **⚠️ Tax on every chat turn.** Bytes you add here are paid by every user, every turn, even when they're not invoking your realm. Hosts enforce a soft size ceiling (Embabel's reference host: 1024 bytes/realm, configurable via `assistant.realm-loader.prompt-max-bytes`); over-budget realms still load but the host surfaces a warning in the world problems list.
+> **⚠️ Tax on every chat turn.** Bytes you add here are paid by every user, every turn, even when they're not invoking your realm. Hosts enforce a soft size ceiling (the reference host: 1024 bytes per realm by default, configurable by the operator); over-budget realms still load but the host surfaces a warning in the world problems list.
 >
-> **Treat `prompts/` as a pointer, not a manual.** Tell the LLM the capability *exists* and where to find the routing detail. Put the actual workflow examples in a [Skill](#skills--skill-descriptors), which the LLM activates on demand only when relevant — paid only when used.
+> **Treat `prompts/` as a pointer, not a manual.** Tell the LLM the capability *exists* and where to find the routing detail. Put the actual workflow examples in a [Skill](#skills), which the LLM activates on demand only when relevant, so its content is paid for only when used.
 
 ### Recommended shape
 
@@ -4294,7 +4422,7 @@ slots:
 | `slots[].default` | yes | The value before anything has been observed. |
 | `slots[].range` | for `ordinal`/`ratio` | `[min, max]` inclusive. A host clamps to it rather than failing a turn. |
 | `slots[].stages` | for `stage` | The ordered states. Movement need not be forward. |
-| `slots[].limit` | no | Longest `text`; most items in a `list` or `entities`. A host caps whether or not one is given. |
+| `slots[].limit` | no | Longest `text`, in characters; most items in a `list` or `entities`. A host caps whether or not one is given, at a value it sets and documents. |
 
 ### The slot types
 
@@ -4678,6 +4806,10 @@ each installed realm's `hints/`, one parse failure costing that file — recorde
 
 ## Validating a realm in CI
 
+> **Tools (non-normative).** This section describes one validator, the reference host's, and the
+> workflow this repository publishes for it. This specification, not that validator or its image,
+> defines conformance: a disagreement between them is a defect in the validator.
+
 `realm_validate` answers "would this load?" inside a running appliance. The same checks run with no
 appliance at all, so a realm repository can make them a **required check** — including on pull
 requests from forks, which can reach neither an appliance nor its MCP door. They cover what
@@ -4783,7 +4915,7 @@ Realms are discoverable via the host's directory system:
 ## What's intentionally not in a realm
 
 - **Code that runs with host privileges.** No JVM bytecode, no native libraries, no classpath contributions. Realm code executes only inside a host-managed sandbox — the code sandbox for `dist/` JS handlers, the capability-scoped wasm runtime for `dist/handlers.wasm` (see [Execution hosts](#execution-hosts)) — never as the host itself.
-- **Spring beans, host configuration changes.**
+- **Host components, host configuration changes.**
 - **User credentials.** Realms carry credential references, never values. Marketplace realms use
   host-vetted typed slots and auth profiles. Environment-variable references are local or explicitly
   first-party/org-reviewed compatibility syntax only.
@@ -4826,13 +4958,13 @@ written permission.
 
 See [NOTICE.md](NOTICE.md) for the full statement of rights.
 
-The Me host also accepts [authenticated external source events](HOSTED_EXECUTION.md#authenticated-source-ingress)
+The reference host also accepts [authenticated external source events](HOSTED_EXECUTION.md#authenticated-source-ingress)
 under the same captured source approval and durable receipt contract.
 
-The Me captured host excludes legacy Realm StepSpecs and MCP subprocess registrations.
+A captured host excludes legacy Realm StepSpecs and MCP subprocess registrations.
 Use captured handlers and their versioned surface bindings; see
 [the migration contract](HOSTED_EXECUTION.md#legacy-executable-migration).
 
-Me host SQL readers and learning use [approved owner targets](HOSTED_EXECUTION.md#approved-sql-callers).
+Host SQL readers and learning use [approved owner targets](HOSTED_EXECUTION.md#approved-sql-callers).
 Legacy datasource YAML does not authorize a connection. The current profile is read-only;
 SQL remains behind Virtual Cypher and typed host operations, outside the guest protocol.
