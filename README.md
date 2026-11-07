@@ -84,9 +84,9 @@ realm-name/
 
 ### Legacy YAML layout
 
-A realm without `realm.ts` is read from YAML files. This layout is legacy: it remains supported,
-receives no new features, and is what a realm uses for a capability that is
-[not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+A realm without `realm.ts` is read from YAML files. This layout is legacy: it remains supported
+and receives no new features. Every declaration in it has a `realm.ts` field
+([parity](TYPESCRIPT_REALMS.md#parity-with-yaml)), and YAML files beside a `realm.ts` still load.
 
 ```
 realm-name/
@@ -242,9 +242,8 @@ for declarative realms. Authors choose freely per file.
 ### Choosing a shape
 
 - Start with `realm.ts` and declarations: types, producers and views
-  need no handler code. A capability that is
-  [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts)
-  keeps the realm in the legacy YAML form.
+  need no handler code. Every YAML declaration has a `realm.ts` field
+  ([parity](TYPESCRIPT_REALMS.md#parity-with-yaml)).
 - Start declarative. If a declaration (or, in a legacy realm, a YAML
   `stepType: action`) can express what you need, that's the right
   tool — no build step, no runtime code path, the host's planner
@@ -280,8 +279,7 @@ TypeScript realm. New declaration features belong in `realm.ts`.
 
 The metadata file of a legacy YAML realm, required at its root. A `realm.ts` realm declares
 the same fields on its default export instead, and has no `realm.yml`; see
-[realm metadata](TYPESCRIPT_REALMS.md#realm-metadata). `realmLabel` and `optionalLabels` are
-[not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+[realm metadata](TYPESCRIPT_REALMS.md#realm-metadata), `realmLabel` and `optionalLabels` among them.
 
 ```yaml
 name: github
@@ -451,7 +449,7 @@ uncategorised rather than infer one.
 
 ## `actions/`
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts). The YAML below is the legacy form.
+> **In `realm.ts`:** `actions`, a record keyed by action name whose entries are the files below; see [conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations). A YAML file beside `realm.ts` loads too.
 
 A captured host keeps this legacy host configuration outside Realm execution. Use the
 [captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for captured Realms.
@@ -610,7 +608,7 @@ Actions are deployed to the host's planner on world load.
 
 ## `goals/`
 
-> **In `realm.ts`:** a captured realm declares [`goals`](TYPESCRIPT_REALMS.md#goals) bound to its handlers. The conventional goals below are [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** a captured realm declares [`goals`](TYPESCRIPT_REALMS.md#goals) bound to its handlers; a conventional realm declares the goals below as `goals`, keyed by name ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)).
 
 A captured host keeps this legacy host configuration outside Realm execution. For captured Realms, declare a
 version-1 [captured goal](HOSTED_EXECUTION.md#captured-goal-profile) that binds one approved
@@ -1315,7 +1313,7 @@ A captured handler has no `gateway.ai`: it reaches a model only through the `mod
 
 ## `views/` — saved queries, and the two shapes they come in
 
-> **In `realm.ts`:** a captured realm declares `views` as a list of the entries below; see [conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations). A conventional realm's views are [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts). The YAML files below are the legacy form.
+> **In `realm.ts`:** `views`, a list of the entries below, in either profile; see [conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations).
 
 A realm ships named Cypher queries under `views/*.yml`. They appear in the console's Views list and
 are runnable by name, which is most of what they are for. The part that is easy to miss is that one
@@ -1427,7 +1425,7 @@ columns empty and changes no row.
 
 ## `lenses/`
 
-> **In `realm.ts`:** a captured realm declares [`capturedLenses`](TYPESCRIPT_REALMS.md#lenses-and-watches). Conventional lenses are [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** a captured realm declares [`capturedLenses`](TYPESCRIPT_REALMS.md#lenses-and-watches); a conventional realm declares the lenses below as `lenses`, keyed by id ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)).
 
 ### Captured handler binding
 
@@ -1568,7 +1566,7 @@ it directly through the named-view surface rather than using its name as a label
 
 ## `sources.yml` — declaring how a COLLECTION behaves
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts); a realm that needs `sources.yml` uses the legacy YAML form.
+> **In `realm.ts`:** `sources`, the list of entries below; see [declaration files](TYPESCRIPT_REALMS.md#declaration-files).
 
 `producers/` say how to *fetch* records. `sources.yml` says what the collection *is*: how big, what it
 can be filtered by, what order it arrives in, how often it changes, and whether it should be mirrored
@@ -1878,7 +1876,7 @@ key is a warning that names the key it was probably meant to be.
 
 ## `reference/`
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts); a realm that ships reference data uses the legacy YAML form.
+> **In `realm.ts`:** `reference`, keyed by file name, each the list of records a file below holds ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)). Large data can stay as files beside `realm.ts`, where they load.
 
 Reference (catalog / config) data a realm **brings into the KG** — the set of entities a realm's types describe that should exist regardless of what the user has done. Where `producers/` fetch data on demand and `populate` mirrors an external system, `reference/` seeds a fixed, realm-authored dataset: a controlled vocabulary, a lookup catalog, a set of well-known entities. Each `.yml` file in `reference/` is a list of records seeded (idempotently) into the KG on world load.
 
@@ -1907,7 +1905,7 @@ This lets a realm own its reference data as *data*, not as a hardcoded list insi
 
 ## `apis/`
 
-> **In `realm.ts`:** a captured realm declares [`apis`](TYPESCRIPT_REALMS.md#apis), each vendoring one OpenAPI document under `apis/`. A conventional realm's API entries are [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts). The YAML files below are the legacy form.
+> **In `realm.ts`:** a captured realm declares [`apis`](TYPESCRIPT_REALMS.md#apis); a conventional realm declares the entries below as `apis`, keyed by name ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)). The vendored document stays a file under `apis/`.
 
 API entries — each `.yml` file in `apis/` is a list of API definitions loaded on world init. Each entry compiles into a typed `gateway.<name>.*` namespace inside `execute_javascript` / `execute_python`.
 
@@ -2166,7 +2164,7 @@ End users **never** paste tokens, IDs, or secrets. Settings → Connected Servic
 
 ## `keys.yml` — the keys a realm needs
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts). A `realm.ts` realm that needs a secret is captured and declares [`credentials`](TYPESCRIPT_REALMS.md#credentials) the owner binds.
+> **In `realm.ts`:** `keys`, the list of entries below ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)). A captured realm declares [`credentials`](TYPESCRIPT_REALMS.md#credentials) the owner binds.
 
 A realm that calls a vendor with an API key declares that key here: what to call it, where somebody
 gets one, the value(s) it takes, and how the host can tell whether a value works. Hosts use the
@@ -3368,7 +3366,7 @@ for limits, owner approval and excluded host operations.
 
 ## `mcp/`
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** `mcp`, keyed by file name ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)); the reference host does not yet load it from `realm.ts` and says so, and an `mcp/` file beside `realm.ts` loads.
 
 A captured host keeps this legacy host configuration outside Realm execution. Use the
 [captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for captured Realms.
@@ -3404,7 +3402,7 @@ shared-tenancy boundary.
 
 ## `commands/`
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** `commands`, keyed by file name ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)); the reference host does not yet load it from `realm.ts` and says so, and a `commands/` file beside `realm.ts` loads.
 
 Captured commands map a slash name to an approved handler in the same Realm installation.
 They do not grant handler access or select a host action.
@@ -3453,7 +3451,7 @@ description: Fix an issue
 
 ## `webhooks/`
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts). A captured realm receives webhooks through a [webhook channel](TYPESCRIPT_REALMS.md#channels).
+> **In `realm.ts`:** `webhooks`, keyed by name ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)). A captured realm receives webhooks through a [webhook channel](TYPESCRIPT_REALMS.md#channels).
 
 Webhook registrations — declare webhooks the realm wants to receive. When the realm is installed and the host has a public URL, these are registered with the external service.
 
@@ -3508,7 +3506,7 @@ The bare-webhook flow — payload arrives, gets wrapped in a `WebhookEvent`, the
 
 ## `events/` — event ingestion
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts). A captured realm publishes events from [channels and sources](TYPESCRIPT_REALMS.md#sources-consumers-and-triggers).
+> **In `realm.ts`:** `events`, keyed by file name, each the list a file below holds ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)). A captured realm publishes events from [channels and sources](TYPESCRIPT_REALMS.md#sources-consumers-and-triggers).
 
 Unifies push (webhook) and pull (polling) sources behind a single contract: **emit typed `Signal`s into the host's consequence engine.** A signal type is a `DomainType` declared in `types/` whose `parents` includes `Signal`.
 
@@ -3602,7 +3600,7 @@ No JVM bytecode is shipped — realms that need behaviour beyond mapping should 
 
 ## `channels/` — realm-shipped channel connectors
 
-> **In `realm.ts`:** a captured realm declares [`channels`](TYPESCRIPT_REALMS.md#channels) with `connecting`. The conventional connectors below are [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** a captured realm declares [`channels`](TYPESCRIPT_REALMS.md#channels) with `connecting`; a conventional realm declares the connectors below as `channels`, keyed by name ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)).
 
 A channel is a general data pipe, including provider messages, webhooks, database changes
 and Realm-produced events. It may carry data in either direction. `channels/` declares
@@ -3657,7 +3655,7 @@ An unknown `type` is reported against the file and that channel is skipped; the 
 
 ## `agents/` — Agents and their Routines
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** `agents`, keyed by file name ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)).
 
 An **Agent** is a named colleague a realm proposes: a job, the routines that do its work, and the
 duties it keeps. Where `events/` produces signals, an agent's **Routines** react to them or to a
@@ -4108,7 +4106,7 @@ Proactive sends to a channel with no triggering signal are a different authority
 
 ## `decorations/` — scheduled KG node enrichment
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** `decorations`, keyed by file name ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)); the reference host does not yet load it from `realm.ts` and says so, and a `decorations/` file beside `realm.ts` loads.
 
 A realm drives enrichment of nodes already in the knowledge graph by declaring **decoration manifests**. Each manifest binds a realm-declared `action` to a set of Neo4j labels and a cadence; the host's decoration scheduler walks candidate rows, invokes the action per node, and persists the result.
 
@@ -4420,7 +4418,7 @@ duties need `vc_relevance` mapped to something better than the cheapest model. _
 
 ## `prompts/`
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** prompts are text, not declarations: the files below sit beside `realm.ts` and load.
 
 Prompt contributions — optional content **appended to every chat system prompt** for every user with the realm installed. Currently supports `examples.md`.
 
@@ -4501,7 +4499,7 @@ Exemplar: `realm-movie`'s `skills/movie/SKILL.md` — rating a film when no scor
 
 ## `notebook/`
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** `notebook`, keyed by file name ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)).
 
 What a persona keeps about one conversation, across its turns. Each file under `notebook/` is one
 reusable **set** of typed **slots**; a persona includes sets by name.
@@ -4624,7 +4622,7 @@ a list in this document.
 
 ## `personalities/`
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** personalities are templates, not declarations: the files below sit beside `realm.ts` and load.
 
 Each subdirectory under `personalities/` is one persona the host can run the assistant as — its voice, behaviours, guardrails, and display name. The host renders the chat system prompt by including Jinja templates from the active persona's directory; switching personality is a directory swap, not a prompt rewrite.
 
@@ -4742,7 +4740,7 @@ A realm's personality is referenced by slug (its directory name) from a `focuses
 
 ## `focuses/`
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** `focuses`, keyed by name ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)).
 
 A **focus** is a named scoping of the chat surface — a subset of realms whose skills the chat LLM can see, plus an optional persona override. The point is routing reliability: a 30-skill world gives even a sharp realm skill room to lose to a competitor; strip the competitors out and the LLM has nothing to confuse the right skill with.
 
@@ -4909,7 +4907,7 @@ person runs it, on a system they have decided is disposable.
 
 ## `hints/`
 
-> **In `realm.ts`:** [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts).
+> **In `realm.ts`:** `hints`, keyed by file name, each the list a file below holds ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)).
 
 Tips the realm ships for the humans using the world it is installed in — shown by the host's
 UIs (the chat surfaces, the worlds console) as tip-of-the-day cards. Content follows

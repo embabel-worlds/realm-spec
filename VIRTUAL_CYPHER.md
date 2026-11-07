@@ -1804,9 +1804,8 @@ SELECT query ONCE; consumers only ever see the virtual join, and no query author
   world's credential store, and from the process environment only in a local or first-party
   installation. A marketplace realm cannot read the host's environment through one. Like
   `token-env`, each may name only a `variable` the realm's own `keys.yml` declares; any other name
-  refuses the producer at load, naming the field and the undeclared variable. `keys.yml` is
-  [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts), so a
-  realm whose endpoint needs a key is a legacy YAML realm.
+  refuses the producer at load, naming the field and the undeclared variable. A `realm.ts` realm
+  declares the same entries as `keys` ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)).
 
 Cost every consumer should know: each key batch is one live query against an endpoint the realm
 does not control. Public endpoints enforce their own timeouts and rate limits; a realm should
@@ -2118,8 +2117,8 @@ foreign key, with the full column list pre-written into an open-mode `expose:` b
 scaffold is a legacy YAML realm, because its datasource has no `realm.ts` form yet: inspect it,
 prune the exposure, flip `mode: governed`, and no query that touched only exposed data changes.
 
-**Stored procedures.** A legacy YAML realm may publish stored procedures as TYPED verbs in
-`<realm>/sql/procedures.yml` ([not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts)) — the declaration IS the allowlist (a procedure the realm does
+**Stored procedures.** A realm may publish stored procedures as TYPED verbs in `realm.ts`
+`procedures` or `<realm>/sql/procedures.yml` ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)) — the declaration IS the allowlist (a procedure the realm does
 not name does not exist; nothing is ever exposed by introspection), mirroring the GraphQL
 `mutations:` gate. Declared args become the verb's typed signature on the code-mode surface
 (`gateway.<datasource>.<name>`); result rows never include credential-shaped columns.
