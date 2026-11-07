@@ -23,8 +23,8 @@ A store usually spans lanes: Drive file listings are KG (a `driveFiles` producer
 
 **Declaring instead of coding.** When the content is text the realm can render from data the world
 holds, or pages the host can fetch unaided, no handler is needed: declare a `lane: documents` source
-in `sources.yml` (README, "`lane: documents`"; legacy YAML only, since `sources.yml` is
-[not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts)) and the host ingests, versions, refreshes and prunes it
+in the conventional `sources` field of `realm.ts`, which holds `sources.yml`'s entries (README,
+"`lane: documents`"; [declaration files](TYPESCRIPT_REALMS.md#declaration-files)) and the host ingests, versions, refreshes and prunes it
 under the same `uri` contract as §3. The surface below is for sources that need the realm's own code —
 OAuth, change feeds, multi-step exports.
 

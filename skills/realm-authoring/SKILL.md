@@ -10,9 +10,9 @@ as needed. The host reads it directly. Do not generate or commit YAML or manifes
 Start with [Composing a realm](https://github.com/embabel-worlds/realm-spec/blob/main/REALM_COMPOSITION.md) and the
 [TypeScript contract](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md). Existing YAML realms remain readable
 under the [legacy compatibility and migration rules](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility)
-and receive no new YAML features. A few capabilities have no `realm.ts` form yet; they are
-listed in one table, [not yet expressible in `realm.ts`](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts), and a realm that needs one stays in the legacy YAML form. A YAML
-file beside `realm.ts` is not read, so never write one to fill a gap. A realm contains no JVM
+and receive no new YAML features. Every YAML declaration has a `realm.ts` field
+([parity](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#parity-with-yaml)); write new declarations there. YAML files beside
+`realm.ts` still load, and `realm.ts` wins an id both declare. A realm contains no JVM
 bytecode, host configuration or user credentials.
 
 ## First decision: WHICH AUTHORING PATH ARE YOU ON?
@@ -56,14 +56,12 @@ checkout is mounted.
   idiomatic methods, or giving a type *behaviour* (verbs). Declare each one under `handlers` in
   `realm.ts` and write it in `wasm/handlers.ts`; the host builds it. `src/` is the legacy
   typed-project form.
-- **Check the gaps first.** If the realm needs something [not yet expressible in `realm.ts`](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts), such as `keys.yml`, DERIVE
-  `rules/`, `agents/` or a conventional view, write the realm in the legacy YAML form.
+- **Check the gaps first.** [Not yet expressible in `realm.ts`](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts) lists what is left: templates and text files stay beside `realm.ts`, where they load.
 
 ## The pieces (read the spec section before writing one)
 
-Write each piece in `realm.ts` where the middle column gives a field. "Legacy YAML only" means the
-piece has no `realm.ts` form yet, so a realm that needs it is written in the legacy YAML layout
-throughout, with the directory named in the spec section.
+Write each piece in `realm.ts` where the middle column gives a field. A "file beside `realm.ts`"
+is a template or text file the realm ships next to its definition, where it loads.
 
 | Want to… | In `realm.ts` | Spec section |
 |---|---|---|
@@ -73,35 +71,35 @@ throughout, with the directory named in the spec section.
 | attach your records to a spine (yours, another realm's, or Person/Organization) | `types`, `hub` on the property carrying the key | Virtual Cypher §5.4 |
 | a shared KIND of record (every ticket is a `SupportCase`) | `types`, `parents` | LABELS_AND_COMPOSITION.md |
 | fetch a type **on demand** by traversal | `types` `virtualJoins` + `producers` | "Joining types on demand" (Virtual Cypher), TYPESCRIPT_REALMS.md "Conventional declarations" |
-| a named, parameterized ANSWER a caller runs by name | `views` (captured realm); legacy YAML only in a conventional realm | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
+| a named, parameterized ANSWER a caller runs by name | `views` (both profiles) | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
 | the TypeScript a realm actually runs | `handlers` + `wasm/handlers.ts` (ONE entry file) | TYPESCRIPT_REALMS.md "Handlers", "`wasm/`" |
 | a method on a type (a **verb**) | a handler with `onType` | TYPESCRIPT_REALMS.md "Handlers" (legacy: `src/api/*.ts`, "`src/` and `tests/`") |
 | a WebAssembly module a handler uses (SQLite, an engine) | `dependencies` | TYPESCRIPT_REALMS.md "Dependencies" |
 | ask for a secret the owner binds (recommended for new realms) | `credentials` (captured realm) | TYPESCRIPT_REALMS.md "Credentials" |
-| call an external REST API | `apis` + a vendored OpenAPI document under `apis/` (captured realm) | TYPESCRIPT_REALMS.md "APIs"; conventional API entries are legacy YAML only ("`apis/`") |
+| call an external REST API | `apis` + a vendored OpenAPI document under `apis/` (captured realm), or conventional `apis` entries | TYPESCRIPT_REALMS.md "APIs", "Conventional declarations" |
 | call a GraphQL API | `graphql` (captured realm) | TYPESCRIPT_REALMS.md "GraphQL" |
 | a live connection, its event sources and consumers | `connecting({credentials, channels, sources, consumers})`, `dataPipes`, `triggers` (captured realm) | TYPESCRIPT_REALMS.md "Channels", "Sources, consumers and triggers" |
-| a goal the planner reaches from chat | `goals` (captured realm) | TYPESCRIPT_REALMS.md "Goals" |
+| a goal the planner reaches from chat | `goals` (either profile) | TYPESCRIPT_REALMS.md "Goals" |
 | a lens, and a watch over it | `watching({capturedLenses, watches})` (captured realm) | TYPESCRIPT_REALMS.md "Lenses and watches" |
 | an HTML app | `apps` + the page under `apps/` (captured realm) | TYPESCRIPT_REALMS.md "Apps", "`apps/`" |
 | on-demand LLM guidance | `skills` + `skills/<name>/SKILL.md` | "`skills/`", TYPESCRIPT_REALMS.md "Shipped skills" |
 | query the graph from a code_mode script or skill | `gateway.kg.query` | "CypherScript" |
 | query the graph from a WASM HANDLER | `ctx.gateway.cypher.query` | "CypherScript" and "Captured realms" |
 | prove the answer surface survives the author | `tests/questions.yml` + `tests/verify.sh` (test files, not declarations) | "`tests/`" — REQUIRED once anything takes words from a person |
-| an LLM step the planner chains | legacy YAML only: `actions/` (`stepType: action`) | "`actions/`" |
-| a deterministic rule over a signal | legacy YAML only: `actions/` (FQN `PolicyActionSpec`) | "Deterministic rules" |
-| ask for an API key (conventional realm) | legacy YAML only: `keys.yml` | "`keys.yml`", "Keys and declared credentials" |
-| a derived label or relationship | legacy YAML only: `rules/` | Virtual Cypher §13 "DERIVE rules" |
-| how a collection behaves, or a documents lane | legacy YAML only: `sources.yml` | "`sources.yml`" |
-| a SQL datasource or procedure | legacy YAML only: `sql/datasources.yml`, `sql/procedures.yml` | Virtual Cypher §5.15.1 |
-| an MCP server (last resort — prefer an API for anything API-backed) | legacy YAML only: `mcp/` | "`mcp/`" |
-| a slash command | legacy YAML only: `commands/` | "`commands/`" |
-| inbound events → typed `Signal`s | legacy YAML only: `events/` (webhook + poll); a captured realm uses channels | "`events/`" |
-| an agent, and WHICH signal/cron its routines react to | legacy YAML only: `agents/` | "`agents/`" |
-| scheduled KG enrichment | legacy YAML only: `decorations/` | "`decorations/`" |
-| tips the host UIs show this realm's users | legacy YAML only: `hints/` | "`hints/`" — hand-authored; teach the answer surface you shipped |
-| a voice/persona | legacy YAML only: `personalities/` | "`personalities/`" |
-| a scoped chat surface | legacy YAML only: `focuses/` | "`focuses/`" |
+| an LLM step the planner chains | `actions` (conventional) | "`actions/`" |
+| a deterministic rule over a signal | `actions` (conventional, FQN `PolicyActionSpec`) | "Deterministic rules" |
+| ask for an API key (conventional realm) | `keys` (conventional) | "`keys.yml`", "Keys and declared credentials" |
+| a derived label or relationship | `rules` | Virtual Cypher §13 "DERIVE rules" |
+| how a collection behaves, or a documents lane | `sources` (conventional) | "`sources.yml`" |
+| a SQL datasource or procedure | `datasources`, `procedures` | Virtual Cypher §5.15.1 |
+| an MCP server (last resort — prefer an API for anything API-backed) | `mcp/` file beside `realm.ts` (the `mcp` field is not yet loaded) | "`mcp/`" |
+| a slash command | `commands/` file beside `realm.ts` | "`commands/`" |
+| inbound events → typed `Signal`s | `events` (conventional; webhook and poll); a captured realm uses channels | "`events/`" |
+| an agent, and WHICH signal/cron its routines react to | `agents` | "`agents/`" |
+| scheduled KG enrichment | `decorations/` file beside `realm.ts` (the field is not yet loaded) | "`decorations/`" |
+| tips the host UIs show this realm's users | `hints` | "`hints/`" — hand-authored; teach the answer surface you shipped |
+| a voice/persona | `personalities/` files beside `realm.ts` | "`personalities/`" |
+| a scoped chat surface | `focuses` | "`focuses/`" |
 
 ## Virtual joins that fetch remote records (the on-demand path)
 
@@ -607,8 +605,8 @@ push.
   environment variables do not authorize credential use for a captured realm; only a
   conventional realm in the local or first-party tier may resolve `token-env` from the
   environment.
-- **A captured realm declares credentials; a conventional realm declares `keys.yml` entries**
-  (legacy YAML only: `keys.yml` has no `realm.ts` form yet).
+- **A captured realm declares credentials; a conventional realm declares key entries** (its
+  `keys` field, which holds `keys.yml`'s entries).
   Both work. New realms should be captured and declare credentials the owner binds. `token-env`
   is deprecated in favour of either. A captured API operation is pinned to the value it was
   approved with, so changing a key that a key entry and a captured realm share means approving

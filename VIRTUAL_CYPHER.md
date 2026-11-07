@@ -1896,7 +1896,7 @@ already holds every key value.
 ```yaml
 - name: ordersByCustomerEmail
   kind: sql
-  datasource: warehouse          # declared in <realm>/sql/datasources.yml (legacy YAML only)
+  datasource: warehouse          # declared in realm.ts `datasources` (or sql/datasources.yml)
   table: orders
   keyColumn: customer_email
   governance:

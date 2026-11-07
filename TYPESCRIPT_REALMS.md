@@ -18,8 +18,8 @@ the owner has admitted, with separately approved capabilities. A conventional re
 of the [main specification](README.md), written as the records
 [conventional declarations](#conventional-declarations) shows. Some conventional capabilities
 have no `realm.ts` form yet; that section lists them in one table. `triggers`, `queries`, `apps`, `credentials`,
-`dataPipes`, `capturedLenses`, `watches`, `graphql`, `views`, `skills` and `capabilities` use
-the captured profile here. `goals`, `producers`, `apis` and `channels` have different forms
+`dataPipes`, `capturedLenses`, `watches`, `graphql`, `skills` and `capabilities` use
+the captured profile here; `views` is one list in both. `goals`, `producers`, `apis` and `channels` have different forms
 in the two profiles. A host must refuse a declaration in the wrong profile, naming the field.
 
 ### Source selection and legacy compatibility
@@ -27,15 +27,15 @@ in the two profiles. A host must refuse a declaration in the wrong profile, nami
 | Files present | Host behavior |
 | --- | --- |
 | `realm.ts` only | Evaluate it and validate its resulting declaration. |
-| `realm.ts` plus `realm.yml` or legacy declaration folders | Use only the evaluated TypeScript declaration. Report the ignored declaration paths, whether they agree or conflict. Do not merge them or fill absent TypeScript fields from them. |
+| `realm.ts` plus YAML declaration files or folders | Evaluate `realm.ts`. YAML declaration files beside it remain permitted and load with it: a mixed realm declares what `realm.ts` declares and what its YAML files declare. Where both declare the same id, the `realm.ts` declaration loads, the YAML one is ignored, and the host reports a warning naming both sources; identical declarations load once, without a warning. Generated artefacts (`dist/realm.json`, `dist/manifest.json`, `dependencies/manifest.json`) are not read: `realm.ts` supplies them. |
 | Invalid or unsupported `realm.ts` plus valid YAML | Refuse the TypeScript declaration with its diagnostic. Never fall back to YAML. |
 | No `realm.ts` | Read the legacy `realm.yml` and its folders, including committed `dist/` and `dependencies/manifest.json`, subject to capability-specific migrations such as the [retired `source` producer kind](VIRTUAL_CYPHER.md#519-source-tree-with-from-jar--the-source-a-jar-was-compiled-from). No TypeScript migration is required. |
 
-The precedence rule includes adjacent handler and dependency manifests and stale generated
-declarations. It does not discard resources explicitly referenced by `realm.ts`, such as SQL,
-handler source, an icon or a vendored API document. YAML is legacy and receives no new features.
-Legacy decorator and YAML type declarations retain their existing duplicate-type checks;
-neither contributes additional types when `realm.ts` is present.
+Generated artefacts beside `realm.ts` are never read, whether they agree or conflict. Resources
+`realm.ts` refers to, such as SQL, handler source, an icon, a vendored API document or a reference
+data file, are read as always. YAML receives no new features: anything new is declared in
+`realm.ts`. On the reference host, YAML type, producer and view files beside `realm.ts` are not
+yet read (they are reported as ignored); every other YAML kind beside `realm.ts` loads.
 
 ### Definition evaluation
 
@@ -147,6 +147,7 @@ metadata rules, but it cannot change the host's interpretation.
 - [Owner approval, step by step](#owner-approval-step-by-step)
 - [Conventional declarations](#conventional-declarations)
 - [Not yet expressible in realm.ts](#not-yet-expressible-in-realmts)
+- [Parity with YAML](#parity-with-yaml)
 - [Limits at a glance](#limits-at-a-glance)
 - [Declaration coverage and open contracts](#declaration-coverage-and-open-contracts)
 
@@ -1468,6 +1469,56 @@ carried today; [the next section](#not-yet-expressible-in-realmts) lists the res
 | `types` | A type, keyed by label: `description`, `properties`, `parents`, `visibility`, `userAnchor`, `population`, `virtualJoins`, `identityBridge`, `methods`, `retrieval`, `examples`, `perspective`, `spine`, and `hub` on a property. | [`types/`](README.md#types), [Declaring types](DECLARING_TYPES.md#typescript-object-declarations), [spines](VIRTUAL_CYPHER.md#541-spines-a-realm-declares--spine-on-a-type) |
 | `producers` | A conventional producer, keyed by name, of any `kind`: `remote`, `sql`, `sparql`, `cypher`, `feed`, `files`, `jar`, `source-tree`, `elasticsearch`, `generative`, `aggregate` and the rest of the [producer kinds](VIRTUAL_CYPHER.md#53-producer-kinds). | [`producers/`](README.md#producers) |
 | `handlers`, `dependencies` | As above for both profiles. | [Handlers](#handlers), [dependencies](#dependencies) |
+| `apis` | An API entry, keyed by name: `url` (a vendored document is named from the realm root, `apis/x.json`), `type`, `auth`, `headers`, `tags`, `mutations`, `tokenEnv`, `operationIds`, `oauth2`, and every other field an `apis.yml` entry takes, in camelCase (`capabilityTags` is `capability-tags`). | [`apis/`](README.md#apis) |
+| `actions`, `goals` | A GOAP action or goal, keyed by name; `stepType` defaults to `action` or `goal`. | [actions and goals](README.md) |
+| `webhooks` | A webhook registration, keyed by name. | [`webhooks/`](README.md) |
+| `lenses` | A lens, keyed by id; a `module:` is named from the realm root. | [lenses](README.md) |
+| `focuses` | A focus, keyed by name. | [focuses](README.md) |
+| `channels` | A connector channel, keyed by name: `type` and the connector's own keys, `tokenEnv` for `token-env`. | [channels](README.md) |
+| `events` | The event list one `events/<key>.yml` holds; an event may be both `poll`ed and pushed by `webhook`. | [events](README.md) |
+| `views` | A list of view entries, as in both profiles. | [views](README.md#views--saved-queries-and-the-two-shapes-they-come-in) |
+| `realmLabel`, `optionalLabels` | As in `realm.yml`. | [labels](LABELS_AND_COMPOSITION.md), [optional labels](README.md#optional-labels--reading-a-companion-realm-that-may-be-absent) |
+
+### Declaration files
+
+The fields below hold a YAML declaration file's own content, passed through unchanged, so the
+record is exactly what the file holds and the host reads it with the same reader. A **root-file
+field** holds the file's list of entries; an object keyed by name is accepted too, each entry
+taking its key as `name`. A **folder field** is keyed by file name and holds what that file holds,
+list or mapping.
+
+| Field | Stands for | Shape |
+| --- | --- | --- |
+| `keys` | `keys.yml` ([keys](README.md#keysyml--the-keys-a-realm-needs)) | List of key entries (a bare name is the shorthand) |
+| `sources` | `sources.yml`'s `sources:` list ([`sources.yml`](README.md#sourcesyml--declaring-how-a-collection-behaves)), `lane: documents` included | List of source entries |
+| `datasources` | `sql/datasources.yml` | List of datasource entries |
+| `procedures` | `sql/procedures.yml` | List of procedure entries |
+| `rules` | `rules/<key>.yml` ([DERIVE](VIRTUAL_CYPHER.md#13-derived-labels-and-relationships--derive-rules)) | A rule set |
+| `reference` | `reference/<key>.yml` ([`reference/`](README.md#reference)) | A list of records |
+| `agents` | `agents/<key>.yml` ([`agents/`](README.md#agents--agents-and-their-routines)) | An agent |
+| `hints`, `tours` | `hints/<key>.yml`, `tours/<key>.yml` | The file's list |
+| `notebook` | `notebook/<key>.yml` | A notebook set |
+| `decorations`, `mcp`, `commands` | `decorations/<key>.yml`, `mcp/<key>.yml`, `commands/<key>.yml` | What the file holds |
+
+```typescript
+export default {
+  name: "library",
+  version: "1.0.0",
+  keys: [{ name: "CATALOGUE_TOKEN", fields: [{ variable: "CATALOGUE_TOKEN" }] }],
+  sources: [{ name: "books", producer: "books", label: "Book", lane: "documents" }],
+  datasources: [{ name: "warehouse", jdbcUrl: "jdbc:postgresql://db/warehouse", credential: "warehouse" }],
+  procedures: [{ name: "refresh", datasource: "warehouse" }],
+  rules: { shelved: { name: "library/shelved", derives: "Shelved", rules: [{ derive: "(b:Shelved)", from: "MATCH (b:Book)" }] } },
+  reference: { books: [{ type: "Book", data: { id: "b1", title: "The Library" } }] },
+  agents: { ben: { name: "ben", job: "Helps people find a book.", routing: "Ask me about books." } },
+  hints: { tips: [{ category: "hint", title: "Shelves", body: "Ask what is on the shelves." }] },
+  tours: { first: [{ id: "First", name: "First look", steps: [{ say: "Hello." }] }] },
+  notebook: { reading: { name: "reading", slots: [{ name: "mood", scope: "subject", type: "ordinal", range: [1, 10], default: 5 }] } },
+} satisfies Realm;
+```
+
+Large data, such as hundreds of reference files, need not move into `realm.ts`: the files beside
+it load as they always have.
 
 ```typescript
 // realm.ts (conventional)
@@ -1521,10 +1572,9 @@ leaves out `satisfies Realm`, and the host checks the evaluated entry as it chec
 in a YAML file. A type field the SDK omits can be spread in from a separate record, as `spines` is
 above.
 
-**Views are a captured declaration.** A captured realm declares `views` as a list of view
-entries, each the entry a [`views/` file](README.md#views--saved-queries-and-the-two-shapes-they-come-in)
-holds: `name`, `description`, and `cypher:` or `goal:`, with its parameters. A conventional realm's
-`views` field is reported as not loaded, naming the field, and declares no view.
+**Views have one form in both profiles.** `views` is a list of view entries, each the entry a
+[`views/` file](README.md#views--saved-queries-and-the-two-shapes-they-come-in) holds: `name`,
+`description`, and `cypher:` or `goal:`, with its parameters.
 
 ```typescript
 views: [
@@ -1538,31 +1588,47 @@ views: [
 
 ## Not yet expressible in realm.ts
 
-Every declaration in this table has a legacy YAML form and no `realm.ts` form yet. A realm that
-needs one stays in the legacy YAML form until its `realm.ts` form is specified: under
-[source selection](#source-selection-and-legacy-compatibility), a legacy file beside `realm.ts` is
-not part of the declaration, so it cannot supply what the definition lacks. Do not invent a
-`realm.ts` field for one of these: a host declares nothing from a field it does not recognise, and
-need not say so beyond an informational note.
+Every YAML declaration a conventional realm can hold has a `realm.ts` field. What remains:
 
-| Declaration | Legacy YAML form | A `realm.ts` that carries it |
+| Declaration | Status |
+| --- | --- |
+| Personalities and prompt examples (`personalities/<slug>/*.jinja`, `prompts/examples.md`) | Templates and text, not declarations: they stay files beside `realm.ts`, and load. |
+| Query examples, next steps, data contracts, seed files | Files beside `realm.ts`, and load. |
+| `decorations`, `mcp`, `commands` | Mapped and checked; the reference host does not yet load them from `realm.ts` and reports each as not loaded, naming the field. The same files beside `realm.ts` load. `commands` takes the captured command form only. |
+| YAML `types/`, `producers/`, `views/` beside `realm.ts` | Not yet read by the reference host, which reports them as ignored. Declare them in `realm.ts`. |
+
+A host reports every `realm.ts` field it does not load, naming the field. A field is never
+dropped without a word.
+
+## Parity with YAML
+
+Each row is a declaration a YAML realm holds, the `realm.ts` field that declares it, and whether
+the reference host loads it from `realm.ts`.
+
+| YAML | `realm.ts` field | Loaded from `realm.ts` |
 | --- | --- | --- |
-| Provenance label override | `realmLabel` in `realm.yml` ([labels](LABELS_AND_COMPOSITION.md)) | Has no such field; the derived label applies. |
-| Optional companion labels | `optionalLabels` in `realm.yml` ([optional labels](README.md#optional-labels--reading-a-companion-realm-that-may-be-absent)) | Has no such field. |
-| Views in a conventional realm | `views/*.yml` | Reports `views` as not loaded. A captured realm declares [views](#conventional-declarations). |
-| Key entries | `keys.yml` ([keys](README.md#keysyml--the-keys-a-realm-needs)) | Has no such field. A captured realm declares [credentials](#credentials). |
-| Collection behaviour, including `lane: documents` | `sources.yml` ([`sources.yml`](README.md#sourcesyml--declaring-how-a-collection-behaves)) | Has no such field. |
-| SQL datasources and procedures | `sql/datasources.yml`, `sql/procedures.yml` | Has no such field. A `sql` producer can be declared, but not the datasource it names. |
-| DERIVE rule sets | `rules/*.yml` ([DERIVE](VIRTUAL_CYPHER.md#13-derived-labels-and-relationships--derive-rules)) | Has no such field. |
-| Reference data | `reference/*.yml` ([`reference/`](README.md#reference)) | Has no such field. |
-| Agents and routines | `agents/*.yml` ([`agents/`](README.md#agents--agents-and-their-routines)) | Has no such field. |
-| Decorations, hints, personalities, prompts, notebook sets, MCP servers, commands | `decorations/`, `hints/`, `personalities/`, `prompts/`, `notebook/`, `mcp/`, `commands/` | Has no such field. |
-| Conventional `actions`, `goals`, `lenses`, `focuses`, `events`, `webhooks`, `channels` and `apis` | `actions/`, `goals/`, `lenses/`, `focuses/`, `events/`, `webhooks/`, `channels/`, `apis/*.yml` | The host checks the records, but the reference host does not yet register them from `realm.ts`. A captured realm declares [goals](#goals), [lenses](#lenses-and-watches), [channels](#channels) and [APIs](#apis) in their captured forms. |
-
-A conventional producer is only as expressible as what it names. A `remote` producer that calls
-an API entry the realm itself declares needs that entry, and often a key entry; a `sql` producer
-needs its datasource. While those have no `realm.ts` form, a realm whose producers need them stays
-in the legacy YAML form.
+| `realm.yml` `name`, `version`, `description`, `author`, `url`, `icon`, `tags`, `category`, `maturity`, `host`, `runtime`, `exports`, `retry`, `capabilities`, `work` | same names | yes |
+| `realm.yml` `realmLabel`, `optionalLabels` | same names | yes |
+| `types/` | `types` | yes |
+| `producers/` | `producers` | yes |
+| `views/` | `views` | yes |
+| `apis/*.yml` | `apis` | yes |
+| `actions/`, `goals/` | `actions`, `goals` | yes |
+| `webhooks/` | `webhooks` | yes |
+| `lenses/`, `focuses/` | `lenses`, `focuses` | yes |
+| `channels/`, `events/` | `channels`, `events` | yes |
+| `keys.yml` | `keys` | yes |
+| `sources.yml` | `sources` | yes |
+| `sql/datasources.yml`, `sql/procedures.yml` | `datasources`, `procedures` | yes |
+| `rules/` | `rules` | yes |
+| `reference/` | `reference` | yes |
+| `agents/` | `agents` | yes |
+| `hints/`, `tours/` | `hints`, `tours` | yes |
+| `notebook/` | `notebook` | yes |
+| `decorations/`, `mcp/`, `commands/` | `decorations`, `mcp`, `commands` | not yet; reported |
+| `dist/manifest.json` | `handlers` | yes |
+| `dependencies/manifest.json` | `dependencies`, `layers`, `runtime` | yes |
+| `skills/`, `apps/`, `credentials.yml`, `data-pipes.yml`, captured `sources/`, `consumers/`, `triggers/`, `watches/` | captured profile fields | yes |
 
 ## Limits at a glance
 
@@ -1609,9 +1675,9 @@ work around it. The future declaration still belongs in `realm.ts`.
 | Producers and joins | [Captured producers](#producers), [conventional producers](#conventional-declarations) (entries as in [`producers/`](README.md#producers)) and [Virtual Cypher](VIRTUAL_CYPHER.md). `persistMinted` remains refused at validation/install. An SDK accepting it does not permit persistence of minted anchors. Exhaustive nested-field/default tables and SDK coverage of query inputs, per-rule producer selection and paging remain deferred. |
 | APIs and credentials | [APIs](#apis), [credentials](#credentials), [GraphQL](#graphql) and [hosted API operations](HOSTED_EXECUTION.md#captured-api-operations). Public reads use `auth: "none"`. The current captured profile uses JSON documents/responses and host-owned User-Agent. YAML API documents, additional codecs/raw responses and media negotiation require a later profile; the NDJSON section remains a proposal. |
 | Channels and events | [Channels](#channels), [sources/consumers/triggers](#sources-consumers-and-triggers) and [publication](#publishing-events). Conventional event and channel forms remain governed by the [main specification](README.md). |
-| Actions, goals and webhooks | [Captured goals](#goals) and the conventional [main specification](README.md) remain distinct; the conventional forms are [not yet expressible in `realm.ts`](#not-yet-expressible-in-realmts). Spec-required goal inputs and webhook fields remain required even if an SDK makes them optional. Complete conventional OAuth, LLM-option and webhook field mappings are deferred. Retired filesystem secret sources must not be recommended; use the host's credential binding. |
+| Actions, goals and webhooks | [Captured goals](#goals) and the conventional [main specification](README.md) remain distinct; the conventional forms are [conventional declarations](#conventional-declarations). Spec-required goal inputs and webhook fields remain required even if an SDK makes them optional. Complete conventional OAuth, LLM-option and webhook field mappings are deferred. Retired filesystem secret sources must not be recommended; use the host's credential binding. |
 | Lenses, focuses and agents | [Captured lenses](#lenses-and-watches) use handlers; conventional query and procedural/module lenses retain their separate forms in the [main specification](README.md). `vc` is an SDK formatting helper, not permission to replace procedural source with a graph query. Conventional focus null/default, builtin categories and skills follow that specification, even where SDK types are narrower. Agent-scope questions explicitly marked open there remain open, not portable defaults. |
-| Views | `views` declares a captured list of named queries ([example](#conventional-declarations)); a conventional realm's views are [not yet expressible](#not-yet-expressible-in-realmts); `queries.views` instead references admitted views and does not declare them. Existing node/tabular, materialization and TTL semantics are in [Views](README.md#views--saved-queries-and-the-two-shapes-they-come-in) and [Virtual Cypher](VIRTUAL_CYPHER.md#8-views--a-saved-query-used-as-a-label). Parameter-choice coercion, audience, data-contract modes and whole-list refusal scope need a complete portable contract; SDK transformations are not normative. |
+| Views | `views` declares a captured list of named queries ([example](#conventional-declarations)); a conventional realm declares the same list; `queries.views` instead references admitted views and does not declare them. Existing node/tabular, materialization and TTL semantics are in [Views](README.md#views--saved-queries-and-the-two-shapes-they-come-in) and [Virtual Cypher](VIRTUAL_CYPHER.md#8-views--a-saved-query-used-as-a-label). Parameter-choice coercion, audience, data-contract modes and whole-list refusal scope need a complete portable contract; SDK transformations are not normative. |
 | Skills and model | [Shipped skills](#shipped-skills), [model call](#the-model-call) and [hosted model capability](HOSTED_EXECUTION.md#the-model-call). Full skill frontmatter/reference traversal and digest-format rules remain deferred. |
 | Apps and write proposals | [Apps](#apps), [write proposals](#write-proposals); the host rechecks captured identity and grants before returning results or accepting effects. |
 | Cross-realm composition | [Graph boundaries](LABELS_AND_COMPOSITION.md#definition-imports-and-realm-boundaries). `from.realm` is reserved and explicitly refused today. Future consent, version lookup, variants and policy-required provenance remain possible. |

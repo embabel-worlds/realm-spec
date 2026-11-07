@@ -267,9 +267,10 @@ files are committed.
 YAML realms are legacy and remain supported, including their committed `dist/` and
 `dependencies/manifest.json`, subject to capability-specific migrations. In particular,
 producers using `kind: source` must follow the [`source-tree` migration](VIRTUAL_CYPHER.md#519-source-tree-with-from-jar--the-source-a-jar-was-compiled-from).
-YAML receives no new features. When `realm.ts` is present,
-its evaluated value supplies the whole declaration; adjacent legacy declarations are reported
-and ignored, even if they differ. Invalid TypeScript never falls back to YAML.
+YAML receives no new features. YAML declaration files beside a `realm.ts` remain permitted and
+load with it; where both declare the same id, `realm.ts` wins and the host warns, naming both
+([source selection](TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility)). Invalid
+TypeScript never falls back to YAML.
 
 The directory and YAML examples below document legacy loading and the meaning of existing
 capabilities. Their presence is not an instruction to create a second declaration for a
@@ -4947,8 +4948,8 @@ requests from forks, which can reach neither an appliance nor its MCP door. They
 `realm_validate` covers: the realm definition (`realm.ts`, evaluated under the
 [definition evaluation rules](TYPESCRIPT_REALMS.md#definition-evaluation), or a legacy
 `realm.yml`), types and their parents, joins, producers and the governance their source can
-honour, views, rules, apps, side files, and the handler build. A `realm.ts` beside legacy YAML is
-validated alone, and the ignored YAML paths are reported.
+honour, views, rules, apps, side files, and the handler build. A `realm.ts` beside YAML
+declaration files is validated with them, and an id both declare is reported, `realm.ts` winning.
 
 The validator ships in the appliance server image, `ghcr.io/embabel/assistant`, as a second command.
 The image you validate with is the appliance whose verdict you get, so pin the tag your users run
