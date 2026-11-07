@@ -3766,6 +3766,51 @@ asks:
 A host lists every agent a loaded realm ships, qualified by realm (`code.coder`), and a realm with
 no agents is absent from that list.
 
+#### Speaking for a thing
+
+An agent may be the voice of **one node in the graph** — a repository, a customer, a service, a
+book — by declaring what it speaks for:
+
+```yaml
+# agents/embabel-me.yml
+name: embabel-me
+job: Speak for the embabel/me repository — its pull requests, reviews, commits and who writes them.
+persona: repository
+speaksFor:
+  label: GitHubRepository      # a type this world declares
+  key: embabel/me              # the value of that type's identity property
+conversation:
+  realms: [github]
+  builtins: [views, graph, code]
+authority:
+  default: request
+```
+
+| `speaksFor` field | Meaning |
+|---|---|
+| `label` | The node's type, a plain identifier the world declares. |
+| `key` | The value of the type's **identity property** (`identity: true` in its declaration) that names the one node. The property itself is never spelled here: a voice is declared the way the graph pins the node. |
+
+This is an ordinary agent filtered by one fact, not a new kind of agent. The host resolves the label
+against the world's types and, on every turn, reads the node under the speaker's own scope and tells
+the conversation what it is and what it holds now, in the first person. The conversation keeps the
+host tools its `builtins` name and starts every query it writes from its own node; in code it binds
+the node once and acts through the methods its labels carry. **It is offered none of a realm's own
+tools or skills**, even from the realms `realms` names: a realm's verb takes its own arguments and
+never passes through the thing, so the voice would be as wide as the realm. `realms` still decides
+what the host binds the conversation to and which views and types it may reach.
+
+A label the world does not declare, a type with no identity property, a blank key: each is a need
+on the agent's card rather than a load failure, because the type may arrive with a realm the
+sponsor has yet to install. A node that cannot be read on a turn is a fact the conversation is told
+— the voice says so when asked — never a silent absence.
+
+The host does not rewrite the agent's queries to its node. The thing is the speaker's own data,
+under the speaker's own scope; what narrows the voice to it is where its statements start, and the
+host says that in the prompt. A voice can be talked into a question about something else and will
+answer within the speaker's rights, off its subject; that is a matter for its condition, not its
+permissions.
+
 #### Scope it to the job
 
 An agent's conversation SHOULD reach the fewest tools its job needs, and a realm SHOULD name its
