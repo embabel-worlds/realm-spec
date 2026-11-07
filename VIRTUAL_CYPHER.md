@@ -1242,6 +1242,16 @@ producers:
 - **`keyMatch: digits` reconciles the four ways an identifier is published** — spaced, unspaced,
   as an integer, and as a float (`12345678901.0`). It is opt-in: `exact` never reconciles
   silently, so a realm chooses when identifier forms may be treated as equal.
+- **A `LIMIT` stops the read.** Events arrive by file `path`, then `line`, ascending. When every filter
+  on the target is one the reader decides exactly — `=`, `CONTAINS` or `=~` (through `toLower` /
+  `toUpper` or none) on a text field (`content`, `message`, `level`, `severity`, `thread`, `logger`,
+  `timestamp`, `exception`, `exceptionMessage`, `rootCause`, `fingerprint`), and `=` / `CONTAINS` on
+  `path`, `name`, `ext` and `dir` — a `LIMIT n` with no `ORDER BY`, or under `ORDER BY e.path` or
+  `ORDER BY e.path, e.line` (a `RETURN` alias of either reads the same), reads no further than the
+  first n matching events. Any other filter (a number, a boolean, a range, a field a `compute:` makes)
+  keeps the whole read and the `LIMIT` is applied after it; `EXPLAIN`'s residual line names it. A
+  `CONTAINS` on an event field compares case as written, as Cypher does; `toLower(e.message)
+  CONTAINS 'x'` is the case-insensitive spelling. `unit: line` claims only `content`.
 - **A capped read says so.** Hitting `maxRows` is reported as a truncation warning — the rows
   returned are a prefix of the file, never presented as all of it.
 - **A publisher outage does not become a factual claim.** If the download fails and a cached copy
@@ -2619,8 +2629,23 @@ the next — so a logged exception is one row however many lines its trace takes
   joined by a newline) whose named groups `timestamp`, `level`, `thread`, `logger` and `message` fill
   the row; another group name is refused when the realm loads. Undeclared, the Spring Boot,
   Logback/Log4j, time-level-logger, timestamp-then-level, java.util.logging and level-first layouts are tried in turn.
-- **Matching.** Under `emit: search` or a `content CONTAINS` filter, the term is judged against the
-  whole event. A file is read up to `contentCapKb`; events past it are not returned.
+- **Filtering.** The query's filters on the target are applied to each event as it is read, so only
+  the events the query can return reach the graph, and the join's `maxFanoutTotal` counts those, not
+  the events in the file. That covers every field above — `severity = 'ERROR'`, `logger CONTAINS
+  'pool'`, `message =~ '…'` (matched as the graph matches it, the whole value), `content =~ '…'`
+  across a trace's lines, a `timestamp` or `line` range, `hasTrace = true` — and the `content
+  CONTAINS` and `emit: search` terms, judged against the whole event, ignoring case. The graph still
+  applies the query's own `WHERE` to what arrives, so a filter the reader cannot decide exactly (a
+  comparison through a function other than a case fold, a field a `compute:` adds, a pattern whose
+  shape backtracks without bound) keeps the event and costs only the fetch. `unit: line` filters the
+  same way, on each line's parsed JSON fields.
+- **A capped read says so.** A file is read up to `contentCapKb`. A file larger than that answers
+  with the events in its first `contentCapKb` and a `PARTIAL_RESULT` warning naming the file and the
+  cap, so an empty or short answer over a large log is never mistaken for a complete one. Raise
+  `contentCapKb` to read further.
+- **Rotated logs are text.** A file whose name ends in a rotation suffix after a text extension —
+  `app.log.1`, `app.log.2026-11-05` — is read like `app.log`. A compressed one (`app.log.gz`) is not
+  read.
 
 ### 5.21 `source-tree` — a project's source in any of fourteen languages
 
@@ -4354,6 +4379,24 @@ introduced — a renamed node (`WITH t AS u WHERE u.status = 'open'`) or a proje
 (`WITH t, t.status AS st WHERE st = 'open'`) — is the predicate on the property it names, and is
 pushed exactly as `WHERE t.status = 'open'` is. Splitting a query into a pipeline for legibility
 therefore costs what the one-line spelling costs.
+
+**A regular expression is pushed as the text it requires.** `WHERE e.message =~ 'db-42[0-9]+:5432'`
+reaches the source as the pattern and, beside it, as `CONTAINS 'db-42' AND CONTAINS ':5432'` — the
+literal text every match must contain, read from the pattern (an alternation `timeout|refused` is
+one of its branches' text). A source with a `CONTAINS` rule narrows by that text, and the graph
+applies the pattern to what arrives. The pattern itself is never absorbed by a declared rule, so it
+stays on `EXPLAIN`'s residual line and a `LIMIT` or a count over the door is not pushed past it. A
+pattern that ignores case (`(?i)`) implies no `CONTAINS`, since a source compares case as written; a
+pattern with no literal text (`.*\d+`) implies none either. Under `OR` or `NOT` nothing is pushed.
+
+**Constants a parameter makes are folded before anything is pushed.** A view's arguments are bound
+into its body as literals, so the generic spellings a view uses arrive constant, and are read as the
+filter they are for those arguments: `CASE WHEN $whole THEN e.content ELSE e.message END =~ $p`
+with `whole: true` is `e.content =~ $p`, a pattern built as `'(?s).*(?:' + $p + ').*'` is one
+literal pattern, and `($s = '' OR e.severity = $s)` is either nothing or `e.severity = $s`. A
+`CASE` folds only when every condition up to the arm taken is decided by its literals; a
+concatenation folds only when every operand is a string literal. The statement that runs is
+unchanged — folding decides what the source is asked, never what the graph computes.
 
 A projection that **computes** holds a different value from the property, so it is not pushed:
 `toLower(t.status) AS st`, an arithmetic, an aggregate, a `coalesce`. Pushing such a comparison as
