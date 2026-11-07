@@ -1,5 +1,7 @@
-# validate-realm.yml against two fixture realms: one that loads only beside the other passes when
-# given it, and is refused without it — so the check is neither vacuous nor wrong.
+# validate-realm.yml against fixture realms: one that loads only beside the other passes when
+# given it, and is refused without it — so the check is neither vacuous nor wrong. A third is
+# declared in realm.ts alone, so the image is shown to evaluate the preferred format, not only
+# the legacy YAML one.
 #
 # Run by hand, naming the image: the validator ships in the appliance server image, and this is how
 # a new image is checked against the workflow before realm repositories rely on it.
@@ -42,3 +44,10 @@ jobs:
           status=${PIPESTATUS[0]}
           [ "$status" -eq 1 ] || { echo "::error::expected exit 1, got $status"; exit 1; }
           grep -q "unknown producer 'thingsByKey'" report.txt || { echo "::error::the missing producer was not named"; exit 1; }
+
+  realm-ts-passes:
+    uses: ./.github/workflows/validate-realm.yml
+    with:
+      path: .github/fixtures/validate-realm/realm-gadgets
+      image: ${{ inputs.image }}
+      strict: true

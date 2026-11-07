@@ -11,7 +11,10 @@ part of this specification and under its terms.
 
 An Embabel world builds the realm from the manifest alone. Nobody writes it, and nobody edits it.
 
-The installer fetches the manifest and writes a realm named `publisher-<name>`. The realm is written
+The installer fetches the manifest and writes a realm named `publisher-<name>`. It writes the
+legacy YAML form, in the files the table below names: the realm asks for its credential in
+`keys.yml`, which is
+[not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts). The realm is written
 through the ordinary draft path (written, validated, installed), so it is checked like any authored
 realm. It records the publisher URL, the manifest's `ETag` and the credential name in
 `publisher/source.json`, and keeps the manifest it was built from. Reinstalling an unchanged manifest

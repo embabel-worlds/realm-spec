@@ -15,7 +15,9 @@ follow the [glossary](GLOSSARY.md#source-and-dependency-identity).
 Most examples below use `execution: "captured"`. A captured realm runs from a verified copy
 the owner has admitted, with separately approved capabilities. A conventional realm omits
 `execution` or sets it to `"conventional"`; its capabilities follow the conventional sections
-of the [main specification](README.md). `triggers`, `queries`, `apps`, `credentials`,
+of the [main specification](README.md), written as the records
+[conventional declarations](#conventional-declarations) shows. Some conventional capabilities
+have no `realm.ts` form yet; that section lists them in one table. `triggers`, `queries`, `apps`, `credentials`,
 `dataPipes`, `capturedLenses`, `watches`, `graphql`, `views`, `skills` and `capabilities` use
 the captured profile here. `goals`, `producers`, `apis` and `channels` have different forms
 in the two profiles. A host must refuse a declaration in the wrong profile, naming the field.
@@ -143,6 +145,8 @@ metadata rules, but it cannot change the host's interpretation.
 - [Apps](#apps)
 - [Write proposals](#write-proposals)
 - [Owner approval, step by step](#owner-approval-step-by-step)
+- [Conventional declarations](#conventional-declarations)
+- [Not yet expressible in realm.ts](#not-yet-expressible-in-realmts)
 - [Limits at a glance](#limits-at-a-glance)
 - [Declaration coverage and open contracts](#declaration-coverage-and-open-contracts)
 
@@ -1451,6 +1455,115 @@ widens a call already running, and a revocation stops the next host call. Revoki
 installation (`.../admission/revoke`) closes its channels and makes its pending proposals
 unusable.
 
+## Conventional declarations
+
+A conventional realm writes its capabilities in `realm.ts` as records keyed by name. Each record's
+entry is the entry the [main specification](README.md) describes for that capability, with the key
+standing in for `name`: the host fills the name from the key and refuses an entry whose own `name`
+differs. Field names are spelled as the main specification spells them. The fields below are
+carried today; [the next section](#not-yet-expressible-in-realmts) lists the rest.
+
+| Field | Entry | Specification |
+| --- | --- | --- |
+| `types` | A type, keyed by label: `description`, `properties`, `parents`, `visibility`, `userAnchor`, `population`, `virtualJoins`, `identityBridge`, `methods`, `retrieval`, `examples`, `perspective`, `spine`, and `hub` on a property. | [`types/`](README.md#types), [Declaring types](DECLARING_TYPES.md#typescript-object-declarations), [spines](VIRTUAL_CYPHER.md#541-spines-a-realm-declares--spine-on-a-type) |
+| `producers` | A conventional producer, keyed by name, of any `kind`: `remote`, `sql`, `sparql`, `cypher`, `feed`, `files`, `jar`, `source-tree`, `elasticsearch`, `generative`, `aggregate` and the rest of the [producer kinds](VIRTUAL_CYPHER.md#53-producer-kinds). | [`producers/`](README.md#producers) |
+| `handlers`, `dependencies` | As above for both profiles. | [Handlers](#handlers), [dependencies](#dependencies) |
+
+```typescript
+// realm.ts (conventional)
+import type { Realm } from "@embabel/realm-types";
+
+/* A spine type is spread in from its own record: the 0.1.0 SDK types do not describe `spine`. */
+const spines = {
+  CustomerAccount: {
+    description: "A company the business sells to, whatever system knows about it.",
+    spine: { key: "accountKey", identityProperties: ["accountKey", "website"] },
+    properties: { accountKey: "The company's registrable domain." },
+  },
+};
+
+export default {
+  name: "contacts",
+  version: "1.0.0",
+  types: {
+    ...spines,
+    HubSpotContact: {
+      description: "A contact in HubSpot, fetched on demand.",
+      visibility: "internal",
+      properties: {
+        id: { identity: true, description: "HubSpot contact id." },
+        email: { description: "Primary email.", metadata: { hub: "Person" } },
+      },
+      virtualJoins: [
+        {
+          anchorLabel: "Person",
+          relationship: "HAS_HUBSPOT_CONTACT",
+          keyField: "email",
+          recordKeyField: "email",
+          producer: "contactsByEmail",
+        },
+      ],
+    },
+  },
+  producers: {
+    contactsByEmail: {
+      kind: "remote",
+      operation: "hubspot.objectsSearch", // an API the World already has, not one this realm declares
+      records: "$.results[*].properties",
+    },
+  },
+} satisfies Realm;
+```
+
+The SDK's types are narrower than the host: version 0.1.0 describes the `remote`, `generative`
+and `aggregate` producer kinds and no `spine` field. A definition that declares another kind
+leaves out `satisfies Realm`, and the host checks the evaluated entry as it checks the same entry
+in a YAML file. A type field the SDK omits can be spread in from a separate record, as `spines` is
+above.
+
+**Views are a captured declaration.** A captured realm declares `views` as a list of view
+entries, each the entry a [`views/` file](README.md#views--saved-queries-and-the-two-shapes-they-come-in)
+holds: `name`, `description`, and `cypher:` or `goal:`, with its parameters. A conventional realm's
+`views` field is reported as not loaded, naming the field, and declares no view.
+
+```typescript
+views: [
+  {
+    name: "OpenIncidents",
+    description: "Unresolved incidents across the services the owner depends on.",
+    cypher: "MATCH (s:Service)-[:HAS_INCIDENT]->(i:Incident) WHERE i.status <> 'resolved' RETURN s.name AS service, i.incidentId AS incident",
+  },
+],
+```
+
+## Not yet expressible in realm.ts
+
+Every declaration in this table has a legacy YAML form and no `realm.ts` form yet. A realm that
+needs one stays in the legacy YAML form until its `realm.ts` form is specified: under
+[source selection](#source-selection-and-legacy-compatibility), a legacy file beside `realm.ts` is
+not part of the declaration, so it cannot supply what the definition lacks. Do not invent a
+`realm.ts` field for one of these: a host declares nothing from a field it does not recognise, and
+need not say so beyond an informational note.
+
+| Declaration | Legacy YAML form | A `realm.ts` that carries it |
+| --- | --- | --- |
+| Provenance label override | `realmLabel` in `realm.yml` ([labels](LABELS_AND_COMPOSITION.md)) | Has no such field; the derived label applies. |
+| Optional companion labels | `optionalLabels` in `realm.yml` ([optional labels](README.md#optional-labels--reading-a-companion-realm-that-may-be-absent)) | Has no such field. |
+| Views in a conventional realm | `views/*.yml` | Reports `views` as not loaded. A captured realm declares [views](#conventional-declarations). |
+| Key entries | `keys.yml` ([keys](README.md#keysyml--the-keys-a-realm-needs)) | Has no such field. A captured realm declares [credentials](#credentials). |
+| Collection behaviour, including `lane: documents` | `sources.yml` ([`sources.yml`](README.md#sourcesyml--declaring-how-a-collection-behaves)) | Has no such field. |
+| SQL datasources and procedures | `sql/datasources.yml`, `sql/procedures.yml` | Has no such field. A `sql` producer can be declared, but not the datasource it names. |
+| DERIVE rule sets | `rules/*.yml` ([DERIVE](VIRTUAL_CYPHER.md#13-derived-labels-and-relationships--derive-rules)) | Has no such field. |
+| Reference data | `reference/*.yml` ([`reference/`](README.md#reference)) | Has no such field. |
+| Agents and routines | `agents/*.yml` ([`agents/`](README.md#agents--agents-and-their-routines)) | Has no such field. |
+| Decorations, hints, personalities, prompts, notebook sets, MCP servers, commands | `decorations/`, `hints/`, `personalities/`, `prompts/`, `notebook/`, `mcp/`, `commands/` | Has no such field. |
+| Conventional `actions`, `goals`, `lenses`, `focuses`, `events`, `webhooks`, `channels` and `apis` | `actions/`, `goals/`, `lenses/`, `focuses/`, `events/`, `webhooks/`, `channels/`, `apis/*.yml` | The host checks the records, but the reference host does not yet register them from `realm.ts`. A captured realm declares [goals](#goals), [lenses](#lenses-and-watches), [channels](#channels) and [APIs](#apis) in their captured forms. |
+
+A conventional producer is only as expressible as what it names. A `remote` producer that calls
+an API entry the realm itself declares needs that entry, and often a key entry; a `sql` producer
+needs its datasource. While those have no `realm.ts` form, a realm whose producers need them stays
+in the legacy YAML form.
+
 ## Limits at a glance
 
 The reference profile applies the limits below. SDK checks are additional authoring assistance.
@@ -1493,12 +1606,12 @@ work around it. The future declaration still belongs in `realm.ts`.
 | Handlers and schemas | [Handlers](#handlers) and the [schema profile](README.md#captured-handler-schema-profile). Standard Schema adapters and inferred types are SDK behavior. Only the evaluated supported JSON Schema reaches the host; optional-output null tolerance does not apply to inputs. |
 | Dependencies | [Dependencies](#dependencies), including sources, methods, state and explicit batch limits of evidence. Bundled npm requirements have [legacy-only declaration status](HOSTED_EXECUTION.md#backends-and-dependencies). |
 | Types and properties | [Declaring types](DECLARING_TYPES.md#typescript-object-declarations), including visibility and property validation. Complete population, method/retrieval defaults, examples/perspective selection, value enumeration and cardinality interactions remain unspecified. Existing lifecycle, spine and hub semantics are not removed because an SDK omits their fields. |
-| Producers and joins | [Captured producers](#producers), [conventional producers](README.md#producers) and [Virtual Cypher](VIRTUAL_CYPHER.md). `persistMinted` remains refused at validation/install. An SDK accepting it does not permit persistence of minted anchors. Exhaustive nested-field/default tables and SDK coverage of query inputs, per-rule producer selection and paging remain deferred. |
+| Producers and joins | [Captured producers](#producers), [conventional producers](#conventional-declarations) (entries as in [`producers/`](README.md#producers)) and [Virtual Cypher](VIRTUAL_CYPHER.md). `persistMinted` remains refused at validation/install. An SDK accepting it does not permit persistence of minted anchors. Exhaustive nested-field/default tables and SDK coverage of query inputs, per-rule producer selection and paging remain deferred. |
 | APIs and credentials | [APIs](#apis), [credentials](#credentials), [GraphQL](#graphql) and [hosted API operations](HOSTED_EXECUTION.md#captured-api-operations). Public reads use `auth: "none"`. The current captured profile uses JSON documents/responses and host-owned User-Agent. YAML API documents, additional codecs/raw responses and media negotiation require a later profile; the NDJSON section remains a proposal. |
 | Channels and events | [Channels](#channels), [sources/consumers/triggers](#sources-consumers-and-triggers) and [publication](#publishing-events). Conventional event and channel forms remain governed by the [main specification](README.md). |
-| Actions, goals and webhooks | [Captured goals](#goals) and the conventional [main specification](README.md) remain distinct. Spec-required goal inputs and webhook fields remain required even if an SDK makes them optional. Complete conventional OAuth, LLM-option and webhook field mappings are deferred. Retired filesystem secret sources must not be recommended; use the host's credential binding. |
+| Actions, goals and webhooks | [Captured goals](#goals) and the conventional [main specification](README.md) remain distinct; the conventional forms are [not yet expressible in `realm.ts`](#not-yet-expressible-in-realmts). Spec-required goal inputs and webhook fields remain required even if an SDK makes them optional. Complete conventional OAuth, LLM-option and webhook field mappings are deferred. Retired filesystem secret sources must not be recommended; use the host's credential binding. |
 | Lenses, focuses and agents | [Captured lenses](#lenses-and-watches) use handlers; conventional query and procedural/module lenses retain their separate forms in the [main specification](README.md). `vc` is an SDK formatting helper, not permission to replace procedural source with a graph query. Conventional focus null/default, builtin categories and skills follow that specification, even where SDK types are narrower. Agent-scope questions explicitly marked open there remain open, not portable defaults. |
-| Views | `views` declares a captured list of named queries; `queries.views` instead references admitted views and does not declare them. Existing node/tabular, materialization and TTL semantics are in [Views](README.md#views--saved-queries-and-the-two-shapes-they-come-in) and [Virtual Cypher](VIRTUAL_CYPHER.md#8-views--a-saved-query-used-as-a-label). Parameter-choice coercion, audience, data-contract modes and whole-list refusal scope need a complete portable contract; SDK transformations are not normative. |
+| Views | `views` declares a captured list of named queries ([example](#conventional-declarations)); a conventional realm's views are [not yet expressible](#not-yet-expressible-in-realmts); `queries.views` instead references admitted views and does not declare them. Existing node/tabular, materialization and TTL semantics are in [Views](README.md#views--saved-queries-and-the-two-shapes-they-come-in) and [Virtual Cypher](VIRTUAL_CYPHER.md#8-views--a-saved-query-used-as-a-label). Parameter-choice coercion, audience, data-contract modes and whole-list refusal scope need a complete portable contract; SDK transformations are not normative. |
 | Skills and model | [Shipped skills](#shipped-skills), [model call](#the-model-call) and [hosted model capability](HOSTED_EXECUTION.md#the-model-call). Full skill frontmatter/reference traversal and digest-format rules remain deferred. |
 | Apps and write proposals | [Apps](#apps), [write proposals](#write-proposals); the host rechecks captured identity and grants before returning results or accepting effects. |
 | Cross-realm composition | [Graph boundaries](LABELS_AND_COMPOSITION.md#definition-imports-and-realm-boundaries). `from.realm` is reserved and explicitly refused today. Future consent, version lookup, variants and policy-required provenance remain possible. |

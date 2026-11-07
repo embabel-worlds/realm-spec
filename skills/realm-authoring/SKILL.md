@@ -10,9 +10,10 @@ as needed. The host reads it directly. Do not generate or commit YAML or manifes
 Start with [Composing a realm](https://github.com/embabel-worlds/realm-spec/blob/main/REALM_COMPOSITION.md) and the
 [TypeScript contract](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md). Existing YAML realms remain readable
 under the [legacy compatibility and migration rules](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility)
-and receive no new YAML features. The directory recipes below describe that legacy
-format and existing capability semantics; they are not a second declaration to create beside
-`realm.ts`. A realm contains no JVM bytecode, host configuration or user credentials.
+and receive no new YAML features. A few capabilities have no `realm.ts` form yet; they are
+listed in one table, [not yet expressible in `realm.ts`](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts), and a realm that needs one stays in the legacy YAML form. A YAML
+file beside `realm.ts` is not read, so never write one to fill a gap. A realm contains no JVM
+bytecode, host configuration or user credentials.
 
 ## First decision: WHICH AUTHORING PATH ARE YOU ON?
 
@@ -31,64 +32,85 @@ write into an invisible draft and publish it:
     realm_write (one file per call) -> realm_validate -> realm_install
 
 Two things about this path that nothing else tells you:
-- `wasm/handlers.ts` is where TypeScript goes. Not `agents/` (that is YAML: agents and
-  the routines that call into it), not `src/api/*.ts` (that is the checkout build, which this path does not run).
+- `realm.ts` is the definition and `wasm/handlers.ts` is the handler code. Write `realm.ts`
+  first. Handler TypeScript goes in `wasm/handlers.ts`: not `agents/` (legacy YAML for agents
+  and the routines that call into them), not `src/api/*.ts` (the legacy checkout build, which
+  this path does not run).
 - **`realm_install` consumes the draft.** After a successful install the next
-  `realm_write` starts a NEW empty draft — so a follow-up write, on its own, produces
-  "realm.yml is missing" for a file you wrote minutes ago. Re-write the whole realm, or
-  edit on a checkout instead.
+  `realm_write` starts a NEW empty draft — so a follow-up write, on its own, is validated as a
+  realm with no definition, and the `realm.ts` you wrote minutes ago is reported missing.
+  Re-write the whole realm, `realm.ts` included, or edit on a checkout instead.
 
 `realm_brief` tells you which path this appliance is on; it says so explicitly when no
 checkout is mounted.
 
 ## Second decision: declarative or handlers?
 
-- **Start declarative.** If a declaration (an `actions/` step, a `types/` type, an
-  `apis/` OpenAPI entry, a `producers/` virtual join) expresses it, use that — no build
-  step, the host's planner reasons over it directly.
-- **Reach for `src/` TypeScript handlers** only when there are invariants YAML can't hold:
+- **Start declarative, in `realm.ts`.** If a declaration expresses it (a type under `types`,
+  a producer and its virtual join under `producers` and the type's `virtualJoins`, a view under
+  `views` in a captured realm), use that: no handler code, and the host's planner reasons over it
+  directly. The record shapes are in
+  [conventional declarations](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#conventional-declarations).
+- **Reach for handlers** only when there are invariants a declaration can't hold:
   revision/optimistic-lock guards, multi-call orchestration, shaping a rich API into
-  idiomatic methods, or giving a type *behaviour* (verbs). Handlers are separate from the realm definition.
+  idiomatic methods, or giving a type *behaviour* (verbs). Declare each one under `handlers` in
+  `realm.ts` and write it in `wasm/handlers.ts`; the host builds it. `src/` is the legacy
+  typed-project form.
+- **Check the gaps first.** If the realm needs something [not yet expressible in `realm.ts`](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts), such as `keys.yml`, DERIVE
+  `rules/`, `agents/` or a conventional view, write the realm in the legacy YAML form.
 
 ## The pieces (read the spec section before writing one)
 
-| Want to… | Directory | Spec section |
+Write each piece in `realm.ts` where the middle column gives a field. "Legacy YAML only" means the
+piece has no `realm.ts` form yet, so a realm that needs it is written in the legacy YAML layout
+throughout, with the directory named in the spec section.
+
+| Want to… | In `realm.ts` | Spec section |
 |---|---|---|
-| metadata | `realm.yml` | "`realm.yml`" |
-| an LLM step the planner chains | `actions/` (`stepType: action`) | "`actions/`" |
-| a deterministic rule over a signal | `actions/` (FQN `PolicyActionSpec`) | "Deterministic rules" |
-| a domain / signal / mirror type | `types/` | "`types/`" |
-| call an external REST/GraphQL API | `apis/` (+ vendored spec) | "`apis/`" (auth, OAuth2) |
-| ask for an API key (conventional realm) | `keys.yml` | "`keys.yml`", "Keys and declared credentials" |
-| ask for a secret the owner binds (captured realm, recommended for new realms) | `credentials` in `realm.ts` | TYPESCRIPT_REALMS.md "Credentials" |
-| call a GraphQL API from a captured realm | `graphql` in `realm.ts` | TYPESCRIPT_REALMS.md "GraphQL" |
-| a shared IDENTITY other realms attach to (an account, a product, a site) | `types/` `spine:` | Virtual Cypher §5.4.1 — see "Joining OTHER realms" below |
-| attach your records to a spine (yours, another realm's, or Person/Organization) | `types/` `hub:` on the property carrying the key | Virtual Cypher §5.4 |
-| a shared KIND of record (every ticket is a `SupportCase`) | `types/` `parents:` | LABELS_AND_COMPOSITION.md |
-| fetch a type **on demand** by traversal | `types/` `virtualJoins:` + `producers/` | "Joining types on demand" (Virtual Cypher) |
-| a named, parameterized ANSWER a caller runs by name | `views/` | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
+| metadata | `name`, `version`, `description`, `tags`, `icon`, … on the default export | TYPESCRIPT_REALMS.md "Realm metadata" (legacy: "`realm.yml`") |
+| a domain / signal / mirror type | `types` | "`types/`", DECLARING_TYPES.md |
+| a shared IDENTITY other realms attach to (an account, a product, a site) | `types`, `spine` on the type | Virtual Cypher §5.4.1 — see "Joining OTHER realms" below |
+| attach your records to a spine (yours, another realm's, or Person/Organization) | `types`, `hub` on the property carrying the key | Virtual Cypher §5.4 |
+| a shared KIND of record (every ticket is a `SupportCase`) | `types`, `parents` | LABELS_AND_COMPOSITION.md |
+| fetch a type **on demand** by traversal | `types` `virtualJoins` + `producers` | "Joining types on demand" (Virtual Cypher), TYPESCRIPT_REALMS.md "Conventional declarations" |
+| a named, parameterized ANSWER a caller runs by name | `views` (captured realm); legacy YAML only in a conventional realm | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
+| the TypeScript a realm actually runs | `handlers` + `wasm/handlers.ts` (ONE entry file) | TYPESCRIPT_REALMS.md "Handlers", "`wasm/`" |
+| a method on a type (a **verb**) | a handler with `onType` | TYPESCRIPT_REALMS.md "Handlers" (legacy: `src/api/*.ts`, "`src/` and `tests/`") |
+| a WebAssembly module a handler uses (SQLite, an engine) | `dependencies` | TYPESCRIPT_REALMS.md "Dependencies" |
+| ask for a secret the owner binds (recommended for new realms) | `credentials` (captured realm) | TYPESCRIPT_REALMS.md "Credentials" |
+| call an external REST API | `apis` + a vendored OpenAPI document under `apis/` (captured realm) | TYPESCRIPT_REALMS.md "APIs"; conventional API entries are legacy YAML only ("`apis/`") |
+| call a GraphQL API | `graphql` (captured realm) | TYPESCRIPT_REALMS.md "GraphQL" |
+| a live connection, its event sources and consumers | `connecting({credentials, channels, sources, consumers})`, `dataPipes`, `triggers` (captured realm) | TYPESCRIPT_REALMS.md "Channels", "Sources, consumers and triggers" |
+| a goal the planner reaches from chat | `goals` (captured realm) | TYPESCRIPT_REALMS.md "Goals" |
+| a lens, and a watch over it | `watching({capturedLenses, watches})` (captured realm) | TYPESCRIPT_REALMS.md "Lenses and watches" |
+| an HTML app | `apps` + the page under `apps/` (captured realm) | TYPESCRIPT_REALMS.md "Apps", "`apps/`" |
+| on-demand LLM guidance | `skills` + `skills/<name>/SKILL.md` | "`skills/`", TYPESCRIPT_REALMS.md "Shipped skills" |
 | query the graph from a code_mode script or skill | `gateway.kg.query` | "CypherScript" |
 | query the graph from a WASM HANDLER | `ctx.gateway.cypher.query` | "CypherScript" and "Captured realms" |
-| a CAPTURED realm written in TypeScript (`defineRealm`) | `realm.ts`, read directly by the host | TYPESCRIPT_REALMS.md, and "Captured realms" below |
-| hand-authored gateway methods / **verbs** | `src/api/*.ts` + `tests/` | "`src/` and `tests/`" |
-| prove the answer surface survives the author | `tests/questions.yml` + `tests/verify.sh` | "`tests/`" — REQUIRED once anything takes words from a person |
-| an MCP server (last resort — prefer `apis/` for anything API-backed) | `mcp/` | "`mcp/`" |
-| a slash command | `commands/` | "`commands/`" |
-| inbound events → typed `Signal`s | `events/` (webhook + poll) | "`events/`" |
-| an agent, and WHICH signal/cron its routines react to (declarative YAML) | `agents/` | "`agents/`" |
-| the TypeScript a wasm-host realm actually runs | `wasm/handlers.ts` (ONE file) | "`wasm/`" |
-| scheduled KG enrichment | `decorations/` | "`decorations/`" |
-| an HTML app | `apps/` | "`apps/`" |
-| tips the host UIs show this realm's users | `hints/` | "`hints/`" — hand-authored; teach the answer surface you shipped |
-| on-demand LLM guidance | `skills/<name>/SKILL.md` | "`skills/`" |
-| a voice/persona | `personalities/` | "`personalities/`" |
-| a scoped chat surface | `focuses/` | "`focuses/`" |
+| prove the answer surface survives the author | `tests/questions.yml` + `tests/verify.sh` (test files, not declarations) | "`tests/`" — REQUIRED once anything takes words from a person |
+| an LLM step the planner chains | legacy YAML only: `actions/` (`stepType: action`) | "`actions/`" |
+| a deterministic rule over a signal | legacy YAML only: `actions/` (FQN `PolicyActionSpec`) | "Deterministic rules" |
+| ask for an API key (conventional realm) | legacy YAML only: `keys.yml` | "`keys.yml`", "Keys and declared credentials" |
+| a derived label or relationship | legacy YAML only: `rules/` | Virtual Cypher §13 "DERIVE rules" |
+| how a collection behaves, or a documents lane | legacy YAML only: `sources.yml` | "`sources.yml`" |
+| a SQL datasource or procedure | legacy YAML only: `sql/datasources.yml`, `sql/procedures.yml` | Virtual Cypher §5.15.1 |
+| an MCP server (last resort — prefer an API for anything API-backed) | legacy YAML only: `mcp/` | "`mcp/`" |
+| a slash command | legacy YAML only: `commands/` | "`commands/`" |
+| inbound events → typed `Signal`s | legacy YAML only: `events/` (webhook + poll); a captured realm uses channels | "`events/`" |
+| an agent, and WHICH signal/cron its routines react to | legacy YAML only: `agents/` | "`agents/`" |
+| scheduled KG enrichment | legacy YAML only: `decorations/` | "`decorations/`" |
+| tips the host UIs show this realm's users | legacy YAML only: `hints/` | "`hints/`" — hand-authored; teach the answer surface you shipped |
+| a voice/persona | legacy YAML only: `personalities/` | "`personalities/`" |
+| a scoped chat surface | legacy YAML only: `focuses/` | "`focuses/`" |
 
 ## Virtual joins that fetch remote records (the on-demand path)
 
 For large/volatile external collections, don't mirror — **virtual-join** them: declare
-`virtualJoins:` on the type and a **producer** (a Repository over the source) in
-`producers/`. Key points (full detail in "Joining types on demand" and "`producers/`"):
+`virtualJoins` on the type and a **producer** (a Repository over the source) under
+`producers` in `realm.ts`. Key points (full detail in "Joining types on demand" and "`producers/`";
+the `realm.ts` records are in [conventional declarations](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#conventional-declarations)).
+Snippets in this skill show entries in YAML for brevity: in `realm.ts` the same fields sit in the
+type, producer or view record, with the key in place of `name`.
 
 The engine that probes anchors, fetches, materializes transient `:Virtual` nodes and rolls
 back is **Virtual Cypher** — see "Virtual Cypher — the engine" under "Joining types on demand".
@@ -135,27 +157,36 @@ things or one?**
 2. A spine an installed realm already declares. Check `realm_status` / the vocabulary realm you
    are building against. Put `hub: <ThatSpine>` on the property carrying the key.
 3. None fits → declare one, in the most general realm that needs it (a vocabulary realm, not a
-   product realm — the spine must outlive any one product):
+   product realm — the spine must outlive any one product). The 0.1.0 SDK types do not describe
+   `spine`, so spread the type in from its own record:
 
-```yaml
-- name: CustomerAccount
-  spine:
-    key: accountKey
-    identityProperties: [accountKey, website]
-    normalize: [lowercase, extractDomain, stripTrailingDot]
-    require: hasDot
-    exclude: freemail
+```ts
+const spines = {
+  CustomerAccount: {
+    spine: {
+      key: "accountKey",
+      identityProperties: ["accountKey", "website"],
+      normalize: ["lowercase", "extractDomain", "stripTrailingDot"],
+      require: "hasDot",
+      exclude: "freemail",
+    },
+    properties: { accountKey: "The company's registrable domain." },
+  },
+};
+// types: { ...spines, ... }
 ```
 
 **Step 3 — put `hub:` on the property that identifies the ENTITY, which is often not the one
 that identifies the record.** Keep `identity: true` on the source's own id (your realm's joins key
 on it) and put `hub:` on the website / email / registration number:
 
-```yaml
-- name: OdooCustomer
-  properties:
-    id:      { identity: true }
-    website: { hub: CustomerAccount }
+```ts
+OdooCustomer: {
+  properties: {
+    id: { identity: true },
+    website: { metadata: { hub: "CustomerAccount" } },
+  },
+},
 ```
 
 **Step 4 — never normalize on your own side.** Send the spine the raw value. The spine's
@@ -213,8 +244,10 @@ TypeScript/JavaScript".
 
 A type method lets code query its way to a customer, an issue or a ticket and then work on it
 there: `acme.addNote(...)`, `issue.close()`. Write one in TypeScript whenever a type has
-something to DO, including YAML-declared types and ones a virtual join materializes. The class
-name must equal the type's name.
+something to DO, including types a virtual join materializes. In a `realm.ts` realm a method is a
+handler declared with `onType` and written in `wasm/handlers.ts`; see
+[handlers](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#handlers). The `Entity` class below is the legacy `src/` project form, which a
+legacy YAML realm builds into `dist/`. The class name must equal the type's name.
 
 ```ts
 // src/api/customer.ts — the file name is the namespace; the class name is the type
@@ -256,15 +289,32 @@ export class OdooCustomer extends Entity<CrmGateway> {
   checked helper. See "Designing write methods".
 - **Test** with `entityForTest(OdooCustomer, { id: "12114" }, mockGateway<CrmGateway>({ odoo: { ... } }))`
   and assert the exact verb arguments.
-- **Ship**: `npm run build` writes `dist/` and the `onType` entries in `dist/manifest.json`.
-  Commit `dist/`, including `dist/node_modules/@embabel/runtime-types` (force-add it past a
-  `node_modules/` ignore rule): the compiled class requires it in the sandbox.
+- **Ship (legacy `src/` project)**: `npm run build` writes `dist/` and the `onType` entries in
+  `dist/manifest.json`. Commit `dist/`, including `dist/node_modules/@embabel/runtime-types`
+  (force-add it past a `node_modules/` ignore rule): the compiled class requires it in the
+  sandbox. A `realm.ts` realm commits no `dist/` and no manifest: the host builds its handlers.
 - **Call it** from a script: read with `gateway.cypher.query` or `gateway.kg.query` (one
   path under two names; its rows carry `__type` and `__labels`), `state.set("acme", row)`, then
   `state.get("acme").addNote(...)`. Methods compose through labels, parents included. See
   "Acting on what a query finds".
 
 ## Build, test, ship
+
+For a `realm.ts` realm:
+
+```bash
+npx tsc --noEmit        # checks realm.ts and its imports against @embabel/realm-types
+npm test                # your own handler tests, if the realm has handlers
+```
+
+- Nothing is generated or committed from a build: no YAML, no `dist/`, no manifest. The host
+  evaluates `realm.ts` and builds `wasm/handlers.ts` when it installs the realm.
+- Typechecking is not validation. Run `realm_validate` (or the CI workflow in the spec's
+  "Validating a realm in CI"), which evaluates the definition as the host will and reports what it
+  refuses or does not load. [Composing a realm](https://github.com/embabel-worlds/realm-spec/blob/main/REALM_COMPOSITION.md)
+  has the `tsconfig.json` to use.
+
+For a legacy YAML realm with a `src/` project:
 
 ```bash
 npm install && npm run typecheck && npm test && npm run build   # only if the realm has src/
@@ -277,9 +327,9 @@ npm install && npm run typecheck && npm test && npm run build   # only if the re
 
 ### The declarative half has no unit tests — run it against a live host
 
-`npm test` covers `src/` handlers. It says **nothing** about the part of a realm that usually
+`npm test` covers handlers. It says **nothing** about the part of a realm that usually
 breaks: producers, virtual joins and views are only exercised by a running host against the real
-source. A realm whose YAML parses, whose types load, and whose every query silently returns
+source. A realm whose definition loads, whose types load, and whose every query silently returns
 nothing is the normal failure — and it looks identical to "the source has no data".
 
 **Before you call a realm done, run every view against a live host and require rows.** Ship that
@@ -303,10 +353,11 @@ can pass while the platform's own is broken, which is the opposite of what a har
 | run one view with args (rows + warnings) | `POST /api/v1/admin/kg/views/{name}/run` |
 | see the Cypher a view would run (debugging) | `POST /api/v1/admin/kg/views/{name}/invocation` |
 | run verbatim Cypher through the engine | `POST /api/v1/admin/kg/execute` |
-| **reload your realm's YAML — NO app restart** | `POST /api/v1/realms/{name}/update` |
+| **reload your realm's definition — NO app restart** | `POST /api/v1/realms/{name}/update` |
 
 That last one is the difference between a two-minute edit loop and a two-second one: a realm
-referenced by local path is reloaded in place, so edit YAML → update → re-run the harness.
+referenced by local path is reloaded in place, so edit `realm.ts` (or a legacy YAML file) →
+update → re-run the harness.
 
 **Every view needs a case; a view with no case is untested.** Fail the run if any view returns
 zero rows.
@@ -556,7 +607,8 @@ push.
   environment variables do not authorize credential use for a captured realm; only a
   conventional realm in the local or first-party tier may resolve `token-env` from the
   environment.
-- **A captured realm declares credentials; a conventional realm declares `keys.yml` entries.**
+- **A captured realm declares credentials; a conventional realm declares `keys.yml` entries**
+  (legacy YAML only: `keys.yml` has no `realm.ts` form yet).
   Both work. New realms should be captured and declare credentials the owner binds. `token-env`
   is deprecated in favour of either. A captured API operation is pinned to the value it was
   approved with, so changing a key that a key entry and a captured realm share means approving
@@ -583,12 +635,14 @@ push.
 
 ## Channel sources and consumers
 
-Declare sources and consumers in `data-pipes.yml` using the
-[hosted data-pipe contract](https://github.com/embabel-worlds/realm-spec/blob/main/HOSTED_EXECUTION.md#data-pipes). A source names its stream
+Declare sources and consumers as `dataPipes` in `realm.ts`, and channel-fed sources and
+consumers with `connecting`; see
+[sources, consumers and triggers](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#sources-consumers-and-triggers). A source names its stream
 and event type. A consumer names a captured handler; the owner separately approves its exact
-source and handler. A declaration creates no grant. In a TypeScript realm, write them as
-`dataPipes` in `realm.ts`, and declare channel-fed sources and consumers with `connecting`; see
-[sources, consumers and triggers](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md#sources-consumers-and-triggers).
+source and handler. A declaration creates no grant. The
+[hosted data-pipe contract](https://github.com/embabel-worlds/realm-spec/blob/main/HOSTED_EXECUTION.md#data-pipes)
+says what the host does with them; a legacy YAML realm declares the same records in
+`data-pipes.yml`.
 
 Use `gateway.channel.publish` in a captured Docker handler or `ctx.gateway.channel.publish`
 in a Wasm handler. Keep `streamId`, `eventId` and payload stable on retry. The journal matches a retry on those,
@@ -605,8 +659,11 @@ approval.
 A captured realm runs from a copy the owner admitted, and every capability is its own owner
 approval. Write `realm.ts`, importing definition fragments as needed;
 [TypeScript realms](https://github.com/embabel-worlds/realm-spec/blob/main/TYPESCRIPT_REALMS.md) is the full contract, with the owner's approval
-steps at the end. Use `defineRealm` in place of `satisfies Realm`: under it, a goal, producer,
-lens, channel or consumer naming a handler the realm does not declare is a compile error. The host
+steps at the end. Write a captured realm that declares handlers with `defineRealm`: under it, a
+goal, producer, lens, channel or consumer naming a handler the realm does not declare is a compile
+error. `export default { ... } satisfies Realm` checks the fields of either profile but no handler
+names, so it suits a conventional realm and a captured realm with no handlers; `defineRealm`
+accepts only a captured realm. The host
 refuses an undeclared handler everywhere a realm names one: a goal, producer, `dataPipes`
 consumer, app, lens, channel or consumer. A realm with no `handlers` block declares none, so
 every handler name in it is refused. An undeclared goal `input` or `output` type is a warning,

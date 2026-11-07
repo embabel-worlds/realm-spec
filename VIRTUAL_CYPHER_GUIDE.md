@@ -62,7 +62,7 @@ RETURN c.company, c.jobtitle
 
 **Declared:** a `HubSpotContact` type with one `virtualJoins` entry
 `{ anchorLabel: Person, relationship: HAS_HUBSPOT_CONTACT, keyField: primaryEmail, recordKeyField: email, producer: contactsByEmail }`,
-and a `producers/` entry `contactsByEmail` (`kind: remote`).
+and a producer `contactsByEmail` (`kind: remote`), declared under `producers` in `realm.ts` or in a legacy `producers/` file.
 
 > This is the **id-match** shape: the anchor is a real domain node and the join links by a shared
 > value (email). Contrast with the **bridge** shape (§3.2), where the anchor is itself an external
@@ -386,7 +386,7 @@ ORDER BY r.score DESC
 
 **Declared:** a `RelevantEmailThread` type whose `virtualJoins` anchor on `Person` /
 `Organization` / `Meeting` via `RELEVANT_TO`, with `keyField` = the embeddable text (`name` /
-`subject`) and `recordKeyField: matchedFor`; and a `producers/` entry `relatedThreads`
+`subject`) and `recordKeyField: matchedFor`; and a producer `relatedThreads`
 (`kind: vector`, `index: email_threads`, `k`, `minScore`). See §6 for the full vector-edge model.
 
 ---
@@ -636,7 +636,8 @@ nothing: it says what the key would be, and the `MATCH` decides whether that acc
 ### 3.19 Ask for the result, not the steps — a goal view, then English
 
 3.17 wrote the whole pipeline by hand. A realm that ships its stages as views lets a caller write only the
-last part. The two steps, as the realm ships them:
+last part. The two steps, as the realm ships them (in the legacy `views/` YAML; a captured `realm.ts`
+declares the same entries under [`views`](TYPESCRIPT_REALMS.md#conventional-declarations)):
 
 ```yaml
 # views/email-steps.yml

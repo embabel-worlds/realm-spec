@@ -8,8 +8,8 @@ TypeScript, installing the realm, and running a query.
 
 Nothing here describes how the host implements any of it.
 
-Types may be declared in YAML or in TypeScript — see `DECLARING_TYPES.md`. Every guarantee
-below holds identically for both; the examples here use YAML for brevity.
+Types are declared in `realm.ts`, or in a legacy realm's YAML — see `DECLARING_TYPES.md`. Every
+guarantee below holds identically for both; the examples here use YAML for brevity.
 
 ---
 
@@ -160,7 +160,8 @@ MATCH (n:GovUk) RETURN labels(n)         // the realm's whole graph contribution
 
 **Guarantee — derivation is predictable, and overridable.** The label derives from the realm
 name (`realm-gov-uk` → `GovUk`: strip the `realm-`/`pack-` prefix, capitalise each word). A
-realm may override it wholesale with `realmLabel:` in `realm.yml`.
+legacy YAML realm may override it wholesale with `realmLabel:` in `realm.yml`. The override is
+[not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts), so a `realm.ts` realm carries the derived label.
 
 **Guarantee — a realm label never collides with a type.** A derived or declared realm label
 that equals any declared type name is REFUSED at load, reported naming the realm, and that
@@ -174,7 +175,7 @@ join (`Person`, `Organisation`) is never stamped, so the qualified form cannot s
 **A realm may read a label it does not own, and say it does not need it.** A view may read
 another realm's label. When that realm is a companion the author expects may be absent, the realm
 lists the label under `optionalLabels:` in `realm.yml` and reads it only under `OPTIONAL MATCH`; the
-host then reports its absence as a note rather than a defect. See [Optional labels](README.md#optional-labels--reading-a-companion-realm-that-may-be-absent).
+host then reports its absence as a note rather than a defect. `optionalLabels` is [not yet expressible in `realm.ts`](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts). See [Optional labels](README.md#optional-labels--reading-a-companion-realm-that-may-be-absent).
 
 The realm label is inert unless used: bare-label queries, hierarchies (§2) and capability
 composition (§3) behave identically with or without it. Vocabulary conventions still apply —
