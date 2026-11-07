@@ -34,8 +34,9 @@ in the two profiles. A host must refuse a declaration in the wrong profile, nami
 Generated artefacts beside `realm.ts` are never read, whether they agree or conflict. Resources
 `realm.ts` refers to, such as SQL, handler source, an icon, a vendored API document or a reference
 data file, are read as always. YAML receives no new features: anything new is declared in
-`realm.ts`. On the reference host, YAML type, producer and view files beside `realm.ts` are not
-yet read (they are reported as ignored); every other YAML kind beside `realm.ts` loads.
+`realm.ts`. Every YAML declaration kind beside a conventional `realm.ts` loads, types, producers
+and views included. Beside a captured `realm.ts` nothing is read: the capture declares what the
+realm runs.
 
 ### Definition evaluation
 
@@ -1595,8 +1596,7 @@ Every YAML declaration a conventional realm can hold has a `realm.ts` field. Wha
 | --- | --- |
 | Personalities and prompt examples (`personalities/<slug>/*.jinja`, `prompts/examples.md`) | Templates and text, not declarations: they stay files beside `realm.ts`, and load. |
 | Query examples, next steps, data contracts, seed files | Files beside `realm.ts`, and load. |
-| `decorations`, `mcp`, `commands` | Mapped and checked; the reference host does not yet load them from `realm.ts` and reports each as not loaded, naming the field. The same files beside `realm.ts` load. `commands` takes the captured command form only. |
-| YAML `types/`, `producers/`, `views/` beside `realm.ts` | Not yet read by the reference host, which reports them as ignored. Declare them in `realm.ts`. |
+| `decorations`, `mcp`, `commands` | Mapped and checked; the reference host does not yet load them from `realm.ts` and reports each as not loaded, naming the field. The same files beside `realm.ts` load. Their readers run at startup over the realm folders, before a world's realms are loaded, so they have no `realm.ts` to read; `commands` takes the captured command form only. |
 
 A host reports every `realm.ts` field it does not load, naming the field. A field is never
 dropped without a word.
