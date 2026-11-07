@@ -50,9 +50,9 @@ must resolve to relative files inside the realm. A `tsconfig.json` path alias al
 declare a runtime mapping. No import may escape the captured realm, including through a
 symlink. Type-only imports are erased and confer no runtime capability.
 
-The host provides `@embabel/realm-types` version `0.1.0` for definition imports without a
+The host provides `@embabel/realm-types` version `0.2.0` for definition imports without a
 `package.json` or a declared package dependency. The bundled version guarantee is exactly
-`0.1.0`; it does not imply support for other versions. Authors may import the package root
+`0.2.0`; it does not imply support for other versions. Authors may import the package root
 or an existing source file as `@embabel/realm-types/<file>.ts`, for example
 `@embabel/realm-types/handlers.ts` or `@embabel/realm-types/types.ts`. Subpaths must stay
 inside that package; an absent source file is refused. An explicit `package.json`
@@ -1476,7 +1476,7 @@ carried today; [the next section](#not-yet-expressible-in-realmts) lists the res
 | `focuses` | A focus, keyed by name. | [focuses](README.md) |
 | `channels` | A connector channel, keyed by name: `type` and the connector's own keys, `tokenEnv` for `token-env`. | [channels](README.md) |
 | `events` | The event list one `events/<key>.yml` holds; an event may be both `poll`ed and pushed by `webhook`. | [events](README.md) |
-| `views` | A list of view entries, as in both profiles. | [views](README.md#views--saved-queries-and-the-two-shapes-they-come-in) |
+| `views` | A view, keyed by name; the captured list form is accepted too. | [views](README.md#views--saved-queries-and-the-two-shapes-they-come-in) |
 | `realmLabel`, `optionalLabels` | As in `realm.yml`. | [labels](LABELS_AND_COMPOSITION.md), [optional labels](README.md#optional-labels--reading-a-companion-realm-that-may-be-absent) |
 
 ### Declaration files
@@ -1524,7 +1524,7 @@ it load as they always have.
 // realm.ts (conventional)
 import type { Realm } from "@embabel/realm-types";
 
-/* A spine type is spread in from its own record: the 0.1.0 SDK types do not describe `spine`. */
+/* A spine type may also be spread in from its own record. */
 const spines = {
   CustomerAccount: {
     description: "A company the business sells to, whatever system knows about it.",
@@ -1566,24 +1566,25 @@ export default {
 } satisfies Realm;
 ```
 
-The SDK's types are narrower than the host: version 0.1.0 describes the `remote`, `generative`
-and `aggregate` producer kinds and no `spine` field. A definition that declares another kind
-leaves out `satisfies Realm`, and the host checks the evaluated entry as it checks the same entry
-in a YAML file. A type field the SDK omits can be spread in from a separate record, as `spines` is
-above.
+Version 0.2.0 of the SDK types every producer kind, `spine`, `hub` and `joinKey`. Where the SDK is
+narrower than the host, the host checks the evaluated entry as it checks the same entry in a YAML
+file, and a field the SDK omits can be spread in from a separate record, as `spines` is above.
 
-**Views have one form in both profiles.** `views` is a list of view entries, each the entry a
+**Views.** A conventional realm keys `views` by view name, as it keys producers; a captured realm
+writes a list. Either profile accepts the list form. Each entry is the entry a
 [`views/` file](README.md#views--saved-queries-and-the-two-shapes-they-come-in) holds: `name`,
 `description`, and `cypher:` or `goal:`, with its parameters.
 
 ```typescript
-views: [
-  {
-    name: "OpenIncidents",
+// conventional
+views: {
+  OpenIncidents: {
     description: "Unresolved incidents across the services the owner depends on.",
     cypher: "MATCH (s:Service)-[:HAS_INCIDENT]->(i:Incident) WHERE i.status <> 'resolved' RETURN s.name AS service, i.incidentId AS incident",
   },
-],
+},
+// captured
+views: [{ name: "OpenIncidents", description: "…", cypher: "MATCH …" }],
 ```
 
 ## Not yet expressible in realm.ts

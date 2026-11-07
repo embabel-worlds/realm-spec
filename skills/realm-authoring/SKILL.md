@@ -155,8 +155,8 @@ things or one?**
 2. A spine an installed realm already declares. Check `realm_status` / the vocabulary realm you
    are building against. Put `hub: <ThatSpine>` on the property carrying the key.
 3. None fits → declare one, in the most general realm that needs it (a vocabulary realm, not a
-   product realm — the spine must outlive any one product). The 0.1.0 SDK types do not describe
-   `spine`, so spread the type in from its own record:
+   product realm — the spine must outlive any one product). The 0.2.0 SDK types describe
+   `spine`; a spine type can also be spread in from its own record:
 
 ```ts
 const spines = {
