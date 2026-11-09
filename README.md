@@ -11,10 +11,15 @@ guest to bypass those checks.
 
 **Licence.** The specification text in this repository — this document, [Virtual Cypher](VIRTUAL_CYPHER.md) and their companions — is [CC BY-ND 4.0](LICENSE); the embedded code, YAML and Cypher samples are [Apache 2.0](LICENSE-SAMPLES-APACHE-2.0). Authoring realms and building software that uses them is free and unconditional; implementing these specifications in another engine or platform requires a written agreement. [NOTICE.md](NOTICE.md) states the rights in full, and [License](#license) summarizes them.
 
-**Writing a captured realm in TypeScript?** [TypeScript realms](TYPESCRIPT_REALMS.md) walks through
-`defineRealm` from end to end: handlers and their context, credentials, APIs, channels, sources and
-consumers, dependencies, producers, graph queries, goals, lenses, watches, apps, write proposals,
-and the owner approvals each one needs.
+**Writing a realm?** Write `realm.ts`, the preferred realm definition format: one default-export
+object the host evaluates and reads directly. [Composing a realm](REALM_COMPOSITION.md) starts from
+a one-file realm, and [TypeScript realms](TYPESCRIPT_REALMS.md) is the contract: metadata, handlers
+and their context, credentials, APIs, channels, sources and consumers, dependencies, types,
+producers, views, graph queries, goals, lenses, watches, apps, write proposals, the owner approvals
+each one needs, and the [conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)
+that have [no `realm.ts` form yet](TYPESCRIPT_REALMS.md#not-yet-expressible-in-realmts). The YAML
+layout this document also describes is the legacy form; it remains supported and receives no new
+features.
 
 **Exposing an existing application to worlds?** The
 [Realm Publishing Protocol](https://github.com/embabel-worlds/publisher) (proposal, Apache 2.0) lets an
@@ -51,9 +56,41 @@ Each entry exposes the realms whose name matches `realm-*` from the given GitHub
 
 ## Directory Structure
 
+A realm is a directory with `realm.ts` at its root. The definition may import as many local
+definition files as the author needs, and names the resources it uses, such as handler source, SQL,
+vendored API documents and an icon. Nothing is generated from it.
+
 ```
 realm-name/
-├── realm.yml              # Required only in this legacy YAML layout
+├── realm.ts               # The realm definition: one default-export object the host evaluates
+├── types/                 # Definition files realm.ts imports (any layout; optional)
+│   └── index.ts
+├── wasm/                  # Handler source the host builds (optional)
+│   └── handlers.ts
+├── apis/                  # Vendored OpenAPI documents an `apis` entry names (optional)
+│   └── my-api.json
+├── apps/                  # App pages and their assets (optional)
+│   └── my-dashboard.html
+├── modules/               # Local dependency modules `from.local` names (optional)
+│   └── my-module.wasm
+├── skills/                # Skills (Agent Skills spec)
+│   └── my-skill/
+│       └── SKILL.md
+├── icon.svg               # Realm icon (optional), named by `icon`
+└── package.json           # Only for `#` subpath imports or declared packages (optional)
+```
+
+[Composing a realm](REALM_COMPOSITION.md) shows complete examples of this layout.
+
+### Legacy YAML layout
+
+A realm without `realm.ts` is read from YAML files. This layout is legacy: it remains supported
+and receives no new features. Every declaration in it has a `realm.ts` field
+([parity](TYPESCRIPT_REALMS.md#parity-with-yaml)), and YAML files beside a `realm.ts` still load.
+
+```
+realm-name/
+├── realm.yml              # Required in this legacy YAML layout
 ├── icon.svg               # Realm icon (optional) — any path, named by realm.yml `icon`
 ├── actions/              # Action specifications (YAML) — framework + host-extension stepTypes
 │   └── my-action.yml
@@ -121,13 +158,47 @@ realm-name/
 
 All directories are optional in the legacy layout. A legacy realm needs `realm.yml` and at least one capability directory. New realms use `realm.ts`; see [Realm source](#realm-source).
 
+The sections below are named after the legacy directories, because each one specifies what its
+capability means. Where a capability has a `realm.ts` form, its section says where that form is
+specified.
+
 ## Realm shapes
 
 A realm is a directory of capabilities. *How* those capabilities are
 expressed is up to the author — realms span a spectrum from
 pure-declarative to handlers-driven:
 
-### Declarative-only (e.g. `realm-github`, `realm-email`)
+### A `realm.ts` definition
+
+`realm.ts` declares everything in one evaluated object, from types and producers alone to
+handlers, dependencies, channels and apps. A realm with no handlers ships no code beyond its
+definition; a realm with handlers adds their source under `wasm/`, and the host builds it.
+
+```ts
+// realm.ts
+import type { Realm } from '@embabel/realm-types'
+
+export default {
+  name: 'library',
+  version: '1.0.0',
+  types: {
+    Book: {
+      properties: {
+        isbn: { identity: true, description: 'ISBN of this edition.' },
+        title: 'Published title.',
+      },
+    },
+  },
+} satisfies Realm
+```
+
+`execution` chooses the profile. A conventional realm, the default, declares the
+[conventional records](TYPESCRIPT_REALMS.md#conventional-declarations). A captured realm
+(`execution: 'captured'`) runs from a copy the owner admitted, declares its capabilities in their
+captured forms; `defineRealm` checks every handler such a realm names, where `satisfies Realm` checks only its fields. See
+[TypeScript realms](TYPESCRIPT_REALMS.md). The two shapes below are legacy YAML realms.
+
+### Declarative-only, legacy YAML (e.g. `realm-github`, `realm-email`)
 
 YAML files describe everything; no code ships. The host parses the
 declarations and wires them into the runtime.
@@ -144,7 +215,7 @@ declarations and wires them into the runtime.
   realm-exchange / realm-imap) live elsewhere; this realm carries only
   the abstraction and the rules.
 
-### Handlers-driven (e.g. `realm-google`)
+### Handlers-driven, legacy YAML (e.g. `realm-google`)
 
 When the integration genuinely needs imperative code — guarded
 mutations with revision checks, multi-step orchestration of vendor
@@ -170,10 +241,13 @@ for declarative realms. Authors choose freely per file.
 
 ### Choosing a shape
 
-- Start declarative. If a YAML `stepType: action` (or any
-  host-extension `stepType` identifier) can express what
-  you need, that's the right tool — no build step, no runtime code
-  path, the host's planner reasons about it directly.
+- Start with `realm.ts` and declarations: types, producers and views
+  need no handler code. Every YAML declaration has a `realm.ts` field
+  ([parity](TYPESCRIPT_REALMS.md#parity-with-yaml)).
+- Start declarative. If a declaration (or, in a legacy realm, a YAML
+  `stepType: action`) can express what you need, that's the right
+  tool — no build step, no runtime code path, the host's planner
+  reasons about it directly.
 - Reach for handlers when the operation has invariants the planner
   can't enforce on its own (atomicity, revision guards, ordering
   across multiple vendor calls) or when the vendor's API grammar is
@@ -192,9 +266,10 @@ files are committed.
 YAML realms are legacy and remain supported, including their committed `dist/` and
 `dependencies/manifest.json`, subject to capability-specific migrations. In particular,
 producers using `kind: source` must follow the [`source-tree` migration](VIRTUAL_CYPHER.md#519-source-tree-with-from-jar--the-source-a-jar-was-compiled-from).
-YAML receives no new features. When `realm.ts` is present,
-its evaluated value supplies the whole declaration; adjacent legacy declarations are reported
-and ignored, even if they differ. Invalid TypeScript never falls back to YAML.
+YAML receives no new features. YAML declaration files beside a `realm.ts` remain permitted and
+load with it; where both declare the same id, `realm.ts` wins and the host warns, naming both
+([source selection](TYPESCRIPT_REALMS.md#source-selection-and-legacy-compatibility)). Invalid
+TypeScript never falls back to YAML.
 
 The directory and YAML examples below document legacy loading and the meaning of existing
 capabilities. Their presence is not an instruction to create a second declaration for a
@@ -202,7 +277,9 @@ TypeScript realm. New declaration features belong in `realm.ts`.
 
 ## `realm.yml`
 
-Required metadata file at the realm root.
+The metadata file of a legacy YAML realm, required at its root. A `realm.ts` realm declares
+the same fields on its default export instead, and has no `realm.yml`; see
+[realm metadata](TYPESCRIPT_REALMS.md#realm-metadata), `realmLabel` and `optionalLabels` among them.
 
 ```yaml
 name: github
@@ -372,6 +449,8 @@ uncategorised rather than infer one.
 
 ## `actions/`
 
+> **In `realm.ts`:** `actions`, a record keyed by action name whose entries are the files below; see [conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations). A YAML file beside `realm.ts` loads too.
+
 A captured host keeps this legacy host configuration outside Realm execution. Use the
 [captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for captured Realms.
 
@@ -529,6 +608,8 @@ Actions are deployed to the host's planner on world load.
 
 ## `goals/`
 
+> **In `realm.ts`:** a captured realm declares [`goals`](TYPESCRIPT_REALMS.md#goals) bound to its handlers; a conventional realm declares the goals below as `goals`, keyed by name ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)).
+
 A captured host keeps this legacy host configuration outside Realm execution. For captured Realms, declare a
 version-1 [captured goal](HOSTED_EXECUTION.md#captured-goal-profile) that binds one approved
 handler to Realm-declared input and output types; a legacy file of the shape below inside a
@@ -548,6 +629,8 @@ outputTypeName: BackgroundMessage
 ```
 
 ## `types/`
+
+> **In `realm.ts`:** `types`, a record keyed by type name whose entries carry the fields below, including `virtualJoins`, `spine:` and `hub:`; see [conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations) and [Declaring types](DECLARING_TYPES.md#typescript-object-declarations). The YAML files below are the legacy form.
 
 Dynamic type definitions — custom input/output types for actions, signal types, and the data dictionary in general. A type with `parents:` declared inherits properties from its parent types (which may be JVM-known host types or other realm-declared types).
 
@@ -737,6 +820,8 @@ A query may also reach a virtual node by **pinning the anchor with a literal** �
 Then the target can be matched by that property directly, with no door written: `MATCH (p:BiblePerson {name:'Moses'})` — or `WHERE p.name = 'Moses'`, `WHERE p.name IN [...]`, or a value bound upstream — is answered as if `(:BibleNameQuery {name:'Moses'})-[:NAMED]->(p)` had been written, and `p` anchors any join that leaves it (`(p)-[:FATHER*]->(a:BiblePerson)`). The query's own predicate still applies to the fetched rows with Cypher's semantics, so a producer that matches keys case-insensitively may fetch rows an exact `=` then filters out. The declaration is required: a target property that merely shares the key's name is never treated as the key, because fetching by a coincidence of spelling answers a different question with full confidence. Without it the bare match is still rejected as a naked scan, and the rejection names the keyed form when one is declared. When several joins declare a `materializedKeyField` the query pins, the first in declaration order is taken.
 
 ### `producers/`
+
+> **In `realm.ts`:** `producers`, a record keyed by producer name whose entries are the entries below, of any `kind`; see [conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations). A captured realm's producers are [handler-backed](TYPESCRIPT_REALMS.md#producers). The YAML files below are the legacy form.
 
 Producers are the source-specific fetchers a `virtualJoins.producer` references — declared once, reused. Conceptually each is a **Repository** over an external store (the Spring Data analogue: one `Repository` abstraction, different stores underneath); the `kind` discriminator picks the store. Each `.yml` in `producers/` is a list. **Batch contract:** a producer takes ALL anchor keys at once and returns the matching records — never one call per key (no N+1).
 
@@ -1230,6 +1315,8 @@ A captured handler has no `gateway.ai`: it reaches a model only through the `mod
 
 ## `views/` — saved queries, and the two shapes they come in
 
+> **In `realm.ts`:** `views`, a list of the entries below, in either profile; see [conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations).
+
 A realm ships named Cypher queries under `views/*.yml`. They appear in the console's Views list and
 are runnable by name, which is most of what they are for. The part that is easy to miss is that one
 of the two shapes **composes**: its name is a label, and a larger query may match it.
@@ -1339,6 +1426,8 @@ the CRM" when `CrmAccount` is merely unowned. Declare a label optional only when
 columns empty and changes no row.
 
 ## `lenses/`
+
+> **In `realm.ts`:** a captured realm declares [`capturedLenses`](TYPESCRIPT_REALMS.md#lenses-and-watches); a conventional realm declares the lenses below as `lenses`, keyed by id ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)).
 
 ### Captured handler binding
 
@@ -1478,6 +1567,8 @@ Only identity-preserving node views compose this way. A tabular/projection view 
 it directly through the named-view surface rather than using its name as a label in a larger query.
 
 ## `sources.yml` — declaring how a COLLECTION behaves
+
+> **In `realm.ts`:** `sources`, the list of entries below; see [declaration files](TYPESCRIPT_REALMS.md#declaration-files).
 
 `producers/` say how to *fetch* records. `sources.yml` says what the collection *is*: how big, what it
 can be filtered by, what order it arrives in, how often it changes, and whether it should be mirrored
@@ -1787,6 +1878,8 @@ key is a warning that names the key it was probably meant to be.
 
 ## `reference/`
 
+> **In `realm.ts`:** `reference`, keyed by file name, each the list of records a file below holds ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)). Large data can stay as files beside `realm.ts`, where they load.
+
 Reference (catalog / config) data a realm **brings into the KG** — the set of entities a realm's types describe that should exist regardless of what the user has done. Where `producers/` fetch data on demand and `populate` mirrors an external system, `reference/` seeds a fixed, realm-authored dataset: a controlled vocabulary, a lookup catalog, a set of well-known entities. Each `.yml` file in `reference/` is a list of records seeded (idempotently) into the KG on world load.
 
 A record is the **same `{type, data, relations}` shape as the `create_entry` tool**, so it rides the same identity-MERGE and user-anchor handling — no separate write path:
@@ -1813,6 +1906,8 @@ Semantics:
 This lets a realm own its reference data as *data*, not as a hardcoded list inside a query or a producer — the same "it's data, put it in the graph" discipline as types and producers.
 
 ## `apis/`
+
+> **In `realm.ts`:** a captured realm declares [`apis`](TYPESCRIPT_REALMS.md#apis); a conventional realm declares the entries below as `apis`, keyed by name ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)). The vendored document stays a file under `apis/`.
 
 API entries — each `.yml` file in `apis/` is a list of API definitions loaded on world init. Each entry compiles into a typed `gateway.<name>.*` namespace inside `execute_javascript` / `execute_python`.
 
@@ -2071,6 +2166,8 @@ End users **never** paste tokens, IDs, or secrets. Settings → Connected Servic
 
 ## `keys.yml` — the keys a realm needs
 
+> **In `realm.ts`:** `keys`, the list of entries below ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)). A captured realm declares [`credentials`](TYPESCRIPT_REALMS.md#credentials) the owner binds.
+
 A realm that calls a vendor with an API key declares that key here: what to call it, where somebody
 gets one, the value(s) it takes, and how the host can tell whether a value works. Hosts use the
 declaration to ask for the key by name, show it on the realm's settings, check a value before
@@ -2210,11 +2307,12 @@ recorded problem. The entry still loads, without `validate`.
 ### Keys and declared credentials
 
 A realm asks for a secret in one of two ways, and both keep working. A key entry in `keys.yml`
-names the variable a value is stored under. A declared credential in `credentials.yml` names a
-purpose, and the owner binds a wallet item to it. Declared credentials are the recommended path
-for new realms.
+names the variable a value is stored under. A declared credential names a purpose, and the owner
+binds a wallet item to it: a `realm.ts` realm declares it under
+[`credentials`](TYPESCRIPT_REALMS.md#credentials), and a legacy YAML realm in `credentials.yml`.
+Declared credentials are the recommended path for new realms.
 
-| | Key entry (`keys.yml`) | Declared credential (`credentials.yml`) |
+| | Key entry (`keys.yml`) | Declared credential (`credentials` in `realm.ts`, or legacy `credentials.yml`) |
 | --- | --- | --- |
 | Applies to | Conventional realms: one installed from a directory, a first-party or org-reviewed realm, or a local one. | Captured realms, which run from a copy the owner admitted. See [hosted execution](HOSTED_EXECUTION.md#credentials). |
 | The realm names | The variable, which `token-env` and `${VAR}` in `apis/` also name. | A purpose: kind, provider, description, docs link. Never a variable or where the secret lives. |
@@ -2239,11 +2337,15 @@ key it shares.
 
 ### `credentials.yml`: declaring a credential
 
+This is the legacy YAML form of a declared credential. A `realm.ts` realm declares the same
+entries under [`credentials`](TYPESCRIPT_REALMS.md#credentials), keyed by id, and
+`connecting()` checks them against the channels beside them; nothing generates `credentials.yml`
+from it, and a `credentials.yml` beside `realm.ts` is not read.
+
 The file is a list with one entry per credential, each naming a purpose: an id, a kind, a plain
 description written for the person who will be asked to bind it, and where somebody gets one. An
-`apis/` entry or a channel then names a credential by that id. `connecting()` in embabel-ts emits
-the file; it is equally hand-authored. A realm that declares nothing here behaves exactly as
-described under `keys.yml`.
+`apis/` entry or a channel then names a credential by that id. A realm that declares nothing here
+behaves exactly as described under `keys.yml`.
 
 ```yaml
 # credentials.yml
@@ -3183,8 +3285,10 @@ The captured-execution profile excludes producers and virtual joins loaded from 
 Realm files. Owner-authored definitions remain available. Producer execution and cache reuse
 retain World and declaration checks; shared cache partitions include both. The legacy Wasm
 producer example demonstrates the compatibility route, not captured resource admission.
-A captured host also accepts the following captured handler producer profile. Each flat
-`producers/*.yml` or `.yaml` file contains one version-1 object:
+A captured host also accepts the following captured handler producer profile. A `realm.ts`
+realm declares it under [`producers`](TYPESCRIPT_REALMS.md#producers), keyed by producer name. In
+the legacy YAML form shown here, each flat `producers/*.yml` or `.yaml` file contains one
+version-1 object:
 
 ```yaml
 # producers/movie-records.yml
@@ -3264,6 +3368,8 @@ for limits, owner approval and excluded host operations.
 
 ## `mcp/`
 
+> **In `realm.ts`:** `mcp`, keyed by file name ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)); the reference host does not yet load it from `realm.ts` and says so, and an `mcp/` file beside `realm.ts` loads.
+
 A captured host keeps this legacy host configuration outside Realm execution. Use the
 [captured handler migration](HOSTED_EXECUTION.md#legacy-executable-migration) for captured Realms.
 
@@ -3297,6 +3403,8 @@ may use a deployment-wide cache. Existing credential-fingerprint or config-only 
 shared-tenancy boundary.
 
 ## `commands/`
+
+> **In `realm.ts`:** `commands`, keyed by file name ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)); the reference host does not yet load it from `realm.ts` and says so, and a `commands/` file beside `realm.ts` loads.
 
 Captured commands map a slash name to an approved handler in the same Realm installation.
 They do not grant handler access or select a host action.
@@ -3344,6 +3452,8 @@ description: Fix an issue
 ```
 
 ## `webhooks/`
+
+> **In `realm.ts`:** `webhooks`, keyed by name ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)). A captured realm receives webhooks through a [webhook channel](TYPESCRIPT_REALMS.md#channels).
 
 Webhook registrations — declare webhooks the realm wants to receive. When the realm is installed and the host has a public URL, these are registered with the external service.
 
@@ -3397,6 +3507,8 @@ Template variables in `register.args` are resolved from:
 The bare-webhook flow — payload arrives, gets wrapped in a `WebhookEvent`, the named action fires — stays as documented above. For richer integration that emits **typed signals** into the host's consequence engine, use `events/` (next section).
 
 ## `events/` — event ingestion
+
+> **In `realm.ts`:** `events`, keyed by file name, each the list a file below holds ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)). A captured realm publishes events from [channels and sources](TYPESCRIPT_REALMS.md#sources-consumers-and-triggers).
 
 Unifies push (webhook) and pull (polling) sources behind a single contract: **emit typed `Signal`s into the host's consequence engine.** A signal type is a `DomainType` declared in `types/` whose `parents` includes `Signal`.
 
@@ -3490,6 +3602,8 @@ No JVM bytecode is shipped — realms that need behaviour beyond mapping should 
 
 ## `channels/` — realm-shipped channel connectors
 
+> **In `realm.ts`:** a captured realm declares [`channels`](TYPESCRIPT_REALMS.md#channels) with `connecting`; a conventional realm declares the connectors below as `channels`, keyed by name ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)).
+
 A channel is a general data pipe, including provider messages, webhooks, database changes
 and Realm-produced events. It may carry data in either direction. `channels/` declares
 provider connector drafts; `data-pipes.yml` declares captured sources and consumers. See the
@@ -3542,6 +3656,8 @@ sandbox callbacks instead.
 An unknown `type` is reported against the file and that channel is skipped; the realm's other content loads.
 
 ## `agents/` — Agents and their Routines
+
+> **In `realm.ts`:** `agents`, keyed by file name ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)).
 
 An **Agent** is a named colleague a realm proposes: a job, the routines that do its work, and the
 duties it keeps. Where `events/` produces signals, an agent's **Routines** react to them or to a
@@ -3992,6 +4108,8 @@ Proactive sends to a channel with no triggering signal are a different authority
 
 ## `decorations/` — scheduled KG node enrichment
 
+> **In `realm.ts`:** `decorations`, keyed by file name ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)); the reference host does not yet load it from `realm.ts` and says so, and a `decorations/` file beside `realm.ts` loads.
+
 A realm drives enrichment of nodes already in the knowledge graph by declaring **decoration manifests**. Each manifest binds a realm-declared `action` to a set of Neo4j labels and a cadence; the host's decoration scheduler walks candidate rows, invokes the action per node, and persists the result.
 
 This is the right shape for "keep these rows fresh", "add my realm's structured data to entities the user already has", and "re-summarise on a TTL" — without the realm needing to write any host code, manage scheduling, or implement dedup.
@@ -4120,6 +4238,8 @@ The action body queries email threads from the biller's domain, extracts `:Bill`
 - **Sweep when an event works.** If the entity gets an enrichable signal on creation (a webhook fires, an EmailSignal lands), prefer the event path. Decorations are for what *can't* be done event-driven — refreshes, federations, cross-source joins, slow-moving fact maintenance.
 
 ## `apps/`
+
+> **In `realm.ts`:** a captured realm declares [`apps`](TYPESCRIPT_REALMS.md#apps), keyed by page file name, with the handlers each page may call. The page itself lives under `apps/` in either form. Manifest files beside a page are the legacy form.
 
 HTML apps the realm ships. A realm-bundled app is served at **`/apps/{realm-name}/{name}.html`** (the reference host, verified 2026-09-23: `/apps/github-actions/ci-health.html`; `/apps/{name}` and `/api/v1/apps/{name}` answer 404 for it). Vibe-coded and world-template apps share the `/apps/{name}` resolution below:
 
@@ -4300,6 +4420,8 @@ duties need `vc_relevance` mapped to something better than the cheapest model. _
 
 ## `prompts/`
 
+> **In `realm.ts`:** prompts are text, not declarations: the files below sit beside `realm.ts` and load.
+
 Prompt contributions — optional content **appended to every chat system prompt** for every user with the realm installed. Currently supports `examples.md`.
 
 > **⚠️ Tax on every chat turn.** Bytes you add here are paid by every user, every turn, even when they're not invoking your realm. Hosts enforce a soft size ceiling (the reference host: 1024 bytes per realm by default, configurable by the operator); over-budget realms still load but the host surfaces a warning in the world problems list.
@@ -4378,6 +4500,8 @@ Exemplar: `realm-movie`'s `skills/movie/SKILL.md` — rating a film when no scor
 (one option per candidate, candidates in `context`).
 
 ## `notebook/`
+
+> **In `realm.ts`:** `notebook`, keyed by file name ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)).
 
 What a persona keeps about one conversation, across its turns. Each file under `notebook/` is one
 reusable **set** of typed **slots**; a persona includes sets by name.
@@ -4500,6 +4624,8 @@ a list in this document.
 
 ## `personalities/`
 
+> **In `realm.ts`:** personalities are templates, not declarations: the files below sit beside `realm.ts` and load.
+
 Each subdirectory under `personalities/` is one persona the host can run the assistant as — its voice, behaviours, guardrails, and display name. The host renders the chat system prompt by including Jinja templates from the active persona's directory; switching personality is a directory swap, not a prompt rewrite.
 
 ```
@@ -4615,6 +4741,8 @@ ships no brief.
 A realm's personality is referenced by slug (its directory name) from a `focuses/` file (`defaultPersona: roger`) or directly via the host's persona picker. Slug must be unique across the world; on collision with a world-authored personality, the world wins.
 
 ## `focuses/`
+
+> **In `realm.ts`:** `focuses`, keyed by name ([conventional declarations](TYPESCRIPT_REALMS.md#conventional-declarations)).
 
 A **focus** is a named scoping of the chat surface — a subset of realms whose skills the chat LLM can see, plus an optional persona override. The point is routing reliability: a 30-skill world gives even a sharp realm skill room to lose to a competitor; strip the competitors out and the LLM has nothing to confuse the right skill with.
 
@@ -4781,6 +4909,8 @@ person runs it, on a system they have decided is disposable.
 
 ## `hints/`
 
+> **In `realm.ts`:** `hints`, keyed by file name, each the list a file below holds ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)).
+
 Tips the realm ships for the humans using the world it is installed in — shown by the host's
 UIs (the chat surfaces, the worlds console) as tip-of-the-day cards. Content follows
 capability: a realm that adds an answer surface ships the tips that teach it, and they arrive
@@ -4815,8 +4945,11 @@ each installed realm's `hints/`, one parse failure costing that file — recorde
 `realm_validate` answers "would this load?" inside a running appliance. The same checks run with no
 appliance at all, so a realm repository can make them a **required check** — including on pull
 requests from forks, which can reach neither an appliance nor its MCP door. They cover what
-`realm_validate` covers: `realm.yml`, types and their parents, joins, producers and the governance
-their source can honour, views, rules, apps, side files, and the handler build.
+`realm_validate` covers: the realm definition (`realm.ts`, evaluated under the
+[definition evaluation rules](TYPESCRIPT_REALMS.md#definition-evaluation), or a legacy
+`realm.yml`), types and their parents, joins, producers and the governance their source can
+honour, views, rules, apps, side files, and the handler build. A `realm.ts` beside YAML
+declaration files is validated with them, and an id both declare is reported, `realm.ts` winning.
 
 The validator ships in the appliance server image, `ghcr.io/embabel/assistant`, as a second command.
 The image you validate with is the appliance whose verdict you get, so pin the tag your users run
@@ -4929,13 +5062,14 @@ If a capability needs real code, ship it as sandboxed handler code (`src/` or `w
 ## Conventions
 
 - **Naming**: lowercase-hyphenated for ids (realm name, action name, command name); UpperCamelCase for type names.
-- **YAML**: prefer multi-doc files only when the entries are tightly related; otherwise one file per item.
+- **Definition files**: `realm.ts` may import one file per type, producer set or other record, or hold everything; split where a reader would look for it. See [Composing a realm](REALM_COMPOSITION.md).
+- **Legacy YAML**: prefer multi-doc files only when the entries are tightly related; otherwise one file per item.
 - **Descriptions are LLM-readable**: write descriptions assuming an LLM planner is the primary reader.
 - **Stable ids**: changing a `name` is a breaking change for any installed world that wired against it.
 
 ## Versioning
 
-Realms follow semantic versioning in `realm.yml`. The `version` is informational; hosts may track it to detect upgrades but the contract is at the directory-and-field level — adding a new optional field is a minor change, removing or renaming a required field is a major one.
+Realms follow semantic versioning in their `version` field (`realm.ts`, or `realm.yml` in a legacy realm). The `version` is informational; hosts may track it to detect upgrades but the contract is at the directory-and-field level — adding a new optional field is a minor change, removing or renaming a required field is a major one.
 
 The spec itself is versioned by this repository's git history. Hosts target a spec revision; realms declare compatibility informally for now.
 

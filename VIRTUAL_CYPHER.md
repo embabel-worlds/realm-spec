@@ -510,7 +510,7 @@ absence.
 | `stacktrace` | the **Java stack trace in a piece of text** — its throwables and frames, each frame naming the jar that compiled its class with that jar's keys (§5.20) | the text: a pasted trace, or a log event's `content` |
 | `files` | the world's **local files**, walked live under `data/` roots — one row per file, per line (`unit: line`) or per log event (`unit: event`, §5.20.1) | the owner key; free-text terms with `emit: search` |
 | `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
-| *captured handler* (no `kind`) | an approved handler in the realm's own captured installation, declared as a version-1 `producers/` file. It may walk its own cursor (`page:`) and receive `=`/`IN` filters as list arguments (`pushdown:`). No cache ([captured handler producers](README.md#captured-handler-producers)) | the anchor key batch, as a list under `keyArgument`; each record carries its key under `recordKeyField` |
+| *captured handler* (no `kind`) | an approved handler in the realm's own captured installation, declared under `producers` in `realm.ts` ([captured producers](TYPESCRIPT_REALMS.md#producers)); a legacy YAML realm declares it as a version-1 `producers/` file. It may walk its own cursor (`page:`) and receive `=`/`IN` filters as list arguments (`pushdown:`). No cache ([captured handler producers](README.md#captured-handler-producers)) | the anchor key batch, as a list under `keyArgument`; each record carries its key under `recordKeyField` |
 
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
 `cache:` policy: `none` (alias `fresh`, the default — read live every query), `ttl` (a window in
@@ -1797,14 +1797,15 @@ SELECT query ONCE; consumers only ever see the virtual join, and no query author
   TRUNCATED warning. A retryable refusal — a throttle, a gateway failure, a timeout — is attempted
   once more, honouring the endpoint's `Retry-After` where it sends one: the same law every producer
   kind gets (§9, *what a flaky source costs*), not a `sparql` speciality.
-- **Credentials stay out of YAML.** An authenticated endpoint names the key it needs
+- **Credentials stay out of the declaration.** An authenticated endpoint names the key it needs
   (`fetch.bearerTokenEnv`), never its value; public endpoints need nothing. Every producer field
   ending in `Env` (`bearerTokenEnv`, `passwordEnv`, `apiKeyEnv`) names a key the way an `apis/`
   entry's `token-env` does and resolves under the same [trust tiers](README.md#apis): from the
   world's credential store, and from the process environment only in a local or first-party
   installation. A marketplace realm cannot read the host's environment through one. Like
   `token-env`, each may name only a `variable` the realm's own `keys.yml` declares; any other name
-  refuses the producer at load, naming the field and the undeclared variable.
+  refuses the producer at load, naming the field and the undeclared variable. A `realm.ts` realm
+  declares the same entries as `keys` ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)).
 
 Cost every consumer should know: each key batch is one live query against an endpoint the realm
 does not control. Public endpoints enforce their own timeouts and rate limits; a realm should
@@ -1894,7 +1895,7 @@ already holds every key value.
 ```yaml
 - name: ordersByCustomerEmail
   kind: sql
-  datasource: warehouse          # declared in <realm>/sql/datasources.yml
+  datasource: warehouse          # declared in realm.ts `datasources` (or sql/datasources.yml)
   table: orders
   keyColumn: customer_email
   governance:
@@ -2113,11 +2114,11 @@ two systems spell one key differently, declare the spine (§5.4.1) and the ladde
 labels, primary keys identities, foreign keys edges. The host can mine a datasource's
 metadata into a realm scaffold: one type per table, one `sql` producer + virtual join per
 foreign key, with the full column list pre-written into an open-mode `expose:` block. The
-scaffold is ordinary realm YAML: inspect it, prune the exposure, flip `mode: governed`,
-and no query that touched only exposed data changes.
+scaffold is a legacy YAML realm, because its datasource has no `realm.ts` form yet: inspect it,
+prune the exposure, flip `mode: governed`, and no query that touched only exposed data changes.
 
-**Stored procedures.** A realm may publish stored procedures as TYPED verbs in
-`<realm>/sql/procedures.yml` — the declaration IS the allowlist (a procedure the realm does
+**Stored procedures.** A realm may publish stored procedures as TYPED verbs in `realm.ts`
+`procedures` or `<realm>/sql/procedures.yml` ([declaration files](TYPESCRIPT_REALMS.md#declaration-files)) — the declaration IS the allowlist (a procedure the realm does
 not name does not exist; nothing is ever exposed by introspection), mirroring the GraphQL
 `mutations:` gate. Declared args become the verb's typed signature on the code-mode surface
 (`gateway.<datasource>.<name>`); result rows never include credential-shaped columns.

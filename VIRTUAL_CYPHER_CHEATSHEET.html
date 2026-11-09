@@ -514,7 +514,7 @@ ORDER BY r.score DESC</code></pre>
       <div class="grid">
     <section data-tags="declare producers yaml">
       <h2>A realm declares it; you traverse it</h2>
-      <p class="lede">Nothing on this page needed you to know how <code>GitHubIssue</code> becomes reachable. That is the design: a realm author writes the declaration once, in YAML, and every query after it is ordinary Cypher.</p>
+      <p class="lede">Nothing on this page needed you to know how <code>GitHubIssue</code> becomes reachable. That is the design: a realm author writes the declaration once, in <code>realm.ts</code> (or a legacy realm&rsquo;s YAML), and every query after it is ordinary Cypher.</p>
       <pre><code>MATCH (p:Person)
       -[:HAS_HUBSPOT_CONTACT]-&gt;(c:Contact)
 RETURN c.company</code></pre>

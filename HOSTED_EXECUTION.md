@@ -54,7 +54,9 @@ A channel is a general data pipe. Discord messages, webhook events, database cha
 and Realm-produced events can supply it. A channel may be inbound, outbound or bidirectional;
 a live conversational connection is one provider adapter.
 
-`data-pipes.yml` version 1 declares sources and consumers:
+A realm declares sources and consumers as `dataPipes` in `realm.ts`
+([sources, consumers and triggers](TYPESCRIPT_REALMS.md#sources-consumers-and-triggers)). The
+legacy YAML form is `data-pipes.yml` version 1, which holds the same records:
 
 ```yaml
 version: 1
@@ -242,8 +244,9 @@ one.
 
 ## Credentials
 
-A captured Realm declares the credentials it needs in `credentials.yml` by purpose (kind,
-provider, description and docs link), and never says what the secret is or where it lives. A
+A captured Realm declares the credentials it needs under `credentials` in `realm.ts`
+([credentials](TYPESCRIPT_REALMS.md#credentials)), or in a legacy realm's `credentials.yml`, by
+purpose (kind, provider, description and docs link), and never says what the secret is or where it lives. A
 conventional Realm names its keys in `keys.yml` instead; both work, and
 [keys and declared credentials](README.md#keys-and-declared-credentials) says which applies
 where. Declared credentials are the recommended path for new Realms. Five kinds are accepted and
@@ -507,8 +510,10 @@ to an external datasource. The host channel journal is a separate delivery facil
 
 ## Captured API operations
 
-A captured Realm may declare approved API operations in `apis/apis.yml` using vendored
-OpenAPI documents. Each operation binds a fixed destination and a key from the owner's
+A captured Realm may declare approved API operations under `apis` in `realm.ts`
+([APIs](TYPESCRIPT_REALMS.md#apis)), or in a legacy realm's `apis/apis.yml`, using vendored
+OpenAPI documents. The examples below use the legacy YAML spelling; `realm.ts` spells
+`operation-ids` and `write-operation-ids` as `operationIds` and `writeOperationIds`. Each operation binds a fixed destination and a key from the owner's
 wallet, unless its entry is declared `auth: none`. In the governed profile, `token-env`
 identifies a wallet entry; it does not authorize an environment-variable fallback. The fallback a
 conventional Realm may use in the local or first-party tier ([Auth](README.md#auth)) never
@@ -618,7 +623,8 @@ remains open.
 
 ### Write operations
 
-A captured `apis/apis.yml` entry may also declare `write-operation-ids`, naming OpenAPI
+A captured API entry may also declare write operations (`writeOperationIds` in `realm.ts`,
+`write-operation-ids` in legacy `apis/apis.yml`), naming OpenAPI
 `post`, `put`, `patch` or `delete` operations with an optional JSON request body, alongside
 its existing read `operation-ids`:
 
@@ -1015,7 +1021,8 @@ combinations remain unsupported.
 
 ## Captured goal profile
 
-A captured Realm may declare planner goals under `goals/` as version-1 data:
+A captured Realm declares planner goals under `goals` in `realm.ts` ([goals](TYPESCRIPT_REALMS.md#goals)),
+keyed by goal name. A legacy realm declares each under `goals/` as version-1 data, the form shown here:
 
 ```yaml
 version: 1
@@ -1053,7 +1060,9 @@ ships them gets one loading problem saying so.
 
 ## Captured trigger profile
 
-A captured Realm may declare trigger bindings under `triggers/` as version-1 data. A
+A captured Realm declares trigger bindings under `triggers` in `realm.ts`
+([triggers](TYPESCRIPT_REALMS.md#sources-consumers-and-triggers)), keyed by trigger name; a legacy
+realm declares each under `triggers/` as version-1 data, the form shown here. A
 trigger binds one declared channel source to one declared consumer with an explicit
 delivery mode and a bounded selection of the event fields the consumer receives:
 
@@ -1068,7 +1077,7 @@ description: React to a changed note
 ```
 
 `trigger` uses `[a-z][a-z0-9-]{0,63}`. `source` and `consumer` name declarations in the
-Realm's own `data-pipes.yml`; a trigger is exposed only when both exist there, for the same
+Realm's own data pipes (`dataPipes`, or legacy `data-pipes.yml`); a trigger is exposed only when both exist there, for the same
 installation the trigger was captured with. `mode` is exactly `observe` or `apply`. `input`,
 when present, is a subset of the seven fields a consumer receives — `offset`, `eventId`,
 `streamId`, `type`, `occurredAt`, `gap`, `payload` — with no duplicates; an absent `input`
