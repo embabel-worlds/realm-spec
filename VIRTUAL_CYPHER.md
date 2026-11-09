@@ -4575,6 +4575,29 @@ source can only count what it can also filter. All four measures execute; the en
 when EVERY measure in the query is deliverable, and two measures over one property refuse because
 they would want the same slot.
 
+Four further conditions belong to the same list. A target reached by a variable-length path, or one
+whose records anchor a further fetch, keeps its records, because something other than the number
+reads them. A filter the source absorbs must be an equality: the pushed number stands in for
+records the query's own `WHERE` still tests, and only an equality can be satisfied exactly. And a
+batched read pushes only when each declared measure names the key it belongs to (a `sql` producer's
+does, as its `keyColumn`). The anchor itself may be stored or fetched; a route reached through its
+own door counts its flights as cheaply as a stored one.
+
+An aggregate counts wherever the projection holds it, including inside an expression. In
+`CASE WHEN count(f.delay) = 0 THEN null ELSE sum(f.delay) END`, the `count(f.delay)` is a count of a
+property, so the view is folded in the graph like any other that counts values.
+
+A pushed number never changes the answer's semantics. For a key with no rows, or with only null
+values, SQL's `SUM` is NULL and Cypher's `sum()` is 0; the pushed path answers 0, as the graph's own
+fold does, so a view returns the same value whichever way it was planned. A view that wants SQL's
+NULL says so with a guard, as above.
+
+**A declared aggregate the query did not use is said.** When a producer declares `aggregates:`, the
+query folds what it fetches, and one of the conditions above declines the push, the result carries
+an `AGGREGATE_NOT_PUSHED` note. It names the producer, what it declares, the measures the query
+folds and the first condition that declined, so the view or the declaration can be changed. A query
+that folds nothing from the producer is not told about an offer it was never going to take.
+
 **This makes the SHAPE of a view a cost decision.** `collect(c.subject)` needs the records whatever
 else the query asks, so a view that both counts and collects always pays the collecting price —
 including when the question was triage across the whole book and nobody was going to read a subject.
@@ -4722,6 +4745,7 @@ is classified and surfaced as a warning on the result:
 | `COMPUTE_FAILED` | a producer's `compute:` expression raised on some records | the rows are complete and the source is fine; **one property is absent** on the records named. Absent rather than null or zero, because either would read as an answer. |
 | `MATERIALIZATION_FAILED` | the source returned data the graph could not store | the records **exist** but are missing from the result, so an answer of "none" is definitely wrong. The fix is the engine's, not the caller's. |
 | `REDUCTION_FAILED` | an `aggregate` reduction or an `extract` call failed | the anchor's reduced or extracted records are **absent**, not empty. Retried on the next traversal. |
+| `AGGREGATE_NOT_PUSHED` | a producer declares `aggregates:` and the query folds what it fetches, but a condition declined the push (see "Asking the source for a number instead of the records") | a **cost note over a correct answer**: the graph read every record and folded them itself, so the number is right and only the grouped call was missed. The note names the producer, its declared measures, the measures the query folds and the condition that declined. Never caveated. |
 | `EMPTY_NOT_KEPT` | keys of a `ttl`-cached fetch answered **empty**, and the policy declares no `negativeTtlSeconds` | a **cost note over a correct answer**, not a data warning: the empty is the real answer for those keys, and the only thing it costs is the NEXT run's call. The note names how many of how many keys, and prints the declaration that would keep them. Nothing about the rows is in doubt, so an answer carrying it is never caveated. |
 
 A row is not proof of a complete answer. Rows and totals from an incomplete read are retained as
