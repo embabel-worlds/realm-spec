@@ -3531,6 +3531,36 @@ empty group means. A typed reduction whose model fails is also `null`, flagged `
 (§9), so it is never bare. Neither is ever a fabricated verdict or digest, and ask surfaces report
 the result as an honest miss rather than an answer. An empty LIST accumulates as empty: `collect()` of zero rows never manufactures evidence.
 
+**A prose reduction over more input than it can combine says so.** `summarize`, `synthesize` and
+`render` read every character of a group, in as many passes as that takes. When the partial results
+of those passes are still too large to combine, the reduction fails for that group. It never answers
+from a prefix of the input and presents that as the whole. The same rows always fail the same way,
+so asking again does not help.
+
+- A projected cell is `null`, flagged `REDUCTION_FAILED` (§9), with a note that says to filter the
+  input rows with `WHERE` or aggregate smaller groups.
+- A query that FILTERS on the value is refused, because returning the groups that did compute would
+  leave an unknown number silently missing. The refusal names the function and the alias and gives
+  the lever:
+
+  ```cypher
+  // refused: one group holds too much text to combine
+  MATCH (d:Document)
+  WITH d.owner AS owner, summarize(d.text, 'main risks') AS risks
+  WHERE risks CONTAINS 'supplier'
+  RETURN owner, risks
+
+  // answers: narrow the rows the reduction reads, or group by a finer key
+  MATCH (d:Document)
+  WHERE d.year = 2026
+  WITH d.owner AS owner, d.quarter AS quarter, summarize(d.text, 'main risks') AS risks
+  WHERE risks CONTAINS 'supplier'
+  RETURN owner, quarter, risks
+  ```
+
+- A cached aggregate producer omits the anchor and reports a producer diagnostic that says to narrow
+  `collect.where` or lower `collect.limit`.
+
 **A verdict about a NAMED thing requires the name in the corpus.** When a `holds` verdict is
 anchored through document relevance, the seed's words must appear together somewhere in the
 corpus text. A seed that appears nowhere (an address, a name, an identifier the documents never
