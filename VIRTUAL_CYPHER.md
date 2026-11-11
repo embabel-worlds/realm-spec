@@ -2153,7 +2153,8 @@ author writes a search body.
     endpoint: "https://cluster.example.org:443"   # the fallback when endpointEnv is unset
     endpointEnv: ACME_ES_URL   # optional env var holding the URL: one realm, a local node or a hosted one
     apiKeyEnv: ACME_ES_API_KEY # env var; never a credential in YAML. Omit for an open cluster
-    # usernameEnv / passwordEnv: basic auth instead of an API key (apiKeyEnv wins when both are set)
+    # usernameEnv / passwordEnv: basic auth. Declared credentials are alternatives: a set API key wins,
+    # then a set user and password; the producer is refused only when none of them is set
     timeoutSeconds: 30
   retrieval:
     mode: hybrid               # hybrid (default) | bm25 | semantic | knn
@@ -2270,8 +2271,10 @@ mirrors into the graph (README, *Filling a mirror before anyone asks*):
   refused, a page that errors, a response that is not a search, a page that does not advance — is a
   `warnings` entry and an EMPTY result, never the pages read before it presented as the index; the
   mirror records FAILED, not an empty collection. A 401 is an authentication problem. An unset
-  `endpointEnv` with no `endpoint` to fall back on, or an unset `apiKeyEnv`/`usernameEnv`/`passwordEnv`,
-  is reported before the cluster is called. A scan declaring a reranker or an out-of-range page size
+  `endpointEnv` with no `endpoint` to fall back on is reported before the cluster is called. Declared
+  credentials are ALTERNATIVES, so one realm reaches Elastic Cloud with a key or a local stack with a
+  user by environment alone: a set `apiKeyEnv` wins, then a set `usernameEnv`/`passwordEnv` pair, and
+  only when none of them resolves is the producer refused, before any call, naming each variable. A scan declaring a reranker or an out-of-range page size
   is reported as an authoring error.
 
 Cost: one request per `pageSize` documents, plus opening and closing the point-in-time, per walk — not
