@@ -509,7 +509,7 @@ absence.
 | `source-tree` | a **project's source in fourteen languages**, parsed when a query reaches it — files, declarations with their annotations, imports, name-matched calls and the type names each file uses, in the standard model's code columns, and any syntax a realm's own query captures (§5.21) | a project's location: an https git URL (`@ref` optional) or a folder |
 | `stacktrace` | the **Java stack trace in a piece of text** — its throwables and frames, each frame naming the jar that compiled its class with that jar's keys (§5.20) | the text: a pasted trace, or a log event's `content` |
 | `files` | the world's **local files**, walked live under `data/` roots — one row per file, per line (`unit: line`) or per log event (`unit: event`, §5.20.1) | the owner key; free-text terms with `emit: search` |
-| `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
+| `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable — or, with `retrieval.mode: scan`, read WHOLE for a `sources.yml` mirror (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
 | *captured handler* (no `kind`) | an approved handler in the realm's own captured installation, declared as a version-1 `producers/` file. It may walk its own cursor (`page:`) and receive `=`/`IN` filters as list arguments (`pushdown:`). No cache ([captured handler producers](README.md#captured-handler-producers)) | the anchor key batch, as a list under `keyArgument`; each record carries its key under `recordKeyField` |
 
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
@@ -2150,8 +2150,10 @@ author writes a search body.
   kind: elasticsearch          # alias: elastic
   index: contracts             # an index or alias; wildcards allowed (docs-*)
   connection:
-    endpoint: "https://cluster.example.org:443"
+    endpoint: "https://cluster.example.org:443"   # the fallback when endpointEnv is unset
+    endpointEnv: ACME_ES_URL   # optional env var holding the URL: one realm, a local node or a hosted one
     apiKeyEnv: ACME_ES_API_KEY # env var; never a credential in YAML. Omit for an open cluster
+    # usernameEnv / passwordEnv: basic auth instead of an API key (apiKeyEnv wins when both are set)
     timeoutSeconds: 30
   retrieval:
     mode: hybrid               # hybrid (default) | bm25 | semantic | knn
@@ -2212,6 +2214,68 @@ ORDER BY rel.score DESC
 Cost every consumer should know: one live search per anchor, against a cluster the realm does
 not control. A fan-out over many anchors is many searches — bound it with a narrowing match
 before the hop, and declare a TTL cache for repeated questions.
+
+#### `retrieval: { mode: scan }` — the whole index, for a mirror
+
+A relevance producer answers "which documents match this anchor"; it can never answer "every
+document", and a DERIVE rule set — which reads only what is already in the graph (§13.6) — needs
+every one. `mode: scan` turns the producer into a whole-index read that a `sources.yml` source
+mirrors into the graph (README, *Filling a mirror before anyone asks*):
+
+```yaml
+- name: amlSanctions
+  kind: elasticsearch
+  index: aml-sanctions
+  connection: { endpoint: "http://localhost:9200", endpointEnv: AML_ES_URL }
+  retrieval: { mode: scan }
+  scan:                        # optional; these are the defaults
+    partitionField: null       # a keyword field whose value is the partition key; null = the whole index
+    pageSize: 1000             # documents per page, 1..10000
+    keepAlive: 2m              # how long the point-in-time lives between pages
+  hits:
+    idField: sanction_id       # project: still lifts nested fields
+```
+
+```yaml
+# sources.yml
+- name: sanctions
+  producer: amlSanctions
+  label: AmlSanction
+  identityProperty: sanction_id
+  visibility: public
+  sync: { strategy: mirror, trigger: on-install }   # or scheduled + schedule:
+```
+
+**The contract:**
+
+- **Every document, however many.** A scan opens a point-in-time on the index, pages it in index
+  order (`_shard_doc`) continuing each page from the last one with `search_after`, and closes the
+  point-in-time when it ends. It has no `from`/`size` ceiling, so an index past Elasticsearch's
+  `max_result_window` (10,000 by default) is read to its end rather than stopping short and looking
+  complete.
+- **Completeness is arithmetic.** The first page asks the cluster for the exact total, and the
+  mirror records it beside what it holds: a walk is COMPLETE only when it holds what the cluster
+  declared. A document with no identity (no `hits.idField` in its `_source`, when one is declared) is
+  dropped and counted, so the mirror records PARTIAL rather than complete.
+- **Partitioned or whole.** With `scan.partitionField`, a walk of partition `X` reads the documents
+  whose field is `X`; the source names its partitions in `sync.partitions` to walk them on install.
+  Without it, every walk reads the whole index and the source is one partition. Pushdown rules still
+  narrow a scan read live.
+- **Records are the documents.** Each record is the document's `_source`, with `hits.project` lifts
+  and the identity as `id`. Nothing is ranked, so no score or provenance edge is stamped.
+- **Served from the mirror.** A source with `strategy: mirror` answers a read through the producer
+  from what it holds, walking first only when the mirror is missing or older than `sync.maxAge` — a
+  query never rescans the index.
+- **Honesty.** Exactly as for a search: a failed exchange anywhere in the walk — the point-in-time
+  refused, a page that errors, a response that is not a search, a page that does not advance — is a
+  `warnings` entry and an EMPTY result, never the pages read before it presented as the index; the
+  mirror records FAILED, not an empty collection. A 401 is an authentication problem. An unset
+  `endpointEnv` with no `endpoint` to fall back on, or an unset `apiKeyEnv`/`usernameEnv`/`passwordEnv`,
+  is reported before the cluster is called. A scan declaring a reranker or an out-of-range page size
+  is reported as an authoring error.
+
+Cost: one request per `pageSize` documents, plus opening and closing the point-in-time, per walk — not
+per query.
 
 ### 5.17 Calendar history — `periods:` on a `remote` producer
 
