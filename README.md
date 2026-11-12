@@ -26,7 +26,9 @@ world maps a publisher onto Virtual Cypher and code mode.
 is the import and export contract: an OWL or RDFS ontology becomes types, edges and DERIVE rule sets
 (a vocabulary such as the Gene Ontology becomes one type and its rows), every object lands in a mapping
 report as exact, inferred, noted or refused by name, and a realm's schema goes back out as OWL under the
-IRIs it came in with. Import, never conform.
+IRIs it came in with. Import, never conform. [Binding realms](BINDING_REALMS.md) (proposal) is the
+seam that import exposes: the ontology in one realm, the binding to a system in another, with every
+existing realm unchanged as the case where the two are the same.
 
 **Asking for a result without writing the steps?** [Planning](VIRTUAL_CYPHER.md#16-planning-ask-for-the-result-not-the-steps)
 takes a goal — the final query, or a question in English — and a deterministic planner chooses the

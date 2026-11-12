@@ -36,7 +36,8 @@ draft as `IMPORT-REPORT.md`, and an export writes the same shape beside its outp
    stores.
 2. **Import gives you types with no producers of your own.** An ontology says what a `Customer` is,
    not which system yields one. An imported realm answers nothing until its producers point at a
-   store. The report says so on its first line.
+   store. The report says so on its first line. The seam this exposes, ontology in one realm and
+   binding in another, is [Binding realms](BINDING_REALMS.md).
 3. **Refuse by name.** An axiom the realm cannot state is quoted in the report with the reason. It is
    never approximated silently and never dropped.
 4. **The alignment is part of the realm.** `ontology/alignment.yml` records which IRI every realm name
