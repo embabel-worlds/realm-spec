@@ -5423,7 +5423,11 @@ scoping as every query, so a rule can never read what its author's own query cou
 **A conclusion is visible exactly where the nodes it annotates are.** A derived label on nodes only
 its caller owns is the caller's; a derived label on shared nodes is visible to whoever can see those
 nodes, and is answered as such — `MATCH (t:HotTopic)` over shared topics returns them to the caller
-that derived them, never an empty answer. Because a conclusion inherits its nodes' audience, a rule
+that derived them, never an empty answer. A label whose members span scopes is read node by node:
+`MATCH (b:Blocked)` over this world's public `AmlCompany` mirror and the caller's private
+`OwnershipStatement`s returns exactly the nodes `(b:AmlCompany)` and `(b:OwnershipStatement)` would —
+the mirror and the caller's own statements, never another user's statement or another world's
+mirror — and a rule body reading the label sees the same. Because a conclusion inherits its nodes' audience, a rule
 set that would conclude from **private** facts onto nodes **other users can read** is refused before
 it runs: otherwise a shared node would carry a property computed from someone's private data (a
 `heat` counting their private mail) for every reader to see. Conclude onto private nodes, or derive
