@@ -5557,6 +5557,26 @@ its membership — and any count or total over it — is a **lower bound**, nami
 where there is one. Report it to your reader as a lower bound; never present a derived count as a
 total. This is not a failure and not "nothing was derived".
 
+**A demand too big to fetch while somebody waits is offered, not dropped.** A demand is fetched like
+a query, so it meets the same per-join anchor budget (`maxAnchors`: by default 200 keys to a per-key
+source or a model producer). Past it, the demand is not impossible, only big — "extract the ownership
+each of 309 documents states" is 309 model calls, once, and then cached in the graph. So it is priced
+before your rules run (§13.7), and:
+
+- **Where there is someone to ask** — a background run, a watched ask — the query is parked with a
+  question naming your rule set, the producer, the number of keys and what they cost (model calls for
+  a model producer, calls for a remote), and the usual four choices. Proceed or background fetches the
+  demand under that approval and then runs the rules, so the answer is complete, with no lower bound.
+- **Where there is not** — a view invoked synchronously, a scheduled refresh — the demand stays unmet
+  and the answer is the `PARTIAL_RESULT` lower bound described below, whose `UNMET_DEMAND` reason says
+  the same query can run in the background and how far an approved run may go.
+- The same holds for a demand within the anchor budget whose model calls exceed what one request
+  may spend inline (8 cold model calls by default): offered as a background run, quoted in model
+  calls, rather than refused part-way through.
+- An approved run may go up to 1,000 anchors for a model producer and 5,000 calls for a remote. A
+  `maxAnchors` you **declare** on the join is never lifted by approval and never offered: it is your
+  statement about the source. A demand within budget is untouched by any of this.
+
 **The rule of thumb:** make the fact set complete, and prefer making it complete *cheaply*. Loading
 the data (a local table, a promoted watchlist) beats demanding a deep walk, and a demand beats
 hoping the consumer's query walked far enough.
@@ -5566,6 +5586,12 @@ hoping the consumer's query walked far enough.
 Derivation spends **graph work**: rounds of your rule bodies, and a fact written for every row a
 body binds. That is a different currency from the model calls a producer spends, and it is priced
 separately.
+
+**Your demands are priced first, in their own currency.** Each `requires:` demand of a rule set the
+query reaches is quoted as the same Cypher would be as a query — its keys, its calls or model calls,
+and whether it fits the anchor budget — and the quote shows it as `demand of '<rule set>'` above the
+derivation lines. A demand past the budget does not refuse the query (its rules would answer a lower
+bound); it is what makes the query worth offering as a background run (§13.6).
 
 Before any rule evaluates, the engine counts each body on its first round — counting and
 discarding, so nothing is materialized and nothing is written. Two budgets are checked:
@@ -5618,7 +5644,8 @@ over-budget query is *parked* rather than refused outright, and you are offered 
 choices any expensive query gets: proceed, narrow it first, **run it in the background** and collect
 the result later, or cancel. A derivation that genuinely is that large is a scheduling question, and
 answering "background" is the normal answer to it. What the engine will not do is spend the time
-without asking.
+without asking. The same holds for a demand past the anchor budget: parked, quoted in its
+own unit, and fetched in full once you say yes — never spent past the budget without asking.
 
 The count is a **lower bound**, and deliberately so. A recursive rule reads a label that has no
 members on the first round, so a transitive closure is under-counted; and every count stops past its
