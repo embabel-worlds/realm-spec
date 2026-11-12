@@ -175,7 +175,7 @@ run), and reports each failure against the binding, not the ontology.
 
 ## 7. The importer's part
 
-`realm-standards import owl --split` writes two realms instead of one: `<name>` (types, rules,
+`ontology-io import owl --split` writes two realms instead of one: `<name>` (types, rules,
 alignment, views, unbound joins, `binding: external`) and `<name>-binding-sparql` (the SPARQL
 producers and the bindings, `binds: [<name>]`). The single-realm output stays the default until a
 host implements this page. A customer who already has the ontology realm then writes only the

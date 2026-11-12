@@ -134,7 +134,7 @@ what a DERIVE rule states. The importer reads slightly more than RL; what it ref
 
 ### 3.4 Export — a realm as OWL
 
-`realm-standards export owl <realm-dir>` writes Turtle. With the alignment present, every name goes
+`ontology-io export owl <realm-dir>` writes Turtle. With the alignment present, every name goes
 out as the IRI it came in as; without it, IRIs are minted under `--base` or
 `https://realms.embabel.com/<realm>#`.
 
