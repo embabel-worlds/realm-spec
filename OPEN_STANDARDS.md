@@ -46,7 +46,12 @@ draft as `IMPORT-REPORT.md`, and an export writes the same shape beside its outp
    IRIs they came in as.
 5. **Round-trip before claiming.** A host may say it "reads" a standard only when it also writes it
    and the export of an imported realm reproduces the mapped part of the source.
-6. **The source travels with the realm.** An imported realm carries what it was generated from, byte
+6. **A large realm is written in the YAML layout.** Past 512 KiB of `realm.ts` the draft is written as
+   `realm.yml` with `types/`, `producers/` and `views/` beside it: a host evaluates `realm.ts` in a
+   sandbox whose output is capped at 1 MiB, and FIBO Business Entities alone is 1.7 MB of it. The YAML
+   layout is the same declaration read file by file, with no cap, and no anchors or aliases in it: a
+   host's reader refuses them. A small realm stays one `realm.ts`.
+7. **The source travels with the realm.** An imported realm carries what it was generated from, byte
    for byte, under `ontology/source/`: the ontology, every document its `owl:imports` closure brought
    in (under `source/imports/`), the Ossie files, the OKF bundle. `ontology/SOURCE.md` says what they
    are: the source's own title, version, licence and publisher as it declares them, each document's
@@ -56,6 +61,11 @@ draft as `IMPORT-REPORT.md`, and an export writes the same shape beside its outp
    of the model, and a reader can always diff the two or re-run the import on a newer version.
 
 ## 3. OWL 2 and RDFS (Turtle, RDF/XML, N-Triples, JSON-LD)
+
+*Proofs: Talisman's retail ontology, live on an appliance over Oxigraph; FIBO Parties (28-document
+closure) and FIBO Business Entities (a root naming eight BE modules, closed over 56 documents from a
+catalog and a Protégé `catalog-v001.xml`, 1,090 types, 41 rule sets), both validating clean; the
+Gene Ontology in terminology mode.*
 
 ### 3.0 Closure: what an ontology depends on
 
