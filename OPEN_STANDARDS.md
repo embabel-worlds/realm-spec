@@ -46,6 +46,14 @@ draft as `IMPORT-REPORT.md`, and an export writes the same shape beside its outp
    IRIs they came in as.
 5. **Round-trip before claiming.** A host may say it "reads" a standard only when it also writes it
    and the export of an imported realm reproduces the mapped part of the source.
+6. **The source travels with the realm.** An imported realm carries what it was generated from, byte
+   for byte, under `ontology/source/`: the ontology, every document its `owl:imports` closure brought
+   in (under `source/imports/`), the Ossie files, the OKF bundle. `ontology/SOURCE.md` says what they
+   are: the source's own title, version, licence and publisher as it declares them, each document's
+   location, size and SHA-256, the closure as resolved, and the command that regenerates the realm.
+   The same facts, machine-readable, are the `source:` block of `ontology/alignment.yml`. A document
+   over 32 MB is described rather than copied. The realm is a derived work; it is never the only copy
+   of the model, and a reader can always diff the two or re-run the import on a newer version.
 
 ## 3. OWL 2 and RDFS (Turtle, RDF/XML, N-Triples, JSON-LD)
 
@@ -209,7 +217,45 @@ refused by name.
 
 No exporter: a realm is not a subset of a warehouse spec. *Status: shipped in `ontology-io` (embabel/me#3794).*
 
-## 5. SKOS
+## 5. Open Knowledge Format (OKF)
+
+Google's OKF v0.2 (`GoogleCloudPlatform/open-knowledge-format`, Apache-2.0; what Knowledge Studio's
+context sets import and export): a bundle is a directory of Markdown files with YAML frontmatter,
+`type` the only required field, `index.md` and `log.md` reserved, a trust tier read from `verified`
+(unverified, machine-confirmed, human-reviewed), and a rule that a consumer must never rewrite an
+`Attested Computation`. Every file is read best-effort, as the spec's conformance section asks; an
+unknown type or a broken link is kept and reported, not rejected.
+
+Import:
+
+| OKF | Realm | Outcome |
+|---|---|---|
+| a concept whose `type` names a table (`BigQuery Table`, …) and carries a `# Schema` table | a type: columns as properties (SQL types to `string`/`int`/`number`/`boolean`/`datetime`), the first id-like column as identity, read by a `kind: sql` producer from the table the `resource` URL names, in a datasource named after the bundle with a placeholder `jdbcUrl` | exact |
+| a Reference whose SQL fence joins two tables `ON a.x = b.y` | an edge in both directions between the two types, named from the reference's title | exact |
+| every concept, of any type | an `OkfConcept` record seeded from `reference/okf-concepts.yml`: the bundle path as identity, type, title, description, `resource`, tags, status, `stale_after`, trust tier, who generated and who verified it, `sources`, the links it makes, its `not` terms, its body verbatim | exact |
+| an Attested Computation | its `runtime`, `parameters` and `# Computation` kept verbatim on the record | noted: OKF forbids a consumer to rewrite it, so it is never a view; an agent runs it through the bundle's executor |
+| `log.md` | `ontology/okf-log.yml` | noted |
+| `index.md` | its `okf_version` is read; a major version this reader does not know is reported | noted |
+| a Markdown file with no frontmatter | — | **refused** |
+
+Views `ConceptsByType`, `ConceptLinks`, `StaleOrUnverified` and `Computations` come with the import,
+so "what in this bundle is stale or unreviewed" is one query.
+
+Export, the point of this format:
+
+| Realm | OKF |
+|---|---|
+| a type (query anchors left out) | `types/<Label>.md`, type `Entity Type`, with a `# Schema` table of its properties, a `# Joins` list of its edges, a `# Binding` note naming the producers, and `resource` set to the IRI the alignment records |
+| a saved view | `views/<Name>.md`, an `Attested Computation` with `runtime: embabel-virtual-cypher`, the parameters, an executor pointing at `skills/run-on-embabel.md`, and the Cypher as `# Computation` |
+| a DERIVE rule set | `rules/<Derives>.md`, type `Derived Label` or `Derived Relationship`, `runtime: embabel-derive`, each rule's head and body |
+| a producer | not a concept; named in its type's `# Binding` section and reported as noted |
+| provenance | `generated.by: ontology-io/<version>` and `sources` (the realm, and the ontology it was imported from when `alignment.yml` records one) on every document; `index.md` with `okf_version: "0.2"`; `log.md` |
+
+A realm exported this way and imported into Knowledge Studio as a context set makes its views
+governed assets a Gemini or Antigravity agent finds, with the Cypher they run and the realm they run
+on named. *Status: shipped in `ontology-io` (embabel/me#3794).*
+
+## 6. SKOS
 
 A concept scheme imports in terminology mode, always: SKOS has no classes to make types of.
 
@@ -223,7 +269,7 @@ A concept scheme imports in terminology mode, always: SKOS has no classes to mak
 
 *Status: shipped in `ontology-io`.*
 
-## 6. What has no standard
+## 7. What has no standard
 
 A verb — an action on an entity with preconditions, a permission resolved per user and a
 confirmation — has no form in OWL, SKOS or Ossie. Neither does a producer, evidence per hop, or the
