@@ -22,6 +22,12 @@ application declare its own types, lookups, verbs and identity bridges, so a wor
 its URL alone, with no realm authored by hand. [PUBLISHERS.md](PUBLISHERS.md) says how an Embabel
 world maps a publisher onto Virtual Cypher and code mode.
 
+**Bringing an ontology, or leaving with one?** [Open standards in, open standards out](OPEN_STANDARDS.md)
+is the import and export contract: an OWL or RDFS ontology becomes types, edges and DERIVE rule sets
+(a vocabulary such as the Gene Ontology becomes one type and its rows), every object lands in a mapping
+report as exact, inferred, noted or refused by name, and a realm's schema goes back out as OWL under the
+IRIs it came in with. Import, never conform.
+
 **Asking for a result without writing the steps?** [Planning](VIRTUAL_CYPHER.md#16-planning-ask-for-the-result-not-the-steps)
 takes a goal — the final query, or a question in English — and a deterministic planner chooses the
 realm's views and DERIVE rules that reach it, compiled to one ordinary query that is shown before it
