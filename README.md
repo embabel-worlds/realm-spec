@@ -1506,7 +1506,7 @@ sources:
 
     sync:
       strategy: mirror                     # mirror | lazy | live
-      trigger: on-first-use                # on-first-use | on-install | scheduled | manual
+      trigger: on-first-use                # on-first-use | on-install | scheduled | manual (see "Filling a mirror")
       refresh: full-rewalk                 # incremental | full-rewalk
       watermark: DateLastUpdated           # the field that dates a record
       watermarkFilterable: false           # can the SOURCE filter on it? here: no
@@ -1631,6 +1631,67 @@ The declaration is narrow, and the engine holds it there:
   and a query that would materialize a node carrying one is refused.
 - **`Public` is opt-in per label and never inferred.** The rewriter's default stays fail-closed at
   PRIVATE, and a label no source in the world declares public is private.
+
+### Filling a mirror before anyone asks — a whole index as graph
+
+By default a mirror is filled by the first question that reaches it (`trigger: on-first-use`). A
+realm whose questions READ the graph rather than fetch — a DERIVE rule set, which only sees what is
+already there ([Virtual Cypher §13.6](VIRTUAL_CYPHER.md)) — needs the whole collection in the graph
+first. Two declarations do that:
+
+- **`trigger: on-install`** walks the source once the world has loaded (after its reference data is
+  seeded) when the world has never completed it, when the source's declaration *or its producer's* has
+  changed since the walk that completed, or when any partition's last walk did not complete.
+  **`trigger: scheduled`** with `sync.schedule` (six-field cron, host zone) walks it again on that cron —
+  how a mirror is refreshed. `realm_sync_documents` also walks a realm's mirror sources on request. Each
+  runs in the background; one walk per source at a time, and a second trigger is reported, not queued.
+- **An unpartitioned source is one partition — the whole collection.** Declare no `partition` and no
+  `partitionProperty`, and every walk reads all of it. A partitioned source walks the partitions
+  `sync.partitions` names (`partitions: [Inner West Council, Waverley Council]`); naming none leaves its
+  partitions to be walked as questions reach them.
+
+The records land exactly as a first-use walk lands them: real nodes of `label`, merged on
+`identityProperty` (so a second walk updates, never duplicates), each partition's `Coverage` recorded
+against the total the source declared. With `visibility: public` they are ordinary graph in the world —
+`MATCH (c:AmlCompany) RETURN count(c)` counts them, and two mirrored labels join on their properties —
+even when the label is also the target of a join that fetches it.
+
+A whole Elasticsearch index, mirrored on install, with the cluster's address supplied by the deployment
+([§5.16](VIRTUAL_CYPHER.md)):
+
+```yaml
+# producers/aml.yml
+- name: amlCompanies
+  kind: elasticsearch
+  index: aml-companies
+  connection:
+    endpoint: "http://localhost:9200"   # fallback when the env var is unset
+    endpointEnv: AML_ES_URL             # local node or Elastic Cloud, without editing YAML
+    apiKeyEnv: AML_ES_API_KEY           # omit for an open dev cluster
+  retrieval: { mode: scan }             # read every document, not a relevance search
+  hits: { idField: company_id }         # the business key, not the document _id
+```
+
+```yaml
+# sources.yml
+sources:
+  - name: companies
+    producer: amlCompanies
+    label: AmlCompany
+    identityProperty: company_id
+    shape: bounded
+    visibility: public
+    sync: { strategy: mirror, trigger: on-install, maxAge: 7d }
+```
+
+```yaml
+# keys.yml — every `*Env` a producer names is a variable the realm declares
+- name: aml-elasticsearch
+  displayName: Sanctions-screening Elasticsearch
+  fields:
+    - { variable: AML_ES_URL, displayName: Cluster URL, secret: false }
+    - { variable: AML_ES_API_KEY, displayName: API key }
+```
 
 ### Source authority profile
 
