@@ -159,21 +159,49 @@ what a realm says that OWL cannot.
 
 ## 4. Apache Ossie
 
-Layer 1 (semantic model) and Layer 4 (ontology and mapping) import as described in embabel/me#1796,
-with the hand-ported flights example (`embabel-worlds/realm-ossie-flights`) as the golden output.
-Datasets are types, fields are properties, relationships are joins, metrics are views (never producer
-aggregates: `AVG` cannot be recombined and `SUM` over nothing is `0` in Cypher and `NULL` in SQL),
-`EntityType.identify_by` is the identity (a composite becomes a computed key), `custom_extensions`
-are kept and not interpreted, and `ai_context` is reachable by lookup and never concatenated into a
-prompt. No exporter: a realm is not a subset of a warehouse spec. *Status: specified; importer not yet
-shipped.*
+An Ossie document set — a Layer 1 semantic model, and where present the Layer 4 ontology and the
+mapping that ties them — imports the way the hand-ported flights realm
+(`embabel-worlds/realm-ossie-flights`) was written, and that realm is the golden output. Accepted
+versions: 0.1.1 (the `semantic_model` wrapper), 0.2.0.dev0 and 0.3.0.dev0 (flat); any other is
+refused by name.
+
+| Ossie | Realm | Outcome |
+|---|---|---|
+| dataset | a type, named after the ontology concept that is the dataset where a mapping ties one (the concept whose mappings reference the most of its fields), else after the dataset; read by a `kind: sql` producer from the dataset's `source` table in a datasource the draft declares with a placeholder `jdbcUrl` | exact |
+| field whose expression is a column | a property; `Integer` → `int`, `Decimal`/`Float` → `number`, `Boolean` → `boolean`; a renamed column is a `compute:` on every producer of the dataset | exact; inferred when renamed or declared only under `ANSI_SQL` |
+| field whose expression is computed SQL | — | **refused**: the realm reads columns; the expression is quoted for a `compute:` by hand |
+| `primary_key` (one field) | the identity | exact |
+| `primary_key` (composite), or the ontology's `identify_by` | one computed key property, the parts joined by `/`, as the identity; every producer computes it | inferred |
+| `unique_keys` | — | noted: the type is keyed once |
+| relationship (`from` many → `to` one) | an edge in both directions, each traversal a keyed read; named as the ontology names it where the mapping ties the same field, else UPPER_SNAKE of the relationship name; composite columns through a computed key on both sides | exact |
+| ontology relationship to an entity concept, mapped to a field | the same, named by the ontology (`ROUTE`, `DEPARTURE`); an identifying referent that is an entity (Runway.airport) is an edge as well as a key part | exact |
+| ontology relationship to a value concept | the property's description (the concept and its description) and type; a value concept's `requires` bounds become a `range` validation | exact |
+| `EntityType` with no dataset of its own (Market, City) | — | noted: it exists only as values of named columns; no type is minted |
+| unary relationship (`canceled`) | — | noted: it is the boolean column the mapping filters on |
+| ternary and higher relationships | — | **refused**: an edge has two ends |
+| `requires` | — | noted: reconciliation checks, not rules |
+| metric that is one aggregate, or two joined by an operator, over one dataset | one view per relationship from that dataset: the metric at each grain the model relates it to, `OPTIONAL MATCH`, SQL's null for `SUM`/`MIN`/`MAX` over nothing, `avg()` never rewritten as sum/count | inferred: the whole-table form is not available (me#2346) |
+| metric over several datasets, or any other expression | — | **refused**, expression quoted |
+| `derived_by` of the form `Role == AGG[Src.rel WHERE G == Src.path GROUP BY G]` or `… WHERE Src.rel(G) …` | a per-key view named `<Group><Relationship>` with `OPTIONAL MATCH` along the path | exact |
+| any other `derived_by` or `requires` expression | — | **refused**, expression quoted |
+| `ai_context` (model, dataset, field, relationship, metric) | `ontology/ai-context.yml`, by object | noted: reachable by lookup, never in a description, prompt or manifest |
+| `nonportable_extensions` / `custom_extensions` | `ontology/ossie-extensions.yml`, verbatim | noted: kept, not interpreted |
+
+No exporter: a realm is not a subset of a warehouse spec. *Status: shipped in `ontology-io` (embabel/me#3794).*
 
 ## 5. SKOS
 
-A concept scheme imports in terminology mode: `skos:Concept` rows, `skos:broader` as `BROADER` both
-ways, `skos:related` as `RELATED`, `prefLabel`/`altLabel`/`definition` as properties. SKOS is RDF, so
-the OWL reader reads it; the mapping is the terminology table with the predicates renamed. *Status:
-not yet shipped.*
+A concept scheme imports in terminology mode, always: SKOS has no classes to make types of.
+
+| SKOS | Realm | Outcome |
+|---|---|---|
+| `skos:Concept` | a row of one type, `<Scheme>Term`: `id` (local name), `iri`, `name` (`prefLabel`), `definition` (`definition`, else `scopeNote`), `synonyms` (`altLabel`s), `namespace` (the scheme's label) | exact |
+| `skos:broader`, and `skos:narrower` read the other way | the parent edge, `BROADER`, both ways; `Ancestors`, `Descendants` and `IsA` walk it | exact |
+| `skos:related` | `RELATED`, both ways | exact |
+| `exactMatch`, `closeMatch`, `broadMatch`, `narrowMatch` | an edge each, to a term of this scheme when the target is one; a target in another vocabulary is kept in the edge file's count, never minted as a row | exact |
+| `skos:ConceptScheme` | the term's `namespace`; one scheme names the realm | exact |
+
+*Status: shipped in `ontology-io`.*
 
 ## 6. What has no standard
 
