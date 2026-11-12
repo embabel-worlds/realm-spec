@@ -96,8 +96,8 @@ For an ontology with tens to hundreds of classes, datatype properties and class-
 | `owl:FunctionalProperty` (datatype) | `cardinality: ONE` | exact |
 | `owl:ObjectProperty` with domain C and range D | an edge `(C)-[:UPPER_SNAKE]->(D)` declared as two virtual joins: forward on D anchored at C, and `direction: TO_ANCHOR` on C anchored at D, each with its own producer, so the edge traverses both ways | exact; inferred when several domain/range pairs each get a declaration |
 | `owl:ObjectProperty` with no typed domain or range (`owl:Thing` is not one) | — | **refused**: an edge needs a type at both ends |
-| `owl:inverseOf` (declared on Q, pointing at P) | Q is a **derived relationship**: `(b)-[:Q]->(a)` from `(a:C)-[:P]->(b:D)`; P keeps its joins, Q gets none | exact; facts a store holds under Q directly are not read |
-| `owl:propertyChainAxiom` on Q | Q is a derived relationship over the path | exact when every step has typed ends |
+| `owl:inverseOf` (declared on Q, pointing at P) | Q is a **derived relationship**: `(b)-[:Q]->(a)` from `(a:C)-[:P]->(b:D)`; P keeps its joins, Q gets none; plus a saved view `QFromD(iri)` walking the reversed edge from its anchor | inferred: a derived relationship is concluded over the edges a query has fetched, since the planner fetches through a query's path and not through a rule's body (Virtual Cypher §13.4); from an anchor the view answers directly. Facts a store holds under Q directly are not read |
+| `owl:propertyChainAxiom` on Q | Q is a derived relationship over the path, plus a saved view `QFromC(iri)` walking the path from its anchor | inferred when every step has typed ends, for the same reason; refused otherwise |
 | `rdfs:subPropertyOf` | noted: traverse `-[:P\|Q]->` | noted; no derived edge, because Q also reads its own facts |
 | `owl:SymmetricProperty` | noted: traverse undirected; recorded in the alignment | noted |
 | `owl:TransitiveProperty` | noted: traverse `-[:P*]->`; recorded in the alignment. No closure edge is derived (VIRTUAL_CYPHER §13.4) | noted |
