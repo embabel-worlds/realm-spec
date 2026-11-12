@@ -49,6 +49,24 @@ draft as `IMPORT-REPORT.md`, and an export writes the same shape beside its outp
 
 ## 3. OWL 2 and RDFS (Turtle, RDF/XML, N-Triples, JSON-LD)
 
+### 3.0 Closure: what an ontology depends on
+
+An ontology is read with what it depends on, and the report says what that was.
+
+- **Declared imports** (`owl:imports`) are followed transitively and merged whole: an import is part
+  of the ontology. Each is resolved from a catalog first (a directory of ontology files indexed by the
+  ontology and version IRIs they declare, or a Protégé `catalog-v001.xml`), then fetched by IRI with
+  content negotiation. FIBO's `FND/Parties/Parties` brings 28 documents (FIBO and OMG Commons) this way.
+- **Undeclared reuse**: a property or class named from another vocabulary without an import (PKO names
+  PROV-O, p-plan and Dublin Core terms; FIBO names Commons) is defined from that vocabulary's document,
+  and only the terms used are copied, with the classes their domains and ranges name. A realm does not
+  swallow PROV-O for one property.
+- **Every document is a row**: resolved documents are exact rows (`owl:imports`, `namespace`) naming
+  the file or URL and its size; one that could not be resolved is a refusal naming what was tried, and
+  its terms stay undefined and are refused by name downstream.
+- `--imports catalog` never fetches; `--imports none` reads the file as it is; a document cap (50)
+  stops a runaway chain and says so.
+
 Two shapes of ontology arrive, and they map differently. The importer decides from the ontology's
 shape and says which it chose; `--mode schema|terminology` overrides it.
 
@@ -61,7 +79,9 @@ For an ontology with tens to hundreds of classes, datatype properties and class-
 | `owl:Class`, `rdfs:Class` (named) | a type; PascalCase of the local name | exact (inferred when the class is known only from use as a domain, range or parent, or when two namespaces' local names collide) |
 | `rdfs:label`, `rdfs:comment`, `skos:definition`, `dcterms:description`, `IAO_0000115` | the type's `description` | exact |
 | `rdfs:subClassOf` a named class | `parents` | exact |
-| `rdfs:subClassOf <restriction>` (C ⊑ ∃P.D, C ⊑ ∀P.D, cardinality) | — | **refused**: a constraint on members, not a definition of them; an existential on the right would have to invent a node |
+| `rdfs:subClassOf <restriction>` on an object property (C ⊑ ∃P.D, C ⊑ ∀P.D, C ⊑ ≥n P.D, C ⊑ =n P.D, C ⊑ ≤n P.D with n ≥ 1) | the edge `(C)-[:P]->(D)`, declared as any other; nothing derives from it | inferred: "declared by a restriction on C". This is how FIBO and most Protégé-written OWL state their schema |
+| `rdfs:subClassOf <restriction>` on a datatype property with a datatype or facets | the property on C with that type; facets as a `range` validation; `≤1` or `=1` as `cardinality: ONE` | inferred |
+| `rdfs:subClassOf <restriction>` with `max 0`, `exactly 0`, `Self`, a complement or a nested anonymous filler | — | **refused**: a negative or nested constraint says nothing a schema can hold |
 | `owl:equivalentClass <expr>`, `<expr> rdfs:subClassOf C` | a **derived label**: one DERIVE rule set, one rule per union branch (§3.3) | exact when every branch translates; refused per branch otherwise |
 | `owl:DatatypeProperty` with `rdfs:domain` C and `rdfs:range` | a property on C; `xsd:integer` family → `int`, `xsd:decimal`/`float`/`double` → `number`, `xsd:boolean` → `boolean`, else string with the range named in the description | exact; inferred when `schema:domainIncludes` supplied the domain or several ranges were declared |
 | `owl:DatatypeProperty` with no domain, or a domain that is a derived label | — | **refused**: a property needs a type to live on |
