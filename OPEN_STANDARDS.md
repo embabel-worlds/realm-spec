@@ -41,9 +41,11 @@ draft as `IMPORT-REPORT.md`, and an export writes the same shape beside its outp
 3. **Refuse by name.** An axiom the realm cannot state is quoted in the report with the reason. It is
    never approximated silently and never dropped.
 4. **The alignment is part of the realm.** `ontology/alignment.yml` records which IRI every realm name
-   came from, and the ontology facts a realm has no construct for (symmetry, transitivity,
-   disjointness). The engine does not read it. An export reads it, so the names go back out as the
-   IRIs they came in as.
+   came from, the ontology's own label for a name where it differs (`labels: {PLACED_ORDER: placed
+   order}`), and the ontology facts a realm has no construct for (symmetry, transitivity,
+   disjointness, an equivalence to a class outside the ontology). The engine does not read it. An
+   export reads it, so the names go back out as the IRIs they came in as, labelled as the ontology
+   labelled them.
 5. **Round-trip before claiming.** A host may say it "reads" a standard only when it also writes it
    and the export of an imported realm reproduces the mapped part of the source.
 6. **A large realm is written in the YAML layout.** Past 512 KiB of `realm.ts` the draft is written as
@@ -65,8 +67,8 @@ draft as `IMPORT-REPORT.md`, and an export writes the same shape beside its outp
 *Proofs: Talisman's retail ontology, live on an appliance over Oxigraph; FIBO Parties (28-document
 closure) and FIBO Business Entities (a root naming eight BE modules, closed over 56 documents from a
 catalog and a Protégé `catalog-v001.xml`, 1,090 types, 41 rule sets), both validating clean; Schema.org
-cut at `Product`, `Offer` and `Organization` (207 of 1,028 classes); PKO closed over the vocabularies it
-reuses; the Gene Ontology in terminology mode.*
+cut at `Product`, `Offer` and `Organization` (207 of 1,027 classes); PKO closed over the vocabularies it
+reuses; DCAT 3 and W3C ORG, each with its labels returning on export; the Gene Ontology in terminology mode.*
 
 ### 3.0 Closure: what an ontology depends on
 
@@ -114,7 +116,8 @@ For an ontology with tens to hundreds of classes, datatype properties and class-
 | `rdfs:subClassOf <restriction>` on a datatype property with a datatype or facets | the property on C with that type; facets as a `range` validation; `≤1` or `=1` as `cardinality: ONE` | inferred |
 | `rdfs:subClassOf <restriction>` with `max 0`, `exactly 0`, `Self`, a complement or a nested anonymous filler | — | **refused**: a negative or nested constraint says nothing a schema can hold |
 | `owl:equivalentClass <expr>`, `<expr> rdfs:subClassOf C` | a **derived label**: one DERIVE rule set, one rule per union branch (§3.3) | exact when every branch translates; refused per branch otherwise |
-| `owl:equivalentClass <class the ontology does not declare>` (Schema.org's `Offer ≡ unece:Offer`, `Corporation ≡ fibo:Corporation`) | an alignment: recorded under `equivalent:` in the alignment; the class stays a type | noted |
+| a declared class whose every defining axiom has no rule form (ORG's `OrganizationalCollaboration ≡ Organization ⊓ ∀hasMember.Organization`) | a plain type; the axioms refused by name | inferred: the individuals a store types with it are still reached |
+| `owl:equivalentClass <class the ontology does not declare>` (Schema.org's `Offer ≡ unece:Offer`, `Corporation ≡ fibo:Corporation`) | an alignment: recorded under `equivalent:` in the alignment; the class stays a type. When the file also uses the foreign class as a parent, domain or range (ORG's `FormalOrganization ⊑ foaf:Organization`), those uses read as the declared class | noted |
 | `owl:DatatypeProperty` with `rdfs:domain` C and `rdfs:range` | a property on C; `xsd:integer` family → `int`, `xsd:decimal`/`float`/`double` → `number`, `xsd:boolean` → `boolean`, else string with the range named in the description | exact; inferred when `schema:domainIncludes` or `dcam:domainIncludes` supplied the domain or several ranges were declared |
 | `schema:domainIncludes`, `schema:rangeIncludes`, `dcam:domainIncludes`, `dcam:rangeIncludes` | read as domains and ranges beside `rdfs:domain`/`range`; an `rdf:Property` with any class range is an edge | inferred: "domain from schema:domainIncludes" |
 | Schema.org's data types (`Text`, `URL`, `Number`, `Integer`, `Float`, `Boolean`, `Date`, `DateTime`, `Time`: classes under `schema:DataType`) | scalars, never types: `Number`/`Float` → `number`, `Integer` → `int`, `Boolean` → `boolean`, `Text` and `URL` strings, `Date` and friends strings with the range named | exact |
@@ -123,6 +126,7 @@ For an ontology with tens to hundreds of classes, datatype properties and class-
 | `owl:FunctionalProperty` (datatype) | `cardinality: ONE` | exact |
 | `owl:ObjectProperty` with domain C and range D | an edge `(C)-[:UPPER_SNAKE]->(D)` declared as two virtual joins: forward on D anchored at C, and `direction: TO_ANCHOR` on C anchored at D, each with its own producer, so the edge traverses both ways | exact; inferred when several domain/range pairs each get a declaration |
 | `owl:ObjectProperty` with no typed domain or range (`owl:Thing` is not one) | — | **refused**: an edge needs a type at both ends |
+| `owl:inverseOf` declared on both sides (ORG's `hasMember`/`memberOf`) | one keeps the edge, the one with typed ends and then the first by IRI; the other is the derived relationship | inferred, naming which |
 | `owl:inverseOf` (declared on Q, pointing at P) | Q is a **derived relationship**: `(b)-[:Q]->(a)` from `(a:C)-[:P]->(b:D)`; P keeps its joins, Q gets none; plus a saved view `QFromD(iri)` walking the reversed edge from its anchor | inferred: a derived relationship is concluded over the edges a query has fetched, since the planner fetches through a query's path and not through a rule's body (Virtual Cypher §13.4); from an anchor the view answers directly. Facts a store holds under Q directly are not read |
 | `owl:propertyChainAxiom` on Q | Q is a derived relationship over the path, plus a saved view `QFromC(iri)` walking the path from its anchor | inferred when every step has typed ends, for the same reason; refused otherwise |
 | `rdfs:subPropertyOf` | noted: traverse `-[:P\|Q]->` | noted; no derived edge, because Q also reads its own facts |
