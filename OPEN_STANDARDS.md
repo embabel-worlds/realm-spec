@@ -64,8 +64,9 @@ draft as `IMPORT-REPORT.md`, and an export writes the same shape beside its outp
 
 *Proofs: Talisman's retail ontology, live on an appliance over Oxigraph; FIBO Parties (28-document
 closure) and FIBO Business Entities (a root naming eight BE modules, closed over 56 documents from a
-catalog and a Protégé `catalog-v001.xml`, 1,090 types, 41 rule sets), both validating clean; the
-Gene Ontology in terminology mode.*
+catalog and a Protégé `catalog-v001.xml`, 1,090 types, 41 rule sets), both validating clean; Schema.org
+cut at `Product`, `Offer` and `Organization` (207 of 1,028 classes); PKO closed over the vocabularies it
+reuses; the Gene Ontology in terminology mode.*
 
 ### 3.0 Closure: what an ontology depends on
 
@@ -78,7 +79,8 @@ An ontology is read with what it depends on, and the report says what that was.
 - **Undeclared reuse**: a property or class named from another vocabulary without an import (PKO names
   PROV-O, p-plan and Dublin Core terms; FIBO names Commons) is defined from that vocabulary's document,
   and only the terms used are copied, with the classes their domains and ranges name. A realm does not
-  swallow PROV-O for one property.
+  swallow PROV-O for one property. A term is undefined when it lacks a domain or a range stated any of
+  the ways §3.1 accepts (`rdfs:domain`, `schema:domainIncludes`, `dcam:domainIncludes`).
 - **Every document is a row**: resolved documents are exact rows (`owl:imports`, `namespace`) naming
   the file or URL and its size; one that could not be resolved is a refusal naming what was tried, and
   its terms stay undefined and are refused by name downstream.
@@ -87,6 +89,17 @@ An ontology is read with what it depends on, and the report says what that was.
 
 Two shapes of ontology arrive, and they map differently. The importer decides from the ontology's
 shape and says which it chose; `--mode schema|terminology` overrides it.
+
+**A subset by root** (`--root <class>`, repeatable; a local name, a label or an IRI) cuts a vocabulary
+too wide to want whole before the shape is judged. Each root, its subclasses and its ancestors are
+imported, so a `Product` is still a `Thing` and inherits `name` and `description`; a property is kept
+when one of its domains is kept, with its domains and ranges trimmed to the subset; an edge whose every
+range falls outside is **refused by name with the `--root` that would keep it** ("`aggregateRating`:
+range `AggregateRating` is outside the subset; `--root AggregateRating` keeps it"); a mixed-range
+property whose node ranges all fall outside keeps its literal half. The summary row says what each root
+brought (`Organization` brings 187 subclasses: every kind of local business). Schema.org whole is a
+terminology of 1,028 rows; cut at `Product`, `Offer` and `Organization` it is 207 types, and the
+whole-import report says so.
 
 ### 3.1 Schema mode — a domain ontology becomes types
 
@@ -101,7 +114,11 @@ For an ontology with tens to hundreds of classes, datatype properties and class-
 | `rdfs:subClassOf <restriction>` on a datatype property with a datatype or facets | the property on C with that type; facets as a `range` validation; `≤1` or `=1` as `cardinality: ONE` | inferred |
 | `rdfs:subClassOf <restriction>` with `max 0`, `exactly 0`, `Self`, a complement or a nested anonymous filler | — | **refused**: a negative or nested constraint says nothing a schema can hold |
 | `owl:equivalentClass <expr>`, `<expr> rdfs:subClassOf C` | a **derived label**: one DERIVE rule set, one rule per union branch (§3.3) | exact when every branch translates; refused per branch otherwise |
-| `owl:DatatypeProperty` with `rdfs:domain` C and `rdfs:range` | a property on C; `xsd:integer` family → `int`, `xsd:decimal`/`float`/`double` → `number`, `xsd:boolean` → `boolean`, else string with the range named in the description | exact; inferred when `schema:domainIncludes` supplied the domain or several ranges were declared |
+| `owl:equivalentClass <class the ontology does not declare>` (Schema.org's `Offer ≡ unece:Offer`, `Corporation ≡ fibo:Corporation`) | an alignment: recorded under `equivalent:` in the alignment; the class stays a type | noted |
+| `owl:DatatypeProperty` with `rdfs:domain` C and `rdfs:range` | a property on C; `xsd:integer` family → `int`, `xsd:decimal`/`float`/`double` → `number`, `xsd:boolean` → `boolean`, else string with the range named in the description | exact; inferred when `schema:domainIncludes` or `dcam:domainIncludes` supplied the domain or several ranges were declared |
+| `schema:domainIncludes`, `schema:rangeIncludes`, `dcam:domainIncludes`, `dcam:rangeIncludes` | read as domains and ranges beside `rdfs:domain`/`range`; an `rdf:Property` with any class range is an edge | inferred: "domain from schema:domainIncludes" |
+| Schema.org's data types (`Text`, `URL`, `Number`, `Integer`, `Float`, `Boolean`, `Date`, `DateTime`, `Time`: classes under `schema:DataType`) | scalars, never types: `Number`/`Float` → `number`, `Integer` → `int`, `Boolean` → `boolean`, `Text` and `URL` strings, `Date` and friends strings with the range named | exact |
+| a property with both class and datatype ranges (`schema:model`: `ProductModel` or `Text`; `schema:identifier`) | **both**: a property for its literal values (its producers read `FILTER(isLiteral(…))`) and an edge for its node values (`FILTER(isIRI(…))`) | inferred: "a mixed range" |
 | `owl:DatatypeProperty` with no domain, or a domain that is a derived label | — | **refused**: a property needs a type to live on |
 | `owl:FunctionalProperty` (datatype) | `cardinality: ONE` | exact |
 | `owl:ObjectProperty` with domain C and range D | an edge `(C)-[:UPPER_SNAKE]->(D)` declared as two virtual joins: forward on D anchored at C, and `direction: TO_ANCHOR` on C anchored at D, each with its own producer, so the edge traverses both ways | exact; inferred when several domain/range pairs each get a declaration |
@@ -114,7 +131,7 @@ For an ontology with tens to hundreds of classes, datatype properties and class-
 | `owl:FunctionalProperty`, `InverseFunctionalProperty`, `AsymmetricProperty`, `ReflexiveProperty` (object) | recorded in the alignment | noted |
 | `owl:hasKey` | the key properties are kept as properties; every type is keyed on `iri` | noted |
 | `owl:disjointWith` | recorded in the alignment | noted |
-| `owl:deprecated true` | not emitted | noted |
+| `owl:deprecated true`, `schema:supersededBy` | not emitted; the note names the successor | noted |
 | individuals | counted per class; not copied | noted |
 
 Every type gets an `iri` identity property, a `<Type>Query` anchor with `materializedKeyField: iri`
