@@ -1205,7 +1205,7 @@ producers:
     url: "https://example.test/register/{today}-report.xlsx"
     format: auto              # csv | tsv | xlsx | xml | auto (default: sniff extension, then bytes)
     sheet: "Standard report"  # xlsx only; omit for the first sheet
-    headerRow: auto           # or a 1-based row number
+    headerRow: auto           # or a 1-based row number; or `columns:` for a file with no header (below)
     keyColumn: "ABN"
     keyMatch: digits          # exact (default) | ci | digits
     keyAs: abn                # the join's recordKeyField
@@ -1237,6 +1237,12 @@ producers:
 - **A banner above the header does not become the schema.** With `headerRow: auto` (the default)
   the header is detected by column shape, so the "Generated on …" lines these exports carry are
   skipped rather than parsed as column names.
+- **A file with no header row names its columns in the declaration.** OFAC publishes its sanctions
+  lists this way: `SDN.CSV` is twelve unnamed columns with `-0-` for null, documented in a PDF beside
+  the file. `columns: [ent_num, SDN_Name, SDN_Type, Program, …]` names them in position order; the
+  first row is then data, nothing is detected, and `headerRow` or `headerContains` beside it is
+  refused at load, since they look for a header the declaration says is not there. Without it the
+  first sanctioned party became the schema and was lost from the rows.
 - **The same rows always yield the same records.** Detection, matching and projection are
   deterministic; no model is involved anywhere in this producer.
 - **`keyMatch: digits` reconciles the four ways an identifier is published** — spaced, unspaced,
