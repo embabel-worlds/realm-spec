@@ -202,7 +202,8 @@ in this installation. Each entry is:
 - `kind`: `local`, `host` or `remote`.
 - `label`: the name the owner sees, for showing on a page.
 - `access`: how the agent is signed in. `subscription` is the owner's own sign-in to their own
-  tool; `key` is a key the owner chose; `local` is a tool that needs no sign-in; `host` is the
+  tool; `key` is a key the owner chose, for a `remote` provider or for a local agent tool the owner
+  set to run on their own key; `local` is a tool that needs no sign-in; `host` is the
   host's own agent.
 - `state`: `ready`, or `unavailable` when the owner has the provider but it cannot start a session
   now (signed out, not installed on this machine, or not offered in this installation).
@@ -219,6 +220,7 @@ An installation where no local agent tool can run lists no `local` provider at a
 | `title` | Optional, at most 200 characters. Shown to the owner in the consent prompt and the session view. |
 | `workspace` | Optional, and only when the declaration says `workspace: project`. See [workspaces](#5-workspaces). |
 | `stayOpen` | Optional boolean, default false. Keeps the session open for further messages after a turn. |
+| `parent` | Optional. The id of a session this realm started that has not ended. The new session is shown under it as a subsession. |
 
 Any other field is refused, naming it. The answer is `{ session, state }`: a new session id and its
 first state, normally `running`. The host issues the id. It is opaque, unique across every provider,
@@ -228,6 +230,17 @@ A realm cannot name another owner, and no input field can change it.
 
 A start is one session. To ask two agents the same question, start two sessions; the count against
 `maxConcurrent` is per ticket, and covers every session under that `ref` that has not ended.
+
+**Subsessions.** A session started with `parent` is a child of that session. It keeps its own `ref`,
+which may differ from its parent's, and counts against `maxConcurrent` under its own ref. A parent
+that is unknown or belongs to anyone else is refused with `AGENT_SESSION_NOT_OWNED`, exactly as for
+any other session id; a parent that has ended is refused with `AGENT_SESSION_ENDED`. Ending or
+cancelling a parent does not end its children: a realm that wants them stopped cancels each one.
+
+**Guarantee: a realm-started session stays on its provider.** The host's session view offers the
+owner no way to move a session a realm started to another provider or agent. The `provider` a realm
+sees in a summary is the one the session runs on for its whole life. A chat the owner starts
+themselves is not bound by this.
 
 ### `agent_session_say`
 
@@ -292,6 +305,7 @@ interface SessionSummary {
   startedAt: string;         // ISO-8601
   endedAt?: string;
   workspaceRef?: string;     // the branch, when the session asked for one
+  parent?: string;           // the parent session id, for a subsession
   lastText?: string;         // the agent's latest message, cut to 1,000 characters
 }
 ```
@@ -350,6 +364,10 @@ happens there. The view is the host's: it names the realm and the session's `tit
 transcript, and lets the owner reply, answer a question, grant or refuse a permission, and cancel.
 The page learns any change by calling one of its own handlers that lists sessions.
 
+Realm sessions also appear in the owner's own list of chat sessions in the host, grouped by realm and
+then by `ref`, with each subsession under its parent. That is where the owner reads a transcript;
+a page still never receives one.
+
 - The session must belong to this realm. The call follows the bridge's rules for
   [captured browser apps](HOSTED_EXECUTION.md#captured-browser-apps): one call at a time, and every
   refusal rejects with the same message, "Realm call refused or unavailable".
@@ -375,6 +393,7 @@ interface AgentSessionEnded {
   startedAt: string;
   endedAt: string;
   workspaceRef?: string;
+  parent?: string;
 }
 ```
 
@@ -448,6 +467,7 @@ Every session is a node of the host type `AgentSession`:
 | `outcome` | Present once ended. |
 | `startedAt`, `endedAt` | Timestamps; `endedAt` once ended. |
 | `workspaceRef` | The branch, when the session asked for one. |
+| `parent` | The parent session's id, for a subsession. |
 
 A realm's query sees only the `AgentSession` nodes it owns. The owner sees all of their own. A
 realm cannot declare `AgentSession`, add properties to it, or write it through a write proposal.
@@ -478,6 +498,11 @@ These are guarantees to the owner. A realm can rely on them, and cannot change t
   sign it in, or hold its login.
 - The host never handles a login for any provider: it does not read, store, copy or refresh one,
   and never signs an agent in on the owner's behalf somewhere else.
+- The owner may choose, for any one local agent tool, to run it on their own key instead of their
+  sign-in. That is the owner's choice, made in the host and never by a realm, and the default is
+  always the owner's own sign-in. The key comes from the owner's own stored credentials, reaches
+  that tool only while the owner's choice stands, and is never shown to a realm. The provider's
+  `access` is then `key`.
 - A `remote` session uses a key the owner chose for that provider. A realm never sees it.
 - A `host` session runs the host's own agent, under the owner's existing budgets.
 - An installation with no local agent tools, such as a server deployment, lists no `local`
@@ -510,10 +535,10 @@ ids from its own list. The same call refused for the same reason gets the same m
 | `AGENT_WORKSPACE_UNKNOWN` | No project of that name. | "There is no project named 'importr'. Check the name with the owner, or ask them to add the project." |
 | `AGENT_WORKSPACE_CONSENT` | The ticket is allowed and the project is the only approval missing, or the owner has declined the project (then whatever the ticket's answer, and with no prompt). | "The owner has not yet allowed agents to work in project 'importer'. They have been asked; start again after they agree." If declined: "The owner declined agents in project 'importer'. Start without a workspace, or ask the owner." |
 | `AGENT_SESSION_REF_TOO_LONG` | `ref` is longer than 256 characters. | "ref is 312 characters; the limit is 256. Use a shorter key, such as the item's id." |
-| `AGENT_SESSION_NOT_OWNED` | The session id is unknown, or belongs to another realm or owner. | "No session 's-81f' belongs to this realm. Use a session id returned by agent_session_start or agent_session_list." |
-| `AGENT_SESSION_ENDED` | `say` to an ended session. | "Session 's-81f' has ended (outcome: done). Start a new session to continue the work." |
+| `AGENT_SESSION_NOT_OWNED` | The session id, or a start's `parent`, is unknown, or belongs to another realm or owner. | "No session 's-81f' belongs to this realm. Use a session id returned by agent_session_start or agent_session_list." |
+| `AGENT_SESSION_ENDED` | `say` to an ended session, or a start whose `parent` has ended. | "Session 's-81f' has ended (outcome: done). Start a new session to continue the work." For a parent: "Parent session 's-81f' has ended (outcome: done). Start without a parent, or under a session that is still open." |
 | `AGENT_SESSION_READ_FROM_PAGE` | `read` in an invocation a page started. | "A page cannot read a session's messages. Call realm.sessions.open(session) to show it; read from a handler that runs without a page, such as onEnded." |
-| `AGENT_SESSION_INVALID` | A field is missing, blank, out of range, or unknown, or a branch name breaks the rule in [workspaces](#5-workspaces). | "agent_session_start does not accept 'model'. Accepted fields: provider, prompt, ref, title, workspace, stayOpen." For a branch: "branch 'fix..retry' is not a usable branch name. A branch starts with a letter or digit, uses only letters, digits, '.', '_', '/' and '-', has no '..' or '//', and does not end in '/' or '.lock'." Default branch: "branch 'main' is the project's default branch, which a session may not work on. Name a branch of its own, for example 'task-42'." In use: "branch 'task-42' is in use by another open session. Name a different branch, or start again after that session ends." |
+| `AGENT_SESSION_INVALID` | A field is missing, blank, out of range, or unknown, or a branch name breaks the rule in [workspaces](#5-workspaces). | "agent_session_start does not accept 'model'. Accepted fields: provider, prompt, ref, title, workspace, stayOpen, parent." For a branch: "branch 'fix..retry' is not a usable branch name. A branch starts with a letter or digit, uses only letters, digits, '.', '_', '/' and '-', has no '..' or '//', and does not end in '/' or '.lock'." Default branch: "branch 'main' is the project's default branch, which a session may not work on. Name a branch of its own, for example 'task-42'." In use: "branch 'task-42' is in use by another open session. Name a different branch, or start again after that session ends." |
 
 **Guarantee: another realm's session is indistinguishable from none.** An id that belongs to
 another realm or another owner is refused with `AGENT_SESSION_NOT_OWNED` and the same message as an
