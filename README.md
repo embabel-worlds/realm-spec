@@ -999,7 +999,7 @@ So `WHERE i.html_url CONTAINS 'acme-corp/widgets'` turns `is:issue author:X {fil
 
 ##### Declared pushdown for query, table, file and feed producers
 
-`remote` is not the only kind that can filter at its source. A `sparql`, `sql`, `cypher`, `tabular` or `feed` producer declares `pushdown:` too. Each entry names a property the source can filter on, the operators it applies, and the type its values take at the source:
+`remote` is not the only kind that can filter at its source. A `sparql`, `sql`, `cypher`, `tabular`, `feed` or `elasticsearch` producer declares `pushdown:` too. Each entry names a property the source can filter on, the operators it applies, and the type its values take at the source:
 
 ```yaml
 - kind: sparql
@@ -1027,6 +1027,7 @@ Where the filter goes depends on the kind:
 | `cypher` | At its `{{filter:<property>}}` slot, as ` AND (<expr> <op> $param)`, so place it after an existing condition (`WHERE o.customer IN $keys {{filter:total}}`). `expr` is required (`expr: "o.total"`). |
 | `sql` | Appended to the generated statement as `AND (<column> <op> :param)`. The property is the column. No `expr`: the statement stays generated. |
 | `tabular`, `feed` | Applied while reading, before a row becomes a record or counts against a per-key cap. A feed filters on `title`, `url`, `publishedAt` or `summary`. |
+| `elasticsearch` | A filter clause on every retriever of the search, so the `k` hits are the best among the documents that match (VIRTUAL_CYPHER §5.16). `expr` names the Elasticsearch field (`status.keyword`); it defaults to the field `hits.project` lifts the property from, else the property's own name. No `having`. |
 | `generative`, `aggregate`, `agentic-rag` | Not supported. Every predicate is applied after the fetch. |
 
 The operators are `EQUALS`, `CONTAINS` (text only), `GREATER_THAN`, `GREATER_THAN_OR_EQUAL`, `LESS_THAN`, `LESS_THAN_OR_EQUAL` and `IN`.

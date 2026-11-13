@@ -2175,6 +2175,10 @@ author writes a search body.
     minScore: 0.0
     idField: contractNumber    # optional: a business key as identity, instead of the document id
     project: { counterparty: "party.name" }
+  pushdown:                    # optional: filters the cluster applies inside the search
+    - { property: status, expr: status.keyword }   # text compares a keyword field
+    - { property: signed, type: date }
+    - { property: counterparty, match: ci }        # filtered on party.name, case-insensitively
   cache: { kind: ttl, seconds: 300 }
 ```
 
@@ -2205,6 +2209,19 @@ ORDER BY rel.score DESC
   that field IS the identity and a hit lacking it is DROPPED and reported — never silently
   keyed by the document id instead, which would split one document across two identities. The
   document id remains available as `docId` provenance either way.
+- **A pushed filter chooses the `k`; an unpushed one trims them.** A `WHERE` on the target that a
+  `pushdown:` rule absorbs (README, *Declared pushdown*) is sent as a filter clause on every retriever,
+  so the `k` hits per anchor are the best among the documents that match. A filter no rule absorbs is
+  applied by the graph to the `k` already retrieved, and can leave fewer than `k`, or none, where the
+  index holds plenty of matches; the warnings name it. A filter clause does not score, so pushing a
+  predicate never changes how documents rank, only which are ranked.
+- **What a rule compares.** A rule's field is its `expr` when declared, else the path `hits.project`
+  lifts the property from, else the property's name. Text equality, `IN` and `CONTAINS` are exact,
+  so they need a `keyword` (or `wildcard`) field: on an analyzed `text` field they match less than the
+  graph would, and those rows are lost. A `match: ci` rule asks case-insensitively. A `date` or
+  `dateTime` range is widened by a day at the source, because the cluster compares instants where the
+  graph compares stored text; the graph's own comparison still decides the rows, so the answer is
+  exact and only the documents ranked near the boundary differ. `readWhole: true` sends no rule.
 - **`minScore` filters at the source.** Fused (RRF) scores are small and not comparable to
   BM25 scores; leave the floor at 0 for `hybrid` unless you have measured the distribution.
 - **Reranking is opt-in.** A declared reranker re-scores the retrieval it wraps. It is the one
