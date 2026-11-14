@@ -368,7 +368,8 @@ const reply = ctx.call("ai_complete", {
   [the model call](HOSTED_EXECUTION.md#the-model-call).
 
 A captured handler has no `gateway.ai`; that surface belongs to the conventional code-mode
-sandbox. `ctx.call` with any other tool name is refused.
+sandbox. `ctx.call` with any other tool name is refused (agent sessions are a proposed addition, see
+[AGENT_SESSIONS.md](AGENT_SESSIONS.md)).
 
 ## Credentials
 
@@ -1501,6 +1502,7 @@ work around it. The future declaration still belongs in `realm.ts`.
 | Views | `views` declares a captured list of named queries; `queries.views` instead references admitted views and does not declare them. Existing node/tabular, materialization and TTL semantics are in [Views](README.md#views--saved-queries-and-the-two-shapes-they-come-in) and [Virtual Cypher](VIRTUAL_CYPHER.md#8-views--a-saved-query-used-as-a-label). Parameter-choice coercion, audience, data-contract modes and whole-list refusal scope need a complete portable contract; SDK transformations are not normative. |
 | Skills and model | [Shipped skills](#shipped-skills), [model call](#the-model-call) and [hosted model capability](HOSTED_EXECUTION.md#the-model-call). Full skill frontmatter/reference traversal and digest-format rules remain deferred. |
 | Apps and write proposals | [Apps](#apps), [write proposals](#write-proposals); the host rechecks captured identity and grants before returning results or accepting effects. |
+| Agent sessions | [Agent sessions](AGENT_SESSIONS.md) is a proposed capability that no host implements yet: the `agentSessions` declaration, the `agent_session_*` operations through `ctx.call`, an app's `sessions` flag and the `AgentSession` host type. Until a host supports it, each of these is refused like any other unknown field or name. |
 | Cross-realm composition | [Graph boundaries](LABELS_AND_COMPOSITION.md#definition-imports-and-realm-boundaries). `from.realm` is reserved and explicitly refused today. Future consent, version lookup, variants and policy-required provenance remain possible. |
 
 The complete field-by-field conformance fixture suite remains future work. The worked
