@@ -2165,6 +2165,7 @@ author writes a search body.
   retrieval:
     mode: hybrid               # hybrid (default) | bm25 | semantic | knn
     fields: [title, body]      # the lexical leg
+    operator: and              # optional: every word must match (default: the cluster's, any word); or minimumShouldMatch: "75%"
     semanticField: body_semantic   # a self-embedding field; required by every mode but bm25
     rankWindowSize: 50
     rankConstant: 60
