@@ -161,6 +161,7 @@ terminology server does instead is serve the published hierarchy, and that is wh
 | `R value i`, a hasValue to a named individual (the Cell Ontology's exemplar data) | an edge named after R when `i` is also a term of the vocabulary (punned); counted when it is not | exact; noted for the individuals no term stands for |
 | any other form: union, universal, cardinality, `Self`, a complement anywhere else | — | refused, counted by form |
 | obsolete terms | rows with `deprecated: true`, so old codes resolve | exact |
+| the cross-references, reversed | `data/xrefs.csv` (one row per code and term), a `<Prefix>Code {code}` anchor type and a `CODES` join read by a code-keyed `tabular` producer, and a `TermsByCode` view: `MATCH (c:MondoCode {code: 'ICD10CM:E10'})-[:CODES]->(t)` is one keyed read where `WHERE t.xrefs CONTAINS …` would be a refused scan | exact; written only when the vocabulary has cross-references |
 
 The terms and edges are written as CSV under the realm's `data/` and served by `tabular` producers
 from a URL the realm owner publishes (`--data-url-base`); subsumption is `-[:IS_A*]->`. The draft
