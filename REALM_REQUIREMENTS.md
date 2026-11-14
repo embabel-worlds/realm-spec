@@ -150,7 +150,9 @@ Resolution chooses among the versions a realm source publishes.
   are soft), and of the newest 20 that a hard requirement found in a version it has already read
   accepts. A tag read whose metadata disagrees counts among the 20 and is not published. A candidate
   outside those ranges is known by its name, so a refusal can say what is newest, and is read only if
-  resolution then picks it, for at most 20 such reads per realm. A plan reads at most 60 versions in
+  resolution then picks it, for at most 20 such reads per realm. A candidate inside the ranges that
+  is older than the newest 20 is not offered to resolution, so a soft requirement whose recommended
+  version is that old resolves to a newer version instead. A plan reads at most 60 versions in
   all; a plan that needs more is refused with a sentence saying so. A satisfying version is missed
   only when the newest 20 candidates inside the range are all unusable, because their metadata
   disagrees with their tag or declares another realm's name: an older tag that would meet the
@@ -328,8 +330,9 @@ or by tooling and is never edited by hand.
 | `digest` | Required. `sha256:` and 64 lowercase hexadecimal characters over the installed realm's files. It is not compared at load for a realm installed from a local directory, whose files are its owner's working copy. |
 | `requires` | That version's own requirements, copied from its metadata. Absent when it has none. |
 
-**A world's lock.** A host writes the lock for a world whenever a realm is installed, planned,
-updated or removed, in the same step as the change; a step that was undone never reaches it. A
+**A world's lock.** A host writes the lock for a world whenever a realm is installed, updated or
+removed, in the same step as the change, and that includes every realm a confirmed plan adds or
+moves. A plan that is only shown writes nothing, and a step that was undone never reaches the lock. A
 removal takes the removed realms out of the lock and leaves every other entry as it was. The lock
 records. Resolution does not read it, and it never holds a realm back. If writing the lock fails
 after a change that worked, the change stays and the world carries a warning that the lock no longer
@@ -427,6 +430,8 @@ and tells the owner which.
   done, and that changes to its realms are refused until it is. Any realm change asked for meanwhile
   is refused and nothing is changed: `The previous change to this world's realms could not be put
   right, so nothing was changed.` The repair is tried again at each load.
+- Finishing an interrupted removal also withdraws the removed realm's approval, so nothing of it can
+  run afterwards. If that cannot be done, the repair has not completed.
 - A record of a change that cannot be read is set aside and never written over, and the owner is
   told with a warning.
 
@@ -442,24 +447,22 @@ These are observable limits of the behaviour above.
    requirement's range are read, as set out under [Published versions](#published-versions). A range is
    not missed for lying far back, since tags outside it are not read. A satisfying version is missed
    only when the newest 20 candidates inside the range are all unusable; the requirement is then
-   reported as not met even though an older tag would meet it.
+   reported as not met even though an older tag would meet it. A soft requirement whose recommended
+   version is older than the newest 20 resolves to a newer version.
 4. **A held-back realm still wins its own name.** It takes no part in the decisions between realms
    that load, and holds no script or API namespace, but a realm of the same name with weaker
    precedence stays shadowed by it.
 5. **Webhooks declared in a realm's files are registered at start-up** before the world is built, so a
    held-back realm's declared webhooks can be active until its world has been loaded.
-6. **A removal that is interrupted or fails before the realm is retired** can leave the realm gone
-   from the world and its files deleted, with its earlier approval still on record. The owner can be
-   told to retry a removal of a realm that is no longer installed.
-7. **A step that installs another realm from a repository already saved under the same reference
+6. **A step that installs another realm from a repository already saved under the same reference
    name** replaces what that name held, even when the repository now supplies a differently named
    realm. The realm it held disappears, and any realm that requires it is held back, although the
    plan said only that the new realm would be installed.
-8. **A requested realm whose version cannot be read, against a hard range that includes `0.0.0`.**
+7. **A requested realm whose version cannot be read, against a hard range that includes `0.0.0`.**
    Planning treats the unreadable version as 0.0.0, so the plan is empty and the install reports
    success, and the load then holds the requiring realm back, as a hard range cannot be met by an
    unreadable version.
-9. **Overlapping cycles.** When several cycles share a realm, the cycle sentence can name a chain
+8. **Overlapping cycles.** When several cycles share a realm, the cycle sentence can name a chain
    that includes a requirement nobody declared.
 
 ## Not specified
