@@ -154,9 +154,10 @@ terminology server does instead is serve the published hierarchy, and that is wh
 |---|---|---|
 | every named class | a row of one type, `<Prefix>Term`: `id` (CURIE, identity), `iri`, `name`, `namespace`, `definition`, `synonyms`, `deprecated` | exact |
 | `rdfs:subClassOf` a named class | an `IS_A` edge, both ways | exact |
-| `rdfs:subClassOf (R some X)` | an edge named after R's label (`PART_OF`, `REGULATES`), both ways; one data file per R | exact |
-| `owl:equivalentClass` (logical definitions) | — | noted: their asserted consequences are already edges |
-| any other `rdfs:subClassOf <expression>` | — | refused by count |
+| `R some X`, in an `rdfs:subClassOf` or inside a logical definition | an edge named after R's label (`PART_OF`, `REGULATES`), both ways; one data file per R | exact |
+| `R some (… S some X)`, a nested existential (HPO: `has_part some (quality and characteristic_of some kidney)`) | an edge named by its chain, `HAS_PART__CHARACTERISTIC_OF`, both ways; the chain kept under `chains:` in `alignment.yml` and exported as an object property with `owl:propertyChainAxiom` | inferred: `A ⊑ R some (S some X)` entails `A ⊑ (R ∘ S) some X`; the name is the import's |
+| `owl:equivalentClass` (logical definitions) | — | noted: the existentials inside are edges; the genus and the equivalence are not rules |
+| any other form: union, universal, cardinality, `Self` | — | refused, counted by form |
 | obsolete terms | rows with `deprecated: true`, so old codes resolve | exact |
 
 The terms and edges are written as CSV under the realm's `data/` and served by `tabular` producers
