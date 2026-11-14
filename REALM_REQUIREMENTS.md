@@ -117,8 +117,12 @@ characters.
 
 Versions compare by their three numbers, in order. A version with a `-qualifier` is a pre-release:
 it sorts before the same numbers without one, and two qualifiers compare by their dot-separated
-parts, numerically where both are numbers and by ASCII otherwise. A `+suffix` on a realm's version
-is ignored when comparing.
+parts, left to right, until one part differs. Two parts of digits compare as numbers, so `2` sorts
+before `10` and `01` equals `1`. A part of digits sorts before any part that is not all digits, and
+two parts that are not all digits compare by ASCII, so `2` and `10` both sort before `1a`, and `1a`
+sorts before `1b`. When every part of the shorter qualifier equals the matching part of the longer,
+the shorter sorts first. This is a total order: no three versions can each sort before the next
+around a circle. A `+suffix` on a realm's version is ignored when comparing.
 
 Two rules differ from Maven on purpose, because Maven's behaviour here surprises people:
 
@@ -140,8 +144,17 @@ Resolution chooses among the versions a realm source publishes.
   realm's name. A source that declares another name publishes nothing, and an install that needs it
   is refused with a sentence that names both realms, such as `sales-pipeline requires realm crm-core,
   but the repository found for it holds a realm named crm. Point crm-core at the right repository.`
-- When a realm has many tags, a host reads the newest ones first. Only the newest 20 tags inside the
-  requirement are considered (see [Known limits](#known-limits)).
+- When a realm has many tags, a host reads a bounded number of them, newest first. Only tags named
+  `v<version>` are candidates. For one realm, a host reads the metadata of the newest 20 candidates
+  that every hard requirement known when planning accepts (every candidate, when the requirements
+  are soft), and of the newest 20 that a hard requirement found in a version it has already read
+  accepts. A tag read whose metadata disagrees counts among the 20 and is not published. A candidate
+  outside those ranges is known by its name, so a refusal can say what is newest, and is read only if
+  resolution then picks it, for at most 20 such reads per realm. A plan reads at most 60 versions in
+  all; a plan that needs more is refused with a sentence saying so. A satisfying version is missed
+  only when the newest 20 candidates inside the range are all unusable, because their metadata
+  disagrees with their tag or declares another realm's name: an older tag that would meet the
+  requirement is then not read, and the requirement is reported as not met.
 - An index source may list versions explicitly. Its entry format is not specified here.
 
 A published version does not change. If the content behind an installed version differs from what
@@ -425,9 +438,11 @@ These are observable limits of the behaviour above.
    confirmation step and does not install the realms it requires. The realm is held back at load, with
    its sentence, until they are installed.
 2. **The lock is not read by resolution.** A mismatch is a warning and never holds a realm back.
-3. **At most 20 tags are read for a realm.** The newest 20 tags inside the hard range are considered.
-   A narrow range that lies wholly beyond them is reported as not met even though an older tag would
-   meet it.
+3. **At most 20 tags are read for a realm up front.** The newest 20 candidate tags inside the
+   requirement's range are read, as set out under [Published versions](#published-versions). A range is
+   not missed for lying far back, since tags outside it are not read. A satisfying version is missed
+   only when the newest 20 candidates inside the range are all unusable; the requirement is then
+   reported as not met even though an older tag would meet it.
 4. **A held-back realm still wins its own name.** It takes no part in the decisions between realms
    that load, and holds no script or API namespace, but a realm of the same name with weaker
    precedence stays shadowed by it.
