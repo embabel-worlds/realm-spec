@@ -162,6 +162,7 @@ terminology server does instead is serve the published hierarchy, and that is wh
 | any other form: union, universal, cardinality, `Self`, a complement anywhere else | — | refused, counted by form |
 | obsolete terms | rows with `deprecated: true`, so old codes resolve | exact |
 | the cross-references, reversed | `data/xrefs.csv` (one row per code and term), a `<Prefix>Code {code}` anchor type and a `CODES` join read by a code-keyed `tabular` producer, and a `TermsByCode` view: `MATCH (c:MondoCode {code: 'ICD10CM:E10'})-[:CODES]->(t)` is one keyed read where `WHERE t.xrefs CONTAINS …` would be a refused scan | exact; written only when the vocabulary has cross-references |
+| every live term's name and exact synonyms | `vocabulary.txt`, one per line, declared as the realm's `vocabulary` ([README](README.md#vocabulary)), so a host routes "the SNOMED code for asthma" to the realm although the question never says "disease"; the realm's description names the dozen words its terms use most and its code systems | exact |
 
 The terms and edges are written as CSV under the realm's `data/` and served by `tabular` producers
 from a URL the realm owner publishes (`--data-url-base`); subsumption is `-[:IS_A*]->`. The draft

@@ -239,6 +239,7 @@ tags:
 | `host` | No | Execution host for the Realm's Functions: `docker` (the Node bundle host, which needs no container) or `wasm`. Absent means the platform infers it from what's on disk. See [Execution hosts](#execution-hosts). |
 | `capabilities` | No | Captured realms only. What the realm asks the owner to grant at admission beyond its handlers and resources. The one value is `model`, which asks for [the model call](HOSTED_EXECUTION.md#the-model-call). The owner may grant none of them. |
 | `optionalLabels` | No | Labels this realm's views read but do not need: each owned by a companion realm that may be absent, and read only under `OPTIONAL MATCH`. See [Optional labels](#optional-labels--reading-a-companion-realm-that-may-be-absent). |
+| `vocabulary` | No | A file the realm ships, relative to the realm root, listing the things it holds one per line, so a host can route a question that names one of them to this realm. See [Vocabulary](#vocabulary). |
 
 ### Icons
 
@@ -278,6 +279,42 @@ about 40px: this is a tile, not an illustration.
 **Apps declare their own**, separately and by the web's usual means — a
 `<link rel="icon" href="…">` in the app's `<head>`, pointing at a file beside
 it in `apps/`. Same principle, existing convention, no new field.
+
+### Vocabulary
+
+```yaml
+vocabulary: vocabulary.txt   # or data/towns.txt: any path under the realm root
+```
+
+A host that answers questions in words has to decide which realm a question is about before it
+can answer, and it decides from the realm's name, its labels and the words of its description.
+That fails for the commonest question a reference realm gets: one that names a thing the realm
+holds and never says what kind of thing it is. "The SNOMED code for asthma" says neither
+"disease" nor "MONDO"; a description can say the realm is about diseases, syndromes and
+carcinomas, but it cannot carry 63,000 disease names.
+
+The vocabulary file can. It lists what the realm holds, one term per line, UTF-8, as written:
+the names and exact synonyms of a disease ontology's terms, the chemicals of ChEBI, the towns of
+a gazetteer, the ticker symbols of an exchange. Blank lines and lines starting with `#` are
+skipped. A host reads it when it builds the world's schema, not per question, and routes a
+question that names one of the terms to the realm.
+
+What a host may and may not do with it:
+
+- The realm's own name and labels still outrank it. A question that names a realm or one of its
+  types goes there, whatever any vocabulary holds; a word of the vocabulary that is another
+  realm's name or label word, or one of the host's own words for its data, is not vocabulary
+  evidence. A thesaurus the size of NCIt holds "street", "meeting" and "email"; installing it must
+  not take the street realm's questions or the user's mail.
+- Two realms whose vocabularies both hold the term are both asked.
+- The file must be the realm's own, under the realm root. Hosts refuse an absolute path, a `..`
+  that climbs out of the realm, a symbolic link that resolves outside it, or a URL, exactly as
+  for `icon`. A declared file that is missing or unreadable costs the realm its vocabulary and
+  nothing else: the realm loads and routes as it did without one.
+- A host that ignores the field is conformant; the realm is then routed by its description.
+
+`ontology-io` writes the file for every terminology it imports and declares it. A hand-written
+realm declares one when its subject is a set of named things a question would name on its own.
 
 ### Maturity
 
@@ -779,6 +816,14 @@ Producers are the source-specific fetchers a `virtualJoins.producer` references 
   datasource: warehouse           # a realm/world SQL datasource (sql/datasources.yml)
   query: "SELECT id, customer_email, total FROM orders WHERE customer_email IN (:keys)"
 ```
+
+`keyArg` and a pushdown rule's `argPath` are paths into `args`: a dot descends into an object
+and a digit indexes a list, so `filterGroups.0.filters.0.values` builds the nested body above.
+A source whose parameter is itself spelled with a dot (ClinicalTrials.gov's `query.cond`,
+`filter.overallStatus`) declares it in `args` as written (`args: { query.cond: "" }`); a path
+that names a key already present in `args` is written there whole, as a flat parameter, not
+into a nested `query` object the source never reads. The same parameter in string mode is
+`args: { query.cond: "{keys}" }` with a `keyTemplate`.
 
 For `kind: remote`, `queryArgs` declares scalar request inputs (`string`, `integer`,
 `number`, `boolean`), supplied as `realm` values on the edge. They are optional unless named in
