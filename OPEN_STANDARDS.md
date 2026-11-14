@@ -152,12 +152,14 @@ terminology server does instead is serve the published hierarchy, and that is wh
 
 | OWL / OBO | Realm | Outcome |
 |---|---|---|
-| every named class | a row of one type, `<Prefix>Term`: `id` (CURIE, identity), `iri`, `name`, `namespace`, `definition`, `synonyms`, `deprecated` | exact |
+| every named class | a row of one type, `<Prefix>Term`: `id` (CURIE, identity; `NCIT:C4872` as much as `GO:0008150`), `iri`, `name`, `namespace`, `definition`, `synonyms` (exact), `otherSynonyms` (related, broad, narrow), `xrefs` (`oboInOwl:hasDbXref`, the crosswalk to other code systems: `OMIM:222100|ICD10CM:E10`), `altIds` (`oboInOwl:hasAlternativeId`, merged ids), `deprecated`; the multi-valued columns `|`-separated | exact; the report counts the cross-references by code system |
 | `rdfs:subClassOf` a named class | an `IS_A` edge, both ways | exact |
 | `R some X`, in an `rdfs:subClassOf` or inside a logical definition | an edge named after R's label (`PART_OF`, `REGULATES`), both ways; one data file per R | exact |
 | `R some (… S some X)`, a nested existential (HPO: `has_part some (quality and characteristic_of some kidney)`) | an edge named by its chain, `HAS_PART__CHARACTERISTIC_OF`, both ways; the chain kept under `chains:` in `alignment.yml` and exported as an object property with `owl:propertyChainAxiom` | inferred: `A ⊑ R some (S some X)` entails `A ⊑ (R ∘ S) some X`; the name is the import's |
 | `owl:equivalentClass` (logical definitions) | — | noted: the existentials inside are edges; the genus and the equivalence are not rules |
-| any other form: union, universal, cardinality, `Self` | — | refused, counted by form |
+| `¬(R some X)` at the top of an `rdfs:subClassOf` (the OBO never-in-taxon shape: Uberon states 3,475, `in_taxon`) | an edge named `NEVER_R` (`NEVER_IN_TAXON`), both ways; the property it negates kept under `negations:` in `alignment.yml`; exported as an object property annotated with the property it negates (`rdfs:seeAlso`), since OWL has no negated property and the axioms are the rows | inferred: the name is the import's |
+| `R value i`, a hasValue to a named individual (the Cell Ontology's exemplar data) | an edge named after R when `i` is also a term of the vocabulary (punned); counted when it is not | exact; noted for the individuals no term stands for |
+| any other form: union, universal, cardinality, `Self`, a complement anywhere else | — | refused, counted by form |
 | obsolete terms | rows with `deprecated: true`, so old codes resolve | exact |
 
 The terms and edges are written as CSV under the realm's `data/` and served by `tabular` producers
