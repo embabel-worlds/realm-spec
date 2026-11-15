@@ -1962,6 +1962,7 @@ realm and a declared credential the owner binds in a captured realm. See
 | `type` | no | `openapi` (default) or `graphql`. |
 | `auth` | no | `none` (default), `bearer`, `api-key`, `oauth2`. See **Auth** below. |
 | `token-env` | with bearer / api-key | The name of the key holding the token, which must be a `variable` the realm's own `keys.yml` declares (see [a realm names only its own keys](#auth)). Deprecated in favour of a [key entry](#keysyml--the-keys-a-realm-needs) for the same variable, or of a declared credential in a captured realm. |
+| `token-optional` | no | `true` when the API also works without its token: the `token-env` key is sent when set, and the API is called without it when not, rather than skipped as inert. Default `false`. See **An optional token** under [Auth](#auth). |
 | `headers` | no | Custom HTTP headers; values support `${VAR}` interpolation from credential store / env. |
 | `oauth2` | with `auth: oauth2` | OAuth2 config — see **OAuth2** below. |
 | `tags` | no | Allowlist of OpenAPI tag names. Filters huge specs to a coarse subset. |
@@ -2076,6 +2077,22 @@ undeclared variable. Missing credentials mean
 the entry is skipped at world load with a logged warning; the API never appears in the gateway.
 A captured realm's API operations read only the owner's wallet, through the credential the owner
 bound, and never fall back to the process environment.
+
+**An optional token.** Some APIs work without a key and better with one: a small shared budget
+keyless, a larger one with a free key. `token-optional: true` says so. When the `token-env` key is
+set it is sent as `auth` says; when it is not, the entry still loads and is called without it, and it
+is never reported inert or unconnected. Declare the variable in `keys.yml` as for any other key, so
+the owner can find and set it. An agent calling on its own account sends its own key or none, never
+the owner's. The flag covers `token-env` only: a `${VAR}` in `headers` is still required, and it has
+no effect with `oauth2`. A captured realm's API operations do not read it.
+
+```yaml
+- url: openalex.yaml
+  name: openalex
+  auth: bearer
+  token-env: OPENALEX_API_KEY
+  token-optional: true
+```
 
 ### OAuth2
 
