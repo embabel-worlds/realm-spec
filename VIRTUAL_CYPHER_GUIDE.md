@@ -722,6 +722,35 @@ Habits: give every step a description, since English mode picks facts by them; n
 hold; and save an answer worth keeping as a goal view, so it is pinned rather than written afresh. See
 [§16 of the spec](VIRTUAL_CYPHER.md#16-planning-ask-for-the-result-not-the-steps).
 
+### 3.20 When the person's words are not the data's — `ai.terms`
+
+```cypher
+MATCH (s:DiseaseSearch {query: $q})-[r:MATCHES]->(h:DiseaseHit)
+RETURN h.id AS id, h.name AS name, null AS suggestedBy
+UNION
+CALL ai.terms($q, 'disease names, synonyms and abbreviations', {ai: {confidence: 0.6, maxTerms: 5}})
+  YIELD term
+MATCH (s2:DiseaseSearch {query: term})-[:MATCHES]->(h2:DiseaseHit)
+RETURN h2.id AS id, h2.name AS name, term AS suggestedBy
+```
+
+**Means:** "Find the disease someone typed as *HSV 2 vaccine*." The search index has no "HSV-2"; a model
+knows it is herpes simplex virus 2, which the vocabulary files under genital herpes.
+
+- **The model suggests, the data decides.** `ai.terms` yields words — a term, its kind, how sure the model
+  is — never a disease. Each term is looked up like a typed one; a suggestion the index does not know finds
+  nothing and is simply not a row. Counts are over what the lookup found.
+- **Say where a row came from.** `suggestedBy` carries the term that reached it, so an app can show
+  "suggested by a model: HSV-2 → genital herpes" — and the result's `AI_TERMS` note names the role,
+  the input and every term, so nothing a model said passes as the data's own words.
+- **The same question, the same terms.** Answers are kept per input and steering; `{ai: {fresh: true}}`
+  asks again. A model that cannot be reached gives no suggestions and a `TERMS_UNAVAILABLE` warning; the
+  index's own rows still answer.
+
+Habits: put the deterministic search first and the suggestions beside it; set a `confidence` floor so
+long-shot terms are never looked up; hand the call a `null` input when the search was already strong,
+and it asks nothing. See [§7.10 of the spec](VIRTUAL_CYPHER.md).
+
 ---
 
 ## Where to go next

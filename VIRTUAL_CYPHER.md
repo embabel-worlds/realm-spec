@@ -3157,15 +3157,19 @@ method is **genuinely** transformer-based, not just name-dropping it"*, *"the is
 outage**"*. For those, the query can call a **per-row LLM judgment** inline, expressed as a reserved
 **`ai.*`** function.
 
-These run at **execution time**, over the rows a query has already fetched — the LLM counterpart, at the
-value level, of §9's generation-time `examples:` steering. Four primitives across the three query positions:
+These run at **execution time**, over the rows a query has already fetched (all but `ai.terms`, below) — the LLM counterpart, at the
+value level, of §9's generation-time `examples:` steering. The primitives, by where they stand in a query:
 
 - **`{ai: {hint, model, confidence, fresh, voice, wordcount}}`** — *steer and tune* the
   fetch behind an edge, as a nested directive map (§7.2; the flat `ai_*` spellings are RETIRED);
 - **`{realm: {…}}`** — the realm's OWN prompt parameters, passed verbatim (§7.2.2);
 - **`WHERE ai.relevant(n, '<criterion>')`** — *filter* rows by subjective relevance;
 - **`ORDER BY ai.score(n, '<criterion>') DESC`** — *rerank* rows by subjective fit;
-- **`RETURN ai.classify(n, '<dimension>')`** — *label* each row along a subjective dimension.
+- **`RETURN ai.classify(n, '<dimension>')`** — *label* each row along a subjective dimension;
+- **`CALL ai.fromText(text, '<pattern>') YIELD …`** — *project* a typed graph shape out of text (§7.8);
+- **`CALL ai.terms(input, '<what the terms name>' [, {ai: {…}}]) YIELD term, kind, confidence`** — *propose*
+  the search terms a person's words could mean, for the query to look up in the data (§7.10). The one
+  primitive that shapes what is fetched rather than judging what was: the model suggests, the data decides.
 
 ### 7.1 The `ai` and `realm` namespaces are reserved
 
@@ -3178,7 +3182,8 @@ they carry no stored value — the engine computes them for the rows a query tou
 them, writes the result onto the transient row as real data so ordinary Cypher (`WHERE`, `ORDER BY`) can
 read it. They are defined **only over fetched / materialized rows** (a virtual join's targets, §2) — the
 judgment is what the source could not express — so anchor them on a virtual collection, not a raw
-persisted label.
+persisted label. `ai.terms` (§7.10) is the one exception, and the reason it has rules of its own: it runs
+*before* the fetch it informs, and yields words for the query to look up — never rows, never a count.
 
 ### 7.2 The `{ai: {…}}` directive map — steer and tune a fetch
 
@@ -3233,6 +3238,8 @@ ignored. Its keys:
   **and by no others**, so the rest of a larger set is not thinly covered, it is absent — which is why
   a bounded prompt now returns a `PARTIAL_RESULT` note saying how many anchors of how many it was
   seeded from. The same key, spelled the same way, bounds a holistic aggregation's evidence (§7.7).
+- **`maxTerms`** — `ai.terms` only (§7.10): at most this many proposed terms per input. The call reads
+  `model`, `hint`, `confidence` and `fresh` from the same map with the meanings above.
 
 **Precedence:** query directive → the realm edge's own declaration (§5.3 generator, aggregate `reduce`)
 → the deployment default. The directives apply to **generative** edges (the generator call) and
@@ -4118,6 +4125,120 @@ MATCH (u:Issue) WHERE NOT EXISTS { (u)-[:TRACKED_BY]->() } RETURN u.summary
 
 A caller need not write the steps at all: given only the final `MATCH … RETURN`, a planner chooses them from
 the world's views and rules and compiles them into exactly this shape of unit subqueries (§16).
+
+### 7.10 `ai.terms` — a model suggests what to look for; the data decides what exists
+
+```cypher
+CALL ai.terms($q, 'disease names, synonyms and abbreviations', {ai: {hint: 'MONDO vocabulary', maxTerms: 6}})
+  YIELD term, kind, confidence
+MATCH (s:DiseaseSearch {query: term})-[:MATCHES]->(h:DiseaseHit)
+RETURN DISTINCT h.id AS id, h.name AS name, collect(DISTINCT term) AS suggestedBy
+```
+
+**Means:** "the words the person typed may not be the words the data uses — ask a model what they could
+mean, then look each one up." `"HSV 2 vaccine"` matches no disease name, but a model knows HSV-2 is herpes
+simplex virus 2, which a disease vocabulary files under genital herpes. The model proposes the words; the
+query's own `MATCH` (or producer key) decides whether anything answers to them.
+
+Every other `ai.*` primitive judges rows a query has already fetched (§7.1). `ai.terms` is the one that
+shapes **what is fetched**, so it is held to rules the others do not need:
+
+- **Candidates only.** It yields words, never records and never counts: `term` (a string), `kind` (one of
+  `canonical`, `synonym`, `abbreviation`, `expansion`, `lay`, `related`, or null) and `confidence` (how
+  likely the input means this term, 0–1, or null). Yield any of the three, under any name (`YIELD term AS
+  suggested`). A row whose input is given no terms is dropped, as any procedure that yields nothing drops
+  its row.
+- **Resolved deterministically.** A term used as a key — a producer pin (`{query: term}`), a `WHERE … = term`
+  — is a **proposal**: it reaches a row only where the lookup finds a record, and every count over the
+  result counts those records, never the model's words. A term the data does not hold reaches nothing. A
+  fetch keyed by a term is made like one keyed by a literal: the source is asked for exactly the proposed
+  terms, and what it returns is all there is.
+- **Visible.** Every call is reported with the answer: an `AI_TERMS` note in `warnings` naming the call,
+  the role and model that proposed, the input, each term with its kind and confidence, whether the cache
+  answered, and how many terms the confidence floor dropped. It is provenance, not a failure — the rows are
+  the data's — and it says so; an invoked view reports it in fixed words that quote neither the input nor
+  the terms. To show a reader *which* suggestion found a row, return the term with it (`suggestedBy`
+  above): "suggested by a model: HSV-2 → genital herpes".
+- **Reproducible.** The same question gets the same terms: answers are kept per input, instruction, hint,
+  `maxTerms`, role and the model the role resolved to. Naming another role, or a world remapping one, asks
+  again. `{ai: {fresh: true}}` asks again regardless, and the new answer replaces the kept one. A failed
+  call is never kept.
+- **Metered.** One model call per distinct input the cache cannot answer, counted in the result's model
+  calls like every `ai.*` call, and priced against the query's model-call limit **before** any is made:
+  over it, the query is refused `TOO_EXPENSIVE` rather than half-asked (§9). At most 200 distinct inputs per
+  call. A `null` or empty input asks nothing — the way to ask only when it is worth it (below).
+
+**Steering — the `{ai: {…}}` map.** The third argument is the same closed `ai` namespace as on an edge and an
+aggregation (§7.2), with the same names meaning the same things, plus one key of its own:
+
+| Key | Effect | Default |
+|---|---|---|
+| `model` | the world ROLE that proposes (`chat_best`, …), never a model name. An unknown role answers with the default and the `AI_TERMS` note says so; a model name is refused | `vc_execution` |
+| `hint` | a soft steer beside the instruction (`'MONDO vocabulary'`, `'UK spelling'`) — never a filter | none |
+| `confidence` | a floor, 0–1: a term the model is less sure of is dropped before anything looks it up, and costs no lookup; a term with no confidence is dropped when a floor is set | none |
+| `fresh` | `true` asks the model again instead of reading the kept answer; the answer is still kept | `false` |
+| `maxTerms` | at most this many terms per input, most likely first — named as `maxGroups` is | 8 (1–25) |
+
+Every value is a literal (the call is read before the statement runs). A key that steers something else
+(`voice`, `wordcount`, `sample`, `text`, `temperature`), an unknown key, a `{realm: …}` map, directive keys
+written without `ai` (`{hint: '…'}`), and `ai.fromText`'s `{role: '…'}` spelling are each **refused**,
+naming the fix — never accepted and ignored. The second argument, what the terms should name, is a string
+literal.
+
+**A model that fails gives no terms, not a failed query.** When the model cannot be asked, that input yields
+nothing, the answer carries a `TERMS_UNAVAILABLE` warning naming the input and the cause, and the rest of
+the query answers. This is deliberately unlike the judgments (§7.6), which refuse: a judgment that did not
+happen would read as a verdict, while a suggestion that did not arrive only removes suggestions — every row
+still present was found by the data. The warning says the rows the terms would have reached are absent,
+not missing from the data. A query cancelled or stopped by a budget keeps its own refusal.
+
+**Dropping terms that resolve to nothing.** A `MATCH` already does it: a term that finds no record has no
+row. To keep the evidence of what was tried, or to count suggestions by outcome, resolve with `OPTIONAL
+MATCH` and filter in the open:
+
+```cypher
+CALL ai.terms($q, 'disease names') YIELD term
+OPTIONAL MATCH (s:DiseaseSearch {query: term})-[:MATCHES]->(h:DiseaseHit)
+WITH term, collect(h) AS hits
+WHERE size(hits) > 0              // the validation step: a term is used only if the lookup returned something
+UNWIND hits AS h
+RETURN DISTINCT h.id, term
+```
+
+**A fallback, not a first resort.** The idiomatic use is beside the deterministic path, as a second branch
+whose rows are marked as reached by a suggestion:
+
+```cypher
+MATCH (s:DiseaseSearch {query: $q})-[r:MATCHES]->(h:DiseaseHit)
+RETURN h.id AS id, r.score AS score, null AS suggestedBy
+UNION
+CALL ai.terms($q, 'disease names, synonyms and abbreviations', {ai: {confidence: 0.6, maxTerms: 5}}) YIELD term
+MATCH (s2:DiseaseSearch {query: term})-[r2:MATCHES]->(h2:DiseaseHit)
+RETURN h2.id AS id, r2.score AS score, term AS suggestedBy
+```
+
+To ask the model only when the search was weak, hand the call a `null` input otherwise — a `null` input asks
+nothing and costs no call:
+
+```cypher
+MATCH (s0:DiseaseSearch {query: $q})-[r0:MATCHES]->(:DiseaseHit)
+WITH max(r0.score) AS best
+WITH CASE WHEN best IS NULL OR best < 8.0 THEN $q END AS weak
+CALL ai.terms(weak, 'disease names, synonyms and abbreviations', {ai: {confidence: 0.6}}) YIELD term
+…
+```
+
+A fetch keyed by a term is made after the terms are written, whatever the call's input read first: the
+source is asked for the terms, and only for them.
+
+**Where it may be called** — exactly where `ai.fromText` may (§7.8): at the top level or inside `CALL { … }`
+(each outer row's input read with that row), in either branch of a `UNION`. Refused, each before any model
+call: after `OPTIONAL` (`OPTIONAL CALL ai.terms`), inside `EXISTS {}` / `COUNT {}` / `COLLECT {}`,
+`OPTIONAL CALL {}`, `CALL {} IN TRANSACTIONS` or `CALL (x) {}`; after a write anywhere earlier in the
+statement (put the call before the first write); and after an `ai.fromText` call whose projection it would
+read (call `ai.terms` first). `YIELD *` and `YIELD … WHERE` are refused; filter in a following `WITH … WHERE`.
+A raw-mode statement treats `ai.terms` as an unknown procedure. Nothing it proposes is stored: graph counts
+are identical before and after.
 
 ---
 

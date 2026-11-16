@@ -329,6 +329,24 @@ RETURN p.name, i.summary, a.name</code></pre>
       <div class="rule care"><b>model</b><span>Role <code>vc_extraction</code>; one call may name another role: <code>ai.fromText(t, pattern, {role: 'chat_best'})</code> — a role, never a model.</span></div>
       <div class="rule care"><b>said</b><span>Declined (a freemail sender), unresolved and ambiguous come back as <code>PROJECTION_*</code> warnings — never as a silent empty.</span></div>
     </section>
+    <section data-tags="text llm search">
+      <h2>ai.terms — the model suggests, the data decides</h2>
+      <p class="lede">Terms a person's words could mean, for the query to look up. Yields words, never records; a term the data does not hold reaches no row.</p>
+      <pre><code>CALL ai.terms($q, 'disease names, synonyms and abbreviations',
+  {ai: {confidence: 0.6, maxTerms: 5}}) YIELD term, kind, confidence
+MATCH (s:DiseaseSearch {query: term})-[:MATCHES]-&gt;(h:DiseaseHit)
+RETURN DISTINCT h.id, term AS suggestedBy</code></pre>
+      <table>
+        <tr><th><code>{ai: …}</code> key</th><th>means</th></tr>
+        <tr><td><code>model</code></td><td>a role (default <code>vc_execution</code>), never a model</td></tr>
+        <tr><td><code>hint</code></td><td>a soft steer beside the instruction</td></tr>
+        <tr><td><code>confidence</code></td><td>floor 0–1: weaker terms are never looked up</td></tr>
+        <tr><td><code>fresh</code></td><td>ask again; the answer is still kept</td></tr>
+        <tr><td><code>maxTerms</code></td><td>at most this many per input (8; 1–25)</td></tr>
+      </table>
+      <div class="rule must"><b>said</b><span>Every call is in <code>AI_TERMS</code>: role, model, input, terms. Same question, same terms (cached).</span></div>
+      <div class="rule care"><b>fails</b><span>No model, no terms: <code>TERMS_UNAVAILABLE</code>, and the rest of the query answers. A <code>null</code> input asks nothing.</span></div>
+    </section>
     <section data-tags="pipeline writes projected">
       <h2>One query is a pipeline</h2>
       <p class="lede"><code>CREATE</code>/<code>MERGE</code> of projected types write the run's scratch: the rest of the query sees them, nothing else does. Read-only means read-only <i>with respect to the store</i>.</p>

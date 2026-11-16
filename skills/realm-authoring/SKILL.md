@@ -108,7 +108,10 @@ back is **Virtual Cypher** — see "Virtual Cypher — the engine" under "Joinin
 - **LLM query primitives (the `ai` namespace)** work over any virtual collection your producer fetches —
   you declare nothing. A query author can `WHERE ai.relevant(n, '<subjective criterion>')`
   (filter), `ORDER BY ai.score(n, '<criterion>') DESC` (rerank), or steer a *generative*
-  producer with an `{ai: {hint: '…'}}` edge directive map. The `ai` namespace is **reserved** — never name a
+  producer with an `{ai: {hint: '…'}}` edge directive map. When a search producer is keyed by the words a
+  person typed, a view can add `CALL ai.terms($q, '<what the terms name>') YIELD term` and key the same
+  search by `term`: a model proposes synonyms and expansions, the producer decides what exists, and every
+  suggestion is reported with the answer. The `ai` namespace is **reserved** — never name a
   stored property or producer field `ai` or `ai_*`. See "LLM query primitives" in the Virtual Cypher spec.
 
 ## Joining OTHER realms — decide this before you write a type
