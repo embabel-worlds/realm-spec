@@ -509,7 +509,7 @@ absence.
 | `source-tree` | a **project's source in fourteen languages**, parsed when a query reaches it — files, declarations with their annotations, imports, name-matched calls and the type names each file uses, in the standard model's code columns, and any syntax a realm's own query captures (§5.21) | a project's location: an https git URL (`@ref` optional) or a folder |
 | `stacktrace` | the **Java stack trace in a piece of text** — its throwables and frames, each frame naming the jar that compiled its class with that jar's keys (§5.20) | the text: a pasted trace, or a log event's `content` |
 | `files` | the world's **local files**, walked live under `data/` roots — one row per file, per line (`unit: line`) or per log event (`unit: event`, §5.20.1) | the owner key; free-text terms with `emit: search` |
-| `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable — or, with `retrieval.mode: scan`, read WHOLE for a `sources.yml` mirror (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
+| `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable — or, with `retrieval.mode: scan`, read WHOLE for a `sources.yml` mirror, or, with `aggregate:`, COUNTED: grouped counts and metrics over every document a key matches, one record per bucket (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
 | *captured handler* (no `kind`) | an approved handler in the realm's own captured installation, declared as a version-1 `producers/` file. It may walk its own cursor (`page:`) and receive `=`/`IN` filters as list arguments (`pushdown:`). No cache ([captured handler producers](README.md#captured-handler-producers)) | the anchor key batch, as a list under `keyArgument`; each record carries its key under `recordKeyField` |
 
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
@@ -2286,6 +2286,112 @@ mirrors into the graph (README, *Filling a mirror before anyone asks*):
 
 Cost: one request per `pageSize` documents, plus opening and closing the point-in-time, per walk — not
 per query.
+
+#### `aggregate:` — grouped counts over every match
+
+A relevance search answers "which k documents best match this key". It cannot answer "for EVERY document
+that matches, how many per drug, at which phase, how many recruiting" — and the k best, counted, is a
+sample that reads as the whole (100 of 5,924 asthma studies put a Phase 3 drug at Phase 1). `aggregate:`
+asks the cluster to count instead: one `_search` per key with `size: 0` and the exact match total, the
+match set grouped by a field (a `terms` aggregation) with metrics per group. The producer's connection,
+credentials, retrieval composition and `pushdown:` rules are the ones it already declares, so "matches"
+means for a count exactly what it means for a search over the same declaration.
+
+```yaml
+- name: trialDrugCounts
+  kind: elasticsearch
+  index: biomed-trials
+  connection: { endpoint: "http://localhost:9200", endpointEnv: BIOMED_ES_URL, usernameEnv: BIOMED_ES_USERNAME, passwordEnv: BIOMED_ES_PASSWORD }
+  retrieval:
+    mode: bm25                 # required: a lexical query has a match set to count
+    fields: ["conditions^4", "meshTerms^3", "title^2", "officialTitle", "summary"]
+    minimumShouldMatch: "4<-1"
+  hits:
+    anchorKeyField: query      # the join's recordKeyField, as for a search
+  aggregate:
+    keySeparator: "|"          # optional: one key holds several queries, OR'd into ONE search
+    filter: [{ terms: { interventionTypes: [DRUG, BIOLOGICAL] } }]   # optional fixed scope, query DSL
+    runtimeMappings:           # optional: Elasticsearch runtime fields to group or measure by
+      phaseRank: { type: long, script: { source: "…" } }
+    groupBy:                   # optional: without it, one record per key (below)
+      field: drugName          # a keyword (or runtime keyword) field: one bucket, one record, per value
+      size: 20000              # the most buckets returned (default 10)
+      property: drug           # the record property the bucket's key is written to (default `key`)
+      order: [{ rank: desc }, { _count: desc }, { _key: asc }]   # as Elasticsearch takes it
+    countField: studies        # where the document count goes (default `count`)
+    metrics:                   # each an Elasticsearch aggregation body, computed per bucket
+      rank: { max: { field: phaseRank } }
+      recruiting: { filter: { term: { status: RECRUITING } } }
+      sponsors: { terms: { field: sponsor.keyword, size: 3 } }
+      sponsorCount: { cardinality: { field: sponsor.keyword } }
+    project:                   # optional: more values from the bucket, by path
+      sponsor1: "sponsors.buckets[0].key"
+      sponsor1Studies: "sponsors.buckets[0].doc_count"
+```
+
+```yaml
+# types: the bucket is a node joined to the key, the counts on the edge
+- name: PipelineDrug
+  properties:
+    drug: { identity: true }
+  virtualJoins:
+    - { anchorLabel: PipelineSearch, relationship: NAMES_DRUG, keyField: query, recordKeyField: query, producer: trialDrugCounts }
+```
+
+```cypher
+MATCH (q:PipelineSearch {query: 'asthma|bronchial asthma'})-[e:NAMES_DRUG]->(d:PipelineDrug)
+RETURN d.drug, e.studies, e.rank, e.recruiting, e.matchedDocs, e.otherDocCount
+```
+
+**The contract:**
+
+- **Every matching document is counted.** The request asks for no documents and for the exact total
+  (`track_total_hits`), so neither `k` nor `max_result_window` bounds what is counted. The query is the
+  `multi_match` a `bm25` search sends for the same key — `retrieval.fields`, `operator`,
+  `minimumShouldMatch` — inside a `bool` whose filter carries `aggregate.filter` and the pushed predicates.
+  Only `mode: bm25` may aggregate: a semantic or kNN ranking orders the whole index and has no match set;
+  a reranker changes no count. Either is refused by name.
+- **Several queries, one search.** With `keySeparator`, a key such as `asthma|bronchial asthma` is split
+  (each part trimmed, blanks and repeats dropped), each part becomes its own `multi_match`, and they are
+  OR'd into ONE search. A document two parts match is counted once, which a key per spelling, counted and
+  added, cannot do. The records are attributed to the whole key.
+- **A bucket is a record; its counts ride on the edge.** With `groupBy`, each bucket is a record whose
+  key is `groupBy.property` (and `id`) — the target's identity, normally. Everything counted is a fact
+  about THIS key's documents, so it goes on the EDGE: the count under `countField`, each metric under its
+  name, each `project` lift, and `matchedDocs` (every document the key matched), `otherDocCount`,
+  `index` and `mode: aggregate`. A bucket named by two keys (one drug, two diseases) is one node with two
+  edges, each carrying its own counts.
+- **A metric's value is its natural one.** A metric aggregation (`max`, `min`, `sum`, `avg`,
+  `cardinality`, `value_count`) gives its `value` — absent, not 0, when no document had the field; a
+  single-bucket one (`filter`, `missing`) its `doc_count`; a multi-bucket one (`terms`) its bucket keys
+  as a list, in the cluster's order, with the counts a `project:` path away. A metric, lift or
+  `countField` may not take a name the record already carries (`id`, the key property, the anchor key
+  field, `index`, `mode`, `matchedDocs`, `otherDocCount`).
+- **Without `groupBy`, one record per key.** The key is the record's identity and anchor key; the exact
+  match total under `countField` and each metric over the whole match set are on the NODE (the node is
+  this key's, and shared with nothing). It is how a view gets a denominator that does not vanish when no
+  bucket does.
+- **The cap is said, never silent.** Documents in buckets past `groupBy.size` are counted by the cluster
+  (`sum_other_doc_count`) and reported: each grouped edge carries the figure as `otherDocCount`, and the
+  run carries a `PARTIAL_RESULT` note naming the key, the cap and the figure, so an app can say "names
+  past the 20,000 shown hold 412 more studies" rather than imply the list is all there is. A per-bucket
+  count error the cluster reports across shards (`doc_count_error_upper_bound`) is named in the same note.
+- **Pushdown narrows the documents counted.** A `pushdown:` rule (above) becomes a filter clause on the
+  aggregation's query, after the same keyword-mapping check. Because the graph re-applies every pushed
+  predicate to the RECORD, an aggregation absorbs only the comparisons a counted record can carry as its
+  own — `EQUALS` and `HAS_MEMBER` — and stamps the value on it: a bucket counted over the RECRUITING
+  studies says `status: 'RECRUITING'`. An `IN`, a range or a substring on a bucket stays the graph's,
+  as for any producer.
+- **The cache key is the filter sent.** Counts over the recruiting studies are not a subset of counts
+  over all of them, so an aggregation is keyed by the filters it sent and the declaration, like a
+  top-k read (§5.13's superset rule does not apply).
+- **Honesty.** As for a search: a failed request, an HTTP error or a response that carries no
+  aggregation is a `warnings` entry and no records for that key, never a 0. A misdeclared aggregation is
+  reported once, by name, before any request.
+
+Cost: one request per key, whatever the number of matching documents or buckets — the cluster does the
+counting. Bound `groupBy.size` by what the view shows: Elasticsearch refuses a response past its
+`search.max_buckets` (65,536 by default), counting every metric's buckets.
 
 ### 5.17 Calendar history — `periods:` on a `remote` producer
 
@@ -4596,7 +4702,8 @@ it is not.
 | `sql` | **yes**, on a KEYED table read | the statement is generated, so `count` compiles to `SELECT COUNT(*) … GROUP BY <keyColumn>` with the same keys, the same governance `where:` and the same pushed filters |
 | `cypher`, `sparql`, `graphql` | **no, not yet** | each could answer one — `count(o)`, `COUNT(DISTINCT ?x)`, a Relay `totalCount` — but its query is AUTHORED, and nothing in the declaration says which second query returns the number. Refused rather than guessed |
 | `generative`, `compute`, `extract`, `aggregate` | **no** | there are no source rows to count: the records are produced here, so counting them means producing them |
-| `tabular`, `files`, `jar`, `source`, `feed`, `vector`, `keyword`, `elasticsearch`, `publisher`, … | **no** | the unit of cost is the whole download or the whole retrieval, which has to happen before anything can be counted |
+| `elasticsearch` | **no** — but its own `aggregate:` mode makes the cluster count (§5.16) | a relevance retrieval is the k best, so a count of its records is not a count of the matches. `aggregate:` is the cluster's: grouped counts and per-group metrics over every document a key matches, records = buckets, in one search |
+| `tabular`, `files`, `jar`, `source`, `feed`, `vector`, `keyword`, `publisher`, … | **no** | the unit of cost is the whole download or the whole retrieval, which has to happen before anything can be counted |
 
 A `sql` producer's declaration is lighter, because the engine writes the statement: `measure` — and
 `of`, the column, for `sum`/`min`/`max` — is the whole of it.
