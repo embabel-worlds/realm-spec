@@ -4750,7 +4750,12 @@ not the TOP N the scan would read. The engine asks for it only when EVERY predic
 node is one the source applies EXACTLY: a predicate left to the graph, or one the source answers as a
 superset keeps the rows read and capped, and the capped read says so. A count is never a superset:
 its bounds are sent as written, and a `pushdown:` rule on text is a claim that the column compares
-with case — a learned scaffold declares none on an engine that compares text without case. A filter on a masked or secret-looking column is never pushed, so a count
+with case and without padding — a learned scaffold declares none on an engine or a column type that
+compares text without case, nor on a padded `CHAR`. A literal compares as the graph compares it:
+`x.score = '7'` counts no row whose score is the number 7. Two counts under different filters that
+share one producer call are not pushed, since the call sends only the filters they share. One edge is
+not exact: the source compares instants, while the graph orders two spellings of one moment by offset,
+so a row stored at exactly a bound's instant in another offset can differ by one from a record read. A filter on a masked or secret-looking column is never pushed, so a count
 cannot report what a mask withholds. Grouping the count by a column of the counted rows
 (`RETURN x.at.month, count(x)`) is not pushed either: ask one count per period.
 
