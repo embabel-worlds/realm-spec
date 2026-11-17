@@ -4752,7 +4752,11 @@ superset keeps the rows read and capped, and the capped read says so. A count is
 its bounds are sent as written, and a `pushdown:` rule on text is a claim that the column compares
 with case and without padding — a learned scaffold declares none on an engine or a column type that
 compares text without case, nor on a padded `CHAR`. A literal compares as the graph compares it:
-`x.score = '7'` counts no row whose score is the number 7. Two counts under different filters that
+`x.score = '7'` counts no row whose score is the number 7, and an `IN` list mixing a number and text
+(`x.score IN [7,'8']`) is not pushed. Nor is a count whose filtered property is read again, by another
+condition (`x.name IN ['A','B'] AND x.name <> 'A'`) or by a measure (`min(x.at)` under a range on `at`).
+A range written `datetime('…')` / `date('…')` is pushed only to a source that returns the property as a
+native temporal, never to one that returns dates as text. Two counts under different filters that
 share one producer call are not pushed, since the call sends only the filters they share. One edge is
 not exact: the source compares instants, while the graph orders two spellings of one moment by offset,
 so a row stored at exactly a bound's instant in another offset can differ by one from a record read. A filter on a masked or secret-looking column is never pushed, so a count
