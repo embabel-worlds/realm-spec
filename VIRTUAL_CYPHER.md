@@ -507,6 +507,7 @@ absence.
 | `cypher` | a **remote openCypher graph** (Neo4j, Memgraph, Neptune — any engine speaking Bolt or openCypher-over-HTTP) queried with an authored read query; structurally read-only, governed by the shared `governance:` grammar (§5.15) | the anchor key batch, bound to `$keys`; rows echo it via the query's own RETURN |
 | `jar` | a **Java jar's classes**, read from the jar when a query reaches it — packages, types, fields, methods, field accesses and calls, with source lines; nothing ingested or stored (§5.18) | a jar path, or `<jar path>!<value>` for a property the producer selects `by` |
 | `source-tree` | a **project's source in fourteen languages**, parsed when a query reaches it — files, declarations with their annotations, imports, name-matched calls and the type names each file uses, in the standard model's code columns, and any syntax a realm's own query captures (§5.21) | a project's location: an https git URL (`@ref` optional) or a folder |
+| `git` | a **git repository's history**, read from a clone when a query reaches it — its commits, the files one commit changed, and who last changed each line of a file; nothing ingested or stored (§5.22) | a project's location (as `source-tree` takes it), `<project>!<commit>` or `<project>!<path>` |
 | `stacktrace` | the **Java stack trace in a piece of text** — its throwables and frames, each frame naming the jar that compiled its class with that jar's keys (§5.20) | the text: a pasted trace, or a log event's `content` |
 | `files` | the world's **local files**, walked live under `data/` roots — one row per file, per line (`unit: line`) or per log event (`unit: event`, §5.20.1) | the owner key; free-text terms with `emit: search` |
 | `elasticsearch` (alias `elastic`) | an **Elasticsearch index or alias** retrieved by relevance — lexical, semantic, or the two fused cluster-side in one search — with index / document id / score / mode on the edge, so every hit is citable — or, with `retrieval.mode: scan`, read WHOLE for a `sources.yml` mirror (§5.16) | nothing — *relevance is the join* (§6); the anchor's text is the query |
@@ -2480,7 +2481,10 @@ RETURN f.name, a.method, a.access, a.lines
   - a compiler other than javac (kotlinc, scalac, a bytecode weaver) makes different choices, and
     Kotlin's inlined functions report line numbers past the end of the file, which stretch
     `lastLine` and `lineSpan`.
-- **A key names a jar, a war, or a folder of classes.** A key ending `.jar` is a jar. A key ending
+- **A key names a jar, a war, or a folder of classes.** A key ending `.jar` is a jar. A Spring Boot
+  executable jar is read as the application it ships: what its `BOOT-INF/classes` holds, and not the
+  launcher at its root (`org.springframework.boot.loader`) nor its `BOOT-INF/lib`, which `warLibs`
+  names jars from as it does for a war; its rows still say `packaging: jar`. A key ending
   `.war` is a web application's own code — what its `WEB-INF/classes` holds, the classes and the
   resources beside them — and not its `WEB-INF/lib`, which is other people's: `warLibs` names the
   library jars to read with it, by file name glob (`warLibs: [acme-*.jar]`); a library's class never
@@ -2865,6 +2869,51 @@ Cost: the first query of a git project pays for a shallow, blob-less fetch of th
 fetch of the language files' contents; each file is parsed once, the first time an emit needs it, and
 kept with the commit. A folder is listed and its files parsed again on each fetch. A repository of a
 few hundred files is read, from a cold git cache, in about ten seconds.
+
+### 5.22 `git` — a repository's history as a keyed source
+
+A `git` producer reads a repository's history from a clone, when a query reaches it: no forge's API
+is called, so it reads any host and a repository that exists only on disk. It is the join from a
+line of code to the change that put it there.
+
+```yaml
+- { name: gitCommits, kind: git, emit: commits }   # key: a project
+- { name: gitChanges, kind: git, emit: changes }   # key: <project>!<commit>
+- { name: gitBlame,   kind: git, emit: blame }     # key: <project>!<path>
+```
+
+- **Keys start with a project**, as `source-tree` names one (§5.21): an https repository URL,
+  optionally `@` a commit, tag or branch (the default branch without one), or a folder under the
+  world's `data/`, a trusted root or the workspace. A folder is a repository when it holds a `.git`
+  DIRECTORY of its own, and is read at its `HEAD`. The project and what is asked of it split at the
+  LAST `!`.
+- **`emit: commits`** — the commits behind the one the project is read at, newest first. Each row:
+  `id` and `commitKey` (`<repository>@<sha>`), `sha`, `shortSha`, `repository`, `subject`, `message`,
+  `authorName`, `authorEmail`, `authoredAt`, `committerName`, `committerEmail`, `committedAt`,
+  `coAuthors` (the message's `Co-authored-by:` trailers), `parents`, `isMerge`, `boundary`, `link`;
+  and what the commit touched, by name: `filesChanged`, `paths` (the first hundred) and `extensions`
+  (each file name's extension in lower case, or the whole name where it has none; most files first).
+- **`emit: changes`** — each file one commit changed against its first parent: `id`
+  (`<commitKey>!<path>`), `path`, `fileName`, `extension`, `oldPath` (a rename or copy), `status`
+  (`add`, `modify`, `delete`, `rename`, `copy`), `linesAdded`, `linesDeleted` and `changedLines`, the
+  ranges the commit wrote in the file as it left it (`"12-14"`).
+- **`emit: blame`** — one file at the commit the project is read at, as the longest runs of
+  consecutive lines one commit last changed: `startLine`, `endLine`, `lines`, `path`, `sourcePath`
+  (the file's name when that commit wrote them), `atSha`, and that commit's own columns.
+- **`repository` is `host/owner/name` for a clone**, so `commitKey` is `github.com/acme/shop@<sha>`:
+  the key a forge realm gives the same commit, which is how a row here reaches its pull request.
+- **History is fetched `maxCommits` deep** (default 2000) behind the commit read, once, into the
+  clone the `source-tree` and `maven` kinds use. `sinceDays` (default 365; 0 for no bound) narrows
+  what `commits` returns, not what is fetched, so blame and changes read all of it.
+- **The edge of the history is said.** A commit at the edge of what was fetched has parents that are
+  not there. Its rows carry `boundary: true`: a blame range on it means that commit or an older
+  one, and `changes` refuses it rather than report the whole tree as added.
+- **What a path MEANS is a realm's rule.** The producer gives names; whether a file is source, a
+  test or documentation, and whether a co-author is a coding agent, are `compute:` expressions in
+  the realm, so every realm over the same vocabulary decides them alike.
+- **A private repository** is read with the host's token the operator configured (the reference
+  host: its GitHub token, sent to `github.com` alone). Without one it is refused, as a repository
+  that cannot be fetched always is: with a `PRODUCER_ERROR` naming the key, never as no history.
 
 ## 6. Vector edges — semantic joins in depth
 
