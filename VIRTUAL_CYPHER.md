@@ -4754,7 +4754,11 @@ with case and without padding — a learned scaffold declares none on an engine 
 compares text without case, nor on a padded `CHAR`. A literal compares as the graph compares it:
 `x.score = '7'` counts no row whose score is the number 7, and an `IN` list mixing a number and text
 (`x.score IN [7,'8']`) is not pushed. Nor is a count whose filtered property is read again, by another
-condition (`x.name IN ['A','B'] AND x.name <> 'A'`) or by a measure (`min(x.at)` under a range on `at`).
+condition (`x.name IN ['A','B'] AND x.name <> 'A'`) or by a measure (`min(x.at)` under a range on `at`),
+unless an equality on that property fixes every row's value (`x.score = 7` with `min(x.score)`); a
+`sum` over a filtered property is never pushed. An OR of equalities on one property
+(`x.name = 'A' OR x.name = 'B'`) pushes as the `IN` it spells. A count filtered on the counted node's
+identity is not pushed.
 A range written `datetime('…')` / `date('…')` is pushed only to a source that returns the property as a
 native temporal, never to one that returns dates as text. Two counts under different filters that
 share one producer call are not pushed, since the call sends only the filters they share. One edge is
