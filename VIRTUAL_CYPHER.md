@@ -4762,7 +4762,26 @@ a case-folded `toLower(x.name) = 'a'` fixes none); a
 written in. A count filtered on the counted node's identity, or on its join's `recordKeyField`, is not
 pushed, and EXPLAIN says so.
 A range written `datetime('…')` / `date('…')` is pushed only to a source that returns the property as a
-native temporal, never to one that returns dates as text. Two counts under different filters that
+native temporal, never to one that returns dates as text. A bound written as TEXT compares as the
+value it spells only on a variable the planner resolves to ONE binding — one join, from every
+relationship that reaches it, no other join of the statement fetching its label, no join bringing that
+label as a child — whose producer is a `sql` table read (no procedure) declaring a `date` / `dateTime`
+rule for the column, and only where that column reaches the node unchanged under that graph property:
+not computed, masked, rewritten by dialect or stamped as a key, not the type's identity, the join's key
+or a property the engine itself writes on the node (`dateRetrieved`), and named as the graph stores it
+(a `userId` column is `_sourceUserId`). There, operator and side unchanged, `x.on >= '2026-08-01'` on a
+`DATE` column returns, pushes and counts exactly as `x.on >= date('2026-08-01')`, and `x.at >=
+'2026-08-01'` on a `TIMESTAMP WITH TIME ZONE` column returns and pushes exactly as `x.at >=
+datetime('2026-08-01')` — but is never counted at the source: at a row stored at the bound's instant in
+another offset the two orders differ, so the records are read and a filled cap reports a prefix, not a
+number. A `DATE` column takes a calendar date; a `TIMESTAMP WITH TIME ZONE` column an instant with an
+offset or a calendar date (midnight UTC); only text the graph's own `date()` / `datetime()` reads as
+written counts. Only `=`, `<`, `<=`, `>`, `>=` as a top-level `AND` conjunct of a clause `WHERE` are
+read this way. Everything else keeps comparing as text, which a native temporal never equals: any
+other variable, label or source; a bound under `<>`, `OR`, `NOT` or `CASE`, or projected; a statement
+with `WITH`, `UNWIND`, `CALL`, `UNION`, or anywhere in it a subquery, a pattern used as a value, or a
+label or relationship type computed at run time (`$(…)`); and one the caller wrote with a back-ticked
+name or a `;`. Two counts under different filters that
 share one producer call are not pushed, since the call sends only the filters they share. One edge is
 not exact: the source compares instants, while the graph orders two spellings of one moment by offset,
 so a row stored at exactly a bound's instant in another offset can differ by one from a record read. A filter on a masked or secret-looking column is never pushed, so a count
