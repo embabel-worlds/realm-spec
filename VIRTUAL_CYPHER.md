@@ -4762,7 +4762,14 @@ a case-folded `toLower(x.name) = 'a'` fixes none); a
 written in. A count filtered on the counted node's identity, or on its join's `recordKeyField`, is not
 pushed, and EXPLAIN says so.
 A range written `datetime('…')` / `date('…')` is pushed only to a source that returns the property as a
-native temporal, never to one that returns dates as text. Two counts under different filters that
+native temporal, never to one that returns dates as text. On a `sql` table's `DATE` or
+`TIMESTAMP WITH TIME ZONE` column — one a producer of that table declares a `date` / `dateTime` rule for,
+and a label no other kind of producer, procedure or second table serves — a bound written as text
+(`x.at >= '2026-08-01'`) compares as the date or instant it spells, in the graph and at the source alike:
+it returns, pushes and counts exactly as `x.at >= datetime('2026-08-01')` does, operator unchanged.
+Text that does not read as that type (an instant needs an offset), a bound under `OR`, `NOT` or `CASE`,
+and a statement with `WITH`, `UNWIND`, `CALL` or `UNION` keep comparing as text, which a native temporal
+never equals. Two counts under different filters that
 share one producer call are not pushed, since the call sends only the filters they share. One edge is
 not exact: the source compares instants, while the graph orders two spellings of one moment by offset,
 so a row stored at exactly a bound's instant in another offset can differ by one from a record read. A filter on a masked or secret-looking column is never pushed, so a count
