@@ -1122,8 +1122,21 @@ and no wider:
 - if any is the caller's own — or two disagree — the result is the caller's own.
 
 A summary of summaries inherits through the summaries beneath it, so one private input anywhere
-below keeps everything above it private. Which labels are shared, and how widely, is the host's
-declaration, not a realm's: fetched rows are the caller's own unless the host says otherwise.
+below keeps everything above it private.
+
+Which labels are shared is never a realm's to say: fetched rows are the caller's own unless the
+platform or the world's owner says otherwise. The owner says it in `config/world.yml`, by naming
+realms whose sources answer every member alike:
+
+```yaml
+# config/world.yml — human-only: no tool, realm or API write can change it
+sharedRealms: [realm-polyglot-code, realm-git]
+```
+
+Every label those realms declare, and those types' parents, is then shared at that world and no
+wider. A record fetched into one is cached once for the world, and a stored result made only of
+such records is stored once. Name a realm here only when its sources are read with the world's own
+credentials; one read with each member's would serve a member's rows to the next.
 
 ```yaml
 cache: { kind: graph }                  # inherited (the default)
@@ -1131,9 +1144,9 @@ cache: { kind: graph, shared: true }    # one for the world, on the realm's word
 cache: { kind: graph, shared: false }   # the caller's own, whatever it read
 ```
 
-`shared: true` is for sources that answer every member of a world alike but are not declared
-shared — a team's repository read with the world's own credentials. It is the realm's promise. A
-wrong one hands one member a summary of what only another may read, because a shared result is
+`shared: true` stores one result for the world whatever it read, without the owner having named
+the realm. It is the realm's promise, and `sharedRealms` is the better place to make it. A
+wrong promise hands one member a summary of what only another may read, because a shared result is
 made from what the *first* asker could reach. `shared: false` keeps a result private over shared
 inputs. A stored-neighborhood collect (`via` / `targetLabel`) reads the caller's own nodes and is
 the caller's own unless it says `shared: true`.
