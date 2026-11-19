@@ -240,7 +240,7 @@ tags:
 | `capabilities` | No | Captured realms only. What the realm asks the owner to grant at admission beyond its handlers and resources. The one value is `model`, which asks for [the model call](HOSTED_EXECUTION.md#the-model-call). The owner may grant none of them. |
 | `optionalLabels` | No | Labels this realm's views read but do not need: each owned by a companion realm that may be absent, and read only under `OPTIONAL MATCH`. See [Optional labels](#optional-labels--reading-a-companion-realm-that-may-be-absent). |
 | `vocabulary` | No | A file the realm ships, relative to the realm root, listing the things it holds one per line, so a host can route a question that names one of them to this realm. See [Vocabulary](#vocabulary). |
-| `requires` | No | Realms this realm needs, each with a version requirement: `crm-core: "[2.0.0,3.0.0)"`. Proposed. See [Realm requirements](REALM_REQUIREMENTS.md). |
+| `requires` | No | Realms this realm needs: a map of realm name to a version range in Maven notation, such as `crm-core: "[2.0.0,3.0.0)"`, or a bare version that is only recommended. Keys follow the realm name rule (kebab-case, at most 64 characters). Versions are ordered by Semantic Versioning, and a realm's published versions are its `v<version>` Git tags. A host that does not know the field ignores it with an unknown-field note. Proposed. See [Realm requirements](REALM_REQUIREMENTS.md). |
 
 ### Icons
 
