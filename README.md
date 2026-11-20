@@ -1815,7 +1815,7 @@ held before anything is fetched or embedded:
 |---|---|
 | `document.sourceModifiedAt` declared | the rendered value |
 | rendered text, none declared | a hash of the rendered content — an unchanged record is never re-embedded |
-| a page, none declared | the `Last-Modified` it is served with; a page that states none is re-read on every run |
+| a page, none declared | the `Last-Modified` it is served with, when that says when the page changed. A page that states none, or one whose host writes the moment it answered into it (within five minutes of the answer's own `Date`), is held by a hash of its bytes: it is read on every run to tell whether it changed, and is not ingested again while they are the same |
 
 **Triggers.** `on-install` runs a source when the world has never completed it, when its declaration
 has changed since, or when its last run did not complete — after the realm's `reference/` data is
