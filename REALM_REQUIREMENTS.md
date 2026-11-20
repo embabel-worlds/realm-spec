@@ -44,27 +44,17 @@ handlers or grants. [Graph composition](LABELS_AND_COMPOSITION.md) and gateway c
 it. Each value is a version requirement.
 
 ```typescript
-import { defineRealm } from "@embabel/realm-types";
+import type { Realm } from '@embabel/realm-types'
 
-export default defineRealm({
-  name: "sales-pipeline",
-  version: "1.4.0",
+export default {
+  name: 'sales-pipeline',
+  version: '1.4.0',
   requires: {
-    "crm-core": "[2.0.0,3.0.0)", // any 2.x
-    calendar: "[1.3.0,)",        // 1.3.0 or newer
-    "currency-rates": "0.9.2",   // recommended, any version accepted
+    'crm-core': '[2.0.0,3.0.0)', // any 2.x
+    calendar: '[1.3.0,)',        // 1.3.0 or newer
+    'currency-rates': '0.9.2',   // recommended, any version accepted
   },
-});
-```
-
-```yaml
-# realm.yml
-name: sales-pipeline
-version: "1.4.0"
-requires:
-  crm-core: "[2.0.0,3.0.0)"
-  calendar: "[1.3.0,)"
-  currency-rates: "0.9.2"
+} satisfies Realm
 ```
 
 A realm with no `requires` behaves exactly as it did before this document.
@@ -741,7 +731,7 @@ and tells the owner which.
 - If part of a removed realm's folder cannot be deleted, whether during the removal or while
   finishing an interrupted one, the removal is not finished. The realm is out of the realm list and
   the lock, and nothing left in its folder loads, runs or is offered (no command, artifact type or
-  personality), even if its `realm.yml` survived. A removal
+  personality), even if the realm definition survived. A removal
   the owner asked for is answered as failed, and the world carries a warning such as
   `Removing crm-core is not finished: realm folder crm-core could not be deleted completely.` The
   deletion is tried again at each load. Any realm change asked for meanwhile is refused and nothing
