@@ -306,8 +306,13 @@ and the change asked for: an install, an update or a removal.
 - **All or nothing.** If a step fails, the steps before it are undone and the world is as it was (see
   [Changes are all or nothing](#changes-are-all-or-nothing)).
 
-A realm installed from a local directory is planned the same way: its requirements are resolved, the
-owner confirms the realms it brings in, and it counts at the version it declares.
+A realm installed from a local directory is planned at the version and with the requirements it
+declares. Switching an installed realm to a local checkout is an update. The owner confirms any
+other realms the switch would install, update or hold back. The confirmation covers the checkout
+contents read by the plan. If they change before the host loads the checkout, the host refuses
+the change with `REALM_REQUIREMENTS_UNMET`, undoes any dependency steps and asks the owner to
+request a fresh plan. If those contents change between showing the plan and confirming it, the
+host returns the new plan for confirmation.
 
 With no ref given, the realm asked for is planned and installed at the branch the repository's HEAD
 names. A commit ref that the repository will not serve by id is refused with a sentence that asks for
@@ -719,8 +724,10 @@ and tells the owner which.
   interrupted change is put back as it was. The world carries a warning saying which, such as
   `Removing crm-core was interrupted, so the removal was finished when the world loaded.` or
   `A change to this world's realms was interrupted before it finished, so the realm list and the lock were put back as they were before it.`
-- A finished removal leaves nothing of the removed realm able to run, and takes it out of the lock,
-  including a realm that was installed but did not load. Every other lock entry is as it was.
+- A finished removal withdraws the removed realm's approval and takes it out of the lock, including
+  when its source could not be loaded. The removed realm can no longer run from a stored copy.
+  If approval withdrawal fails, the host keeps the removal journal and retries withdrawal on load.
+  Other realms keep their approvals. Their lock entries follow the matching rules in [The lock](#the-lock).
 - Publishing a draft over an installed realm of the same name leaves either the installed realm as
   it was or the draft wholly in its place, never neither and never a mix of the two. If the host stops
   before the draft is in place, the next load puts the installed realm back and the draft is still
