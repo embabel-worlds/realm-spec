@@ -515,8 +515,10 @@ absence.
 All producers honour the **batch contract** (all keys at once, never N+1) and an orthogonal
 `cache:` policy: `none` (alias `fresh`, the default — read live every query), `ttl` (a window in
 seconds, with an opt-in `negativeTtlSeconds` for misses), `immutable` (reference data, held until
-the process is restarted or maintenance clears it), and `graph` for aggregates and extraction
-(§5.5/§5.6, where the committed graph itself is the cache tier). WHO a kept record is kept for — the
+the process is restarted or maintenance clears it), and `graph`, where the graph itself is the cache
+tier: for any producer, the nodes its records were materialized as are KEPT in the persistent store
+and answer later queries without a fetch, across restarts (§5.13.1); for aggregates and extraction,
+the committed result node is (§5.5/§5.6). WHO a kept record is kept for — the
 principal, the deployment, or the deployment's organisation, according to the label the fetch targets
 — is §15.4, and it is what decides whether a second asker pays.
 
@@ -1754,6 +1756,99 @@ a `freshness` array alongside `rows` and `warnings`: one entry per source read,
 two (a live anchor layer joined to TTL-served enrichment); each layer reports its own observation.
 Failed reads never appear in `freshness` — they are reported in `warnings`. Purely graph-resident
 answers omit the block.
+
+### 5.13.1 Kept records — `cache: {kind: graph}` on any producer
+
+A fetched record becomes a node for the length of the statement that asked for it, and is then
+removed (§2). Under `cache: {kind: graph}` it is **kept** instead: the node the engine materialized
+stays in the persistent store, and a later statement that reaches the same producer for the same key
+reads that node rather than the source. Nothing else is the cache. A host may hold records in memory
+to answer faster, but memory is never the only place a valid kept record lives, so a restart, an
+upgrade or memory pressure loses nothing that was valid.
+
+```yaml
+# a repository read at a commit never changes: read it once per commit
+- { name: projectDeclarations, kind: source-tree, emit: declarations,
+    cache: { kind: graph, validFor: revision } }
+
+# no revision to ask for: keep for a day
+- { name: registerEntries, kind: remote, api: register, operation: listEntries,
+    cache: { kind: graph, seconds: 86400 } }
+```
+
+**It is the producer's declaration, and the whole of it is honoured.** What a producer says is kept
+is kept: every record of every read, however many. There is no size past which the engine quietly
+stops keeping, because a cache that keeps small reads and re-buys large ones re-buys exactly the
+reads that cost most. A deployment that cannot hold what its realms declare has a capacity problem
+to see (the store's size is reported per producer in `realm_status`), not a silent miss.
+
+**What makes a kept record still valid.** One of two things, declared with the kind:
+
+- `validFor: revision` — the record is valid for as long as the SOURCE says it has not changed. The
+  producer reports a **revision** for a key cheaply, without reading the data: the commit a
+  repository location resolves to, a digest of a folder's files, a digest of a build's POMs, an
+  `ETag`. Before answering from kept nodes the engine asks for the key's revision and compares it
+  with the one the nodes were kept at. Equal: the kept nodes answer, and no data is read. Different:
+  the source is read, the new records are kept at the new revision, and the old revision's are
+  pruned (below). A producer kind that cannot report a revision may not declare `validFor: revision`;
+  the realm is refused when it loads, naming the producer and saying so.
+- `seconds: N` — the record is valid for `N` seconds from when it was read, as under `ttl`
+  (`negativeTtlSeconds` applies as it does there). Past it the next query reads the source, and what
+  it reads replaces what was kept.
+
+Neither declared, a kept record is valid until the producer's definition changes or it is cleared
+explicitly — `immutable`, but in the store.
+
+A kept record is also invalid, whatever was declared, when **the producer's definition has changed**
+(its declaration, or the engine's version of the producer kind, either of which can change what a
+record holds): the definition is part of what a kept read is filed under, exactly as it is part of a
+`ttl` entry's key (§5.13), so an upgrade never answers from records an older engine shaped.
+
+**What is kept is a READ, and only a complete one.** The unit is what §5.13 already keys a cached
+fetch on: the producer and its definition, the caller scope (§15.4), the anchor key, and what the
+fetch asked the source for (the filter its `pushdown:` rules absorbed, the pushed `LIMIT`). A read is
+kept when every record of it has been materialized and the read reported no failure; until then its
+nodes are ordinary statement-scoped nodes and are removed with the statement, so a read that was
+cancelled, capped, refused or failed part-way is never answered from. "Never cache a failure" (§8.5)
+holds unchanged. A narrower question over the same key is answered from a kept wider read where
+§5.13 allows it; the engine reads the kept nodes with the narrower filter and does not load the
+wider read to do so.
+
+**A kept node is seen exactly as it was seen when it was not kept.** Keeping changes how long a node
+lives and nothing about who or what can see it:
+
+- It carries the scope stamps it was materialized with, and is readable only by a caller who could
+  have fetched it — the same owner, world and grant rules, unchanged (§2, §15.4).
+- It is visible only to a statement that REACHES it: one whose pattern traverses the producer's edge
+  to it for a key the read was kept for. A statement that does not — `MATCH (n)`, a label scan of the
+  target label from nowhere, a count of the graph, a schema snapshot, an export, another realm's
+  query over the same label — sees it exactly as often as it saw the unkept node: never. A kept node
+  is not stored data and is not found as stored data; it is a fetched record that did not have to be
+  fetched again.
+- It has no relationships or properties a statement-scoped node would not have had, and a statement
+  cannot tell from its rows whether a node was kept or freshly fetched. The envelope can: `freshness`
+  (§5.13) reports the producer as `kept`, observed when the read happened, at the revision it was
+  kept at, and the statement bills no call for it.
+- `{ai: {fresh: true}}` on the edge reads the source now, and what it reads replaces what was kept.
+
+**Old revisions are pruned.** When a read is kept at a new revision, the nodes kept for the same
+read at any other revision are removed in the same step — a node two revisions share (the same
+record, unchanged) stays, re-filed under the new one. So the store holds one revision per kept read:
+the latest that was asked for. Reads of an explicit, different revision are different keys
+(`…/repo@v1` and `…/repo@v2` are both kept, each for as long as it is asked for); a key not asked
+for within the deployment's retention window (30 days unless the deployment says otherwise) is
+pruned with all its nodes. A `seconds:` read past its window is pruned when it is next asked for or
+by the same sweep. Pruning never removes a node a running statement is reading.
+
+**Concurrent askers share one read**, as §5.13 says of `ttl` and `immutable`: the first reads and
+keeps, the others are served the kept nodes when it finishes, and a failed read is shared with
+nobody.
+
+**What this replaces.** Under `kind: graph` a producer no longer needs `ttl` to avoid re-reading,
+and `immutable`'s "until the process is restarted" no longer applies to it. `ttl` and `immutable`
+keep their meaning for a realm that wants an answer held in memory and is content to lose it. For an
+`aggregate` or `extract` producer `kind: graph` means what §5.5 and §5.6 say, unchanged: there the
+kept thing is the committed RESULT node, valid while its inputs' hash matches.
 
 ### 5.14 `sparql` — a SPARQL endpoint as a keyed source
 
