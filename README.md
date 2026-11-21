@@ -36,6 +36,12 @@ realm's views and DERIVE rules that reach it, compiled to one ordinary query tha
 runs and pinned once saved. A view becomes a step by making a named, described fact; a view may declare
 its `goal:` instead of its `cypher:`.
 
+**Starting work on an agent from a realm?** [Agent sessions](AGENT_SESSIONS.md) (proposed, no host
+implements it yet) lets a handler start a session on a local agent tool or the host's own agent for
+one of its items, open the host's session view from a page, and hear when the session ends. The
+realm holds a session id and its own `ref`; the transcript, the sign-in, the folder and every
+consent stay with the host.
+
 ---
 
 ## Repository convention
