@@ -1,0 +1,839 @@
+{
+  "description": "Conformance cases for realm requirements, from REALM_REQUIREMENTS.md. Hosts and SDKs copy this file and test that their copy is byte-equal. A refused case must be refused; its reason says why and need not be reported with the same word.",
+  "specVersion": "0.2.0",
+  "limits": {
+    "requirementChars": 256,
+    "sets": 16,
+    "versionChars": 64,
+    "numberDigits": 9,
+    "nameChars": 64
+  },
+  "reasons": {
+    "grammar": "not the requirement or version grammar",
+    "npm-notation": "an npm form, answered with the bracket form in suggestion",
+    "empty": "a set that accepts no version",
+    "too-long": "longer than the text limit",
+    "too-many-sets": "more than 16 sets",
+    "leading-zero": "a number with a leading zero",
+    "number-too-long": "a number of more than 9 digits",
+    "version-too-long": "a bound longer than 64 characters once its missing numbers are written as zeros"
+  },
+  "ranges": {
+    "accepted": [
+      {
+        "text": "2.4.0",
+        "note": "A bare version is soft: it recommends 2.4.0 and accepts any version.",
+        "soft": true,
+        "recommends": "2.4.0"
+      },
+      {
+        "text": "2.0.0-rc.1",
+        "note": "A soft requirement may recommend a pre-release.",
+        "soft": true,
+        "recommends": "2.0.0-rc.1"
+      },
+      {
+        "text": "[2.4.0]",
+        "note": "Exactly one version.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "2.4.0",
+            "lowerInclusive": true,
+            "upper": "2.4.0",
+            "upperInclusive": true
+          }
+        ]
+      },
+      {
+        "text": "[2.0.0,3.0.0)",
+        "note": "Inclusive lower, exclusive upper.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "2.0.0",
+            "lowerInclusive": true,
+            "upper": "3.0.0",
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "[2.0.0,3.0.0]",
+        "note": "Both ends inclusive.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "2.0.0",
+            "lowerInclusive": true,
+            "upper": "3.0.0",
+            "upperInclusive": true
+          }
+        ]
+      },
+      {
+        "text": "(2.0.0,3.0.0)",
+        "note": "Both ends exclusive.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "2.0.0",
+            "lowerInclusive": false,
+            "upper": "3.0.0",
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "[1.3.0,)",
+        "note": "No upper bound.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "1.3.0",
+            "lowerInclusive": true,
+            "upper": null,
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "(,2.0.0)",
+        "note": "No lower bound.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": null,
+            "lowerInclusive": false,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "(,2.0.0]",
+        "note": "No lower bound, inclusive upper.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": null,
+            "lowerInclusive": false,
+            "upper": "2.0.0",
+            "upperInclusive": true
+          }
+        ]
+      },
+      {
+        "text": "[2,3)",
+        "note": "Short bounds are completed with zeros.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "2.0.0",
+            "lowerInclusive": true,
+            "upper": "3.0.0",
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "[2.1,2.2)",
+        "note": "A two-number bound.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "2.1.0",
+            "lowerInclusive": true,
+            "upper": "2.2.0",
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "(,1.0.0],[1.2.0,)",
+        "note": "A union of two sets.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": null,
+            "lowerInclusive": false,
+            "upper": "1.0.0",
+            "upperInclusive": true
+          },
+          {
+            "lower": "1.2.0",
+            "lowerInclusive": true,
+            "upper": null,
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "[3.0.0-rc.1,4.0.0)",
+        "note": "A pre-release lower bound.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "3.0.0-rc.1",
+            "lowerInclusive": true,
+            "upper": "4.0.0",
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "(,3.0.0-rc.2)",
+        "note": "An exclusive pre-release upper bound keeps earlier pre-releases of it.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": null,
+            "lowerInclusive": false,
+            "upper": "3.0.0-rc.2",
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "(1.0.0,1.1.0)",
+        "note": "Exclusive both ends with room between: 1.0.1 fits.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": false,
+            "upper": "1.1.0",
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "(1.0.0,1.0.1]",
+        "note": "Neighbouring releases with an inclusive upper bound accept 1.0.1.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": false,
+            "upper": "1.0.1",
+            "upperInclusive": true
+          }
+        ]
+      },
+      {
+        "text": "[0.0.0,)",
+        "note": "Zero is a number.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "0.0.0",
+            "lowerInclusive": true,
+            "upper": null,
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "[999999999.0.0,)",
+        "note": "A number of nine digits.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "999999999.0.0",
+            "lowerInclusive": true,
+            "upper": null,
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0)",
+        "note": "Sixteen sets, the most allowed.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,3.0.0)",
+        "note": "A requirement of 256 characters, the longest allowed.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0",
+            "lowerInclusive": true,
+            "upper": "2.0.0",
+            "upperInclusive": false
+          },
+          {
+            "lower": "1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "lowerInclusive": true,
+            "upper": "3.0.0",
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "(1.0.999999999,1.1.0]",
+        "note": "A patch at the nine-digit limit has no next patch, so the first version after it is 1.1.0-0.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "1.0.999999999",
+            "lowerInclusive": false,
+            "upper": "1.1.0",
+            "upperInclusive": true
+          }
+        ]
+      },
+      {
+        "text": "[999999999.999999999.999999999,)",
+        "note": "The newest release there is may itself be the low bound.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "999999999.999999999.999999999",
+            "lowerInclusive": true,
+            "upper": null,
+            "upperInclusive": false
+          }
+        ]
+      },
+      {
+        "text": "(1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab]",
+        "note": "Both bounds are 64 characters: the first version after the low bound that fits in 64 characters is the high bound itself.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            "lowerInclusive": false,
+            "upper": "1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab",
+            "upperInclusive": true
+          }
+        ]
+      },
+      {
+        "text": "(1.0.0-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz,1.0.0]",
+        "note": "No pre-release of 1.0.0 after the low bound fits in 64 characters, so the first version after it is 1.0.0.",
+        "soft": false,
+        "sets": [
+          {
+            "lower": "1.0.0-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz",
+            "lowerInclusive": false,
+            "upper": "1.0.0",
+            "upperInclusive": true
+          }
+        ]
+      }
+    ],
+    "refused": [
+      {
+        "text": "^2.0.0",
+        "reason": "npm-notation",
+        "suggestion": "[2.0.0,3.0.0)"
+      },
+      {
+        "text": "^0.2.3",
+        "reason": "npm-notation",
+        "suggestion": "[0.2.3,0.3.0)"
+      },
+      {
+        "text": "~2.4.0",
+        "reason": "npm-notation",
+        "suggestion": "[2.4.0,2.5.0)"
+      },
+      {
+        "text": "2.x",
+        "reason": "npm-notation",
+        "suggestion": "[2.0.0,3.0.0)"
+      },
+      {
+        "text": ">=1.3.0",
+        "reason": "npm-notation",
+        "suggestion": "[1.3.0,)"
+      },
+      {
+        "text": ">1",
+        "reason": "npm-notation",
+        "suggestion": "[2.0.0,)"
+      },
+      {
+        "text": "<=2",
+        "reason": "npm-notation",
+        "suggestion": "(,3.0.0)"
+      },
+      {
+        "text": "latest",
+        "reason": "grammar"
+      },
+      {
+        "text": "*",
+        "reason": "grammar"
+      },
+      {
+        "text": "",
+        "reason": "grammar"
+      },
+      {
+        "text": "[2.0.0, 3.0.0)",
+        "reason": "grammar"
+      },
+      {
+        "text": " 2.4.0",
+        "reason": "grammar"
+      },
+      {
+        "text": "main",
+        "reason": "grammar"
+      },
+      {
+        "text": "https://github.com/example/realm-crm-core",
+        "reason": "grammar"
+      },
+      {
+        "text": "2.4",
+        "reason": "grammar"
+      },
+      {
+        "text": "[,]",
+        "reason": "grammar"
+      },
+      {
+        "text": "(,)",
+        "reason": "grammar"
+      },
+      {
+        "text": "[2.0.0,3.0.0",
+        "reason": "grammar"
+      },
+      {
+        "text": "[,2.0.0)",
+        "reason": "grammar"
+      },
+      {
+        "text": "[1.3.0,]",
+        "reason": "grammar"
+      },
+      {
+        "text": "(2.0.0]",
+        "reason": "grammar"
+      },
+      {
+        "text": "[2.0.0+build]",
+        "reason": "grammar"
+      },
+      {
+        "text": "[2]",
+        "reason": "grammar"
+      },
+      {
+        "text": "[2.1]",
+        "reason": "grammar"
+      },
+      {
+        "text": "[01.0.0,2.0.0)",
+        "reason": "leading-zero"
+      },
+      {
+        "text": "[3.0.0,2.0.0]",
+        "reason": "empty"
+      },
+      {
+        "text": "[2.0.0,2.0.0)",
+        "reason": "empty"
+      },
+      {
+        "text": "(2.0.0,2.0.0]",
+        "reason": "empty"
+      },
+      {
+        "text": "(1.0.0,1.0.1)",
+        "reason": "empty"
+      },
+      {
+        "text": "[3.0.0-rc.1,3.0.0)",
+        "reason": "empty"
+      },
+      {
+        "text": "(,0.0.0)",
+        "reason": "empty"
+      },
+      {
+        "text": "(,0.0.0-0)",
+        "reason": "empty"
+      },
+      {
+        "text": "(1.0.0,1.0.1-0)",
+        "reason": "empty"
+      },
+      {
+        "text": "(1.0.0-rc.1,1.0.0-rc.1.0)",
+        "reason": "empty"
+      },
+      {
+        "text": "(1.0.999999999,1.1.0-0)",
+        "reason": "empty"
+      },
+      {
+        "text": "(1.0.999999999,1.1.0)",
+        "reason": "empty"
+      },
+      {
+        "text": "(1.999999999.999999999,2.0.0-0)",
+        "reason": "empty"
+      },
+      {
+        "text": "(999999999.999999999.999999999,)",
+        "reason": "empty"
+      },
+      {
+        "text": "(1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab)",
+        "reason": "empty"
+      },
+      {
+        "text": "(1.0.0-zzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzzz,1.0.0)",
+        "reason": "empty"
+      },
+      {
+        "text": "(1-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab)",
+        "reason": "version-too-long"
+      },
+      {
+        "text": "[1.0.0,2.0.0);[3.0.0,)",
+        "reason": "grammar"
+      },
+      {
+        "text": "[1.0.0,2.0.0),",
+        "reason": "grammar"
+      },
+      {
+        "text": "[1000000000.0.0,)",
+        "reason": "number-too-long"
+      },
+      {
+        "text": "[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0)",
+        "reason": "too-many-sets"
+      },
+      {
+        "text": "[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0,2.0.0),[1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa,3.0.0)",
+        "reason": "too-long"
+      }
+    ]
+  },
+  "versions": {
+    "valid": [
+      "0.0.0",
+      "1.0.0",
+      "2.4.1",
+      "10.20.30",
+      "999999999.999999999.999999999",
+      "1.0.0-alpha",
+      "1.0.0-alpha.1",
+      "1.0.0-0.3.7",
+      "1.0.0-x.7.z.92",
+      "1.0.0-x-y-z.--",
+      "1.0.0-0a",
+      "1.0.0-123456789",
+      "1.0.0+20130313144700",
+      "1.0.0-beta+exp.sha.5114f85",
+      "1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    ],
+    "invalid": [
+      {
+        "text": "1",
+        "reason": "grammar"
+      },
+      {
+        "text": "1.2",
+        "reason": "grammar"
+      },
+      {
+        "text": "1.2.3.4",
+        "reason": "grammar"
+      },
+      {
+        "text": "v1.2.3",
+        "reason": "grammar"
+      },
+      {
+        "text": "01.0.0",
+        "reason": "leading-zero"
+      },
+      {
+        "text": "1.01.0",
+        "reason": "leading-zero"
+      },
+      {
+        "text": "1.0.00",
+        "reason": "leading-zero"
+      },
+      {
+        "text": "1.0.0-01",
+        "reason": "leading-zero"
+      },
+      {
+        "text": "1.0.0-",
+        "reason": "grammar"
+      },
+      {
+        "text": "1.0.0-rc.",
+        "reason": "grammar"
+      },
+      {
+        "text": "1.0.0-rc..1",
+        "reason": "grammar"
+      },
+      {
+        "text": "1.0.0+",
+        "reason": "grammar"
+      },
+      {
+        "text": "1.0.0-rc_1",
+        "reason": "grammar"
+      },
+      {
+        "text": " 1.0.0",
+        "reason": "grammar"
+      },
+      {
+        "text": "1.0.0 ",
+        "reason": "grammar"
+      },
+      {
+        "text": "-1.0.0",
+        "reason": "grammar"
+      },
+      {
+        "text": "1000000000.0.0",
+        "reason": "number-too-long"
+      },
+      {
+        "text": "1.0.0-1234567890",
+        "reason": "number-too-long"
+      },
+      {
+        "text": "1.0.0-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        "reason": "too-long"
+      },
+      {
+        "text": "1e3.0.0",
+        "reason": "grammar"
+      }
+    ],
+    "ordered": [
+      "0.0.0",
+      "0.0.1",
+      "0.1.0",
+      "0.9.0",
+      "0.10.0",
+      "1.0.0-0",
+      "1.0.0-2",
+      "1.0.0-10",
+      "1.0.0-1a",
+      "1.0.0-RC",
+      "1.0.0-alpha",
+      "1.0.0-alpha.1",
+      "1.0.0-alpha.beta",
+      "1.0.0-beta",
+      "1.0.0-beta.2",
+      "1.0.0-beta.11",
+      "1.0.0-rc.1",
+      "1.0.0-rc.a",
+      "1.0.0",
+      "1.0.1",
+      "1.1.0",
+      "1.9.0",
+      "1.10.0",
+      "2.0.0-rc.1",
+      "2.0.0",
+      "10.0.0",
+      "999999999.999999999.999999999"
+    ],
+    "equalPrecedence": [
+      [
+        "1.0.0+a",
+        "1.0.0+b",
+        "1.0.0"
+      ]
+    ]
+  }
+}

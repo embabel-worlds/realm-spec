@@ -258,3 +258,7 @@ define consent and digest pinning without changing local, registry or URL source
 No shared label, inherited method or imported definition grants another realm's credentials,
 handlers or module permissions. Explicit cross-realm code imports, cycles and update policy
 remain to be specified independently of shared graph labels.
+
+A realm that needs another realm's labels to be present says so with
+[`requires`](REALM_REQUIREMENTS.md). That declares presence and version only. It does not change
+how labels compose.

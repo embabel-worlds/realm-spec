@@ -186,3 +186,26 @@ or package lock does not establish host conformance.
 **Graph composition**: shared label, ancestry and method interpretation across installed
 realms. It does not import another realm's source, module bytes, credentials or grants.
 Explicit realm-source dependencies are reserved for a future consent and pinning contract.
+
+**Realm requirement**: a realm's declaration that another realm must be installed, with a
+recommended version or a hard range. It grants nothing and imports nothing. A host resolves one
+version of each required realm per world. See [Realm requirements](REALM_REQUIREMENTS.md).
+
+**Published version**: a version of a realm that a realm source offers for resolution, such as
+a Git tag `v<version>` whose metadata declares the same version.
+
+**Held back**: the state of an installed realm whose requirement is missing, unsatisfied, in
+conflict or in a cycle. It stays installed and listed with a sentence saying why, and offers
+nothing to the world until the requirement is met. See
+[Realm requirements](REALM_REQUIREMENTS.md#at-load).
+
+**Install plan**: what a host computes before installing a realm that has requirements: each realm
+it would add or move, at which version, from which repository, and which realm requires it. When it
+adds or moves other realms, the owner confirms it before anything changes. See
+[Realm requirements](REALM_REQUIREMENTS.md#at-install).
+
+**Realms lock**: the `realms.lock.json` file recording every realm resolved together, each at
+one exact version with its content digest. A host writes it for a world as a record; a
+mismatch is a warning and does not hold a realm back. Tooling may write it
+beside a realm for the author's own tests. It is distinct from a dependency's `lockDigest`, which
+describes an upstream module build.

@@ -191,6 +191,7 @@ export default defineRealm({
 | Field | Rule |
 | --- | --- |
 | `name`, `version` | Required. Name is kebab-case; version is the realm's semantic version. The legacy YAML default remains `0.0.0`. Neither value grants authority. |
+| `requires` | Optional record of the realms this realm needs, keyed by realm name, each with a version requirement such as `"[2.0.0,3.0.0)"`. Proposed; see [Realm requirements](REALM_REQUIREMENTS.md). It grants nothing and is unrelated to `dependencies`. |
 | `host` | Optional `"wasm"` or `"docker"` placement hint. `"docker"` names the Node bundle host, which a host may run natively or in a container; it does not require Docker. Absent means infer from the available handler source/artifact using [placement](README.md#placement). A data-only realm needs no handler artifact. |
 | `execution` | `"conventional"` by default; `"captured"` selects the captured declaration forms and admission requirements. |
 | `runtime` | Guest language, `"typescript"` by default; also `"python"`, `"ruby"`, `"lua"`, `"compiled"`. A recognized language does not promise host execution support. An unsupported runtime refuses handler binding explicitly. In the captured profile, a host must refuse `channels`, `sources` or `consumers` when the runtime is other than `"typescript"`, even if it supports that runtime for handlers. |
