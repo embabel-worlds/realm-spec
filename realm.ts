@@ -2,7 +2,7 @@ import { type Realm } from "@embabel/realm-types";
 
 export default {
   name: "spec",
-  version: "0.2.0",
+  version: "0.2.1",
   category: "developer",
   execution: "captured",
   skills: ["realm-authoring"],
