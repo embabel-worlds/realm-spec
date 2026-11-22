@@ -176,7 +176,7 @@ record's id (`stage_id`, `user_id`, `partnerKey`) is declared together with that
 readable name (`stageName`, `ownerName`, `partnerName`), or the type declares the edge to the
 record that has it. A planner answers in the words of the question: given only `user_id: 9`
 it answers "user 9" when the question wants a salesperson's name, and given a null key it
-reports the stage as unknown. Measured on a held-out benchmark, both happened (2026-11).
+reports the stage as unknown.
 
 **Requirement — money in the units people read, beside the units the source stores.** A
 property holding an amount in minor units (`amountCents`) is declared together with the same
