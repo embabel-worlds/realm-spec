@@ -570,6 +570,13 @@ push.
 - **`prompts/` is a tax on every turn** — keep it a one-line pointer; put real workflow
   guidance in a `skills/` SKILL.md (paid only when activated).
 - **Naming**: lowercase-hyphenated ids, UpperCamelCase type names.
+- **Every id has a name beside it.** A property that points at another record (`stage_id`,
+  `user_id`, a partner key) ships with that record's readable name (`stageName`, `ownerName`),
+  or the edge to it. A model given only the id answers with the id. Check every type: no
+  reference without its name, and no name that comes back null on live data.
+- **Money twice: minor and major units, plus currency.** `amountCents` goes out with `amount`
+  and `currency`, and each description names its unit. Without that pair, models divide by 100
+  twice or not at all. See `DECLARING_TYPES.md` §3.3.
 - **An identity is a spine; a record is a parent label.** Never `parents:` a spine; never
   normalize a shared key on your own side; always assert a non-zero cross-realm count in
   `tests/verify.sh`. A broken cross-realm join is an empty result, not an error.

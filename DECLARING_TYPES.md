@@ -171,6 +171,20 @@ as a real.
 
 JSDoc on the property is its description.
 
+**Requirement — a reference carries the name people use.** A property that holds another
+record's id (`stage_id`, `user_id`, `partnerKey`) is declared together with that record's
+readable name (`stageName`, `ownerName`, `partnerName`), or the type declares the edge to the
+record that has it. A planner answers in the words of the question: given only `user_id: 9`
+it answers "user 9" when the question wants a salesperson's name, and given a null key it
+reports the stage as unknown.
+
+**Requirement — money in the units people read, beside the units the source stores.** A
+property holding an amount in minor units (`amountCents`) is declared together with the same
+amount in major units (`amount`) and its `currency`, and both descriptions name the unit.
+Models confuse the two in both directions: dividing a dollar figure by 100 again, or reading
+cents as dollars. A pair whose names and descriptions say which is which is the cheapest
+prevention.
+
 ### 3.3a Lifecycle — `lifecycle:` holds every node of a label to a curation rule
 
 A type may declare which values of its `status` property a read admits, and which are never
@@ -299,6 +313,9 @@ nothing checks them for you in either form.
 ---
 
 ## Changelog
+
+**0.2.1** — two property requirements: a reference carries the name people use, and an amount
+in minor units travels with the same amount in major units and its currency.
 
 **0.1.0** — first published contract: the two declaration forms and their equivalence, the
 mapping-framework vocabulary, edges as fields with typed targets and arity-derived
