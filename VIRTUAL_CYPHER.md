@@ -5640,11 +5640,45 @@ params:
   minStake: { type: int, default: 50, description: "Aggregate percentage at which status propagates" }
 ```
 
-A query that merely MATCHes the derived label evaluates the rules **implicitly, on defaults** —
-so a rule set meant for implicit evaluation should default every param. Anchoring a rule set to
-one entity is nothing special: declare the key as a param (`{officerId: $officer}`). Param names
-may not shadow the engine's reserved names or a scope field (`userId`, `worldId`, `workspaceId`);
-a rule set declaring one is refused, naming the param.
+A query that merely MATCHes the derived label evaluates the rules **implicitly**, and binds each
+declared param **by name** from the invocation:
+
+- **A view's arguments.** A view invoked with arguments runs with them as the query's params, beside
+  the body it inlines them into, so a rule set its query engages binds a declared param of the same
+  name from the view's argument (merged over the view's default and coerced, as the body sees it).
+- **The query's params.** A caller that passes params with a query (`kg_query`'s `params`)
+  binds a declared param of the same name the same way.
+- **Only declared params.** One query may engage several rule sets — its strata — and a value is
+  taken only by a set that declares that name; any other set ignores it.
+- **Otherwise the default.** A declared param no invocation value names — or one given `null` — takes
+  its `default`; one with no default refuses the query, naming the param. So a rule set meant for
+  implicit evaluation should default every param, and one a stratum below another's pulls in
+  receives the same values by name.
+
+Values are coerced to the param's declared type. Anchoring a rule set to one entity is therefore
+nothing special: declare the key as a param, scope the first MATCH with it, and give the view that
+reads the derived label a param of the same name:
+
+```yaml
+# rules/shares-issue.yml
+name: accounts/shares-issue
+derives: SHARES_ISSUE
+params:
+  accountKey: { type: string, default: "" }   # "" — the whole book
+rules:
+  - derive: "(a)-[:SHARES_ISSUE]->(b)"
+    from: |
+      MATCH (a:CustomerAccount)-[:RAISED]->(:Issue)-[:IN_AREA]->(x)<-[:IN_AREA]-(:Issue)<-[:RAISED]-(b:CustomerAccount)
+      WHERE ($accountKey = '' OR a.accountKey = $accountKey) AND a <> b
+```
+
+A view `MATCH (a:CustomerAccount {accountKey: $accountKey})-[:SHARES_ISSUE]->(b) …` declaring
+`accountKey` then derives one account's pairs — priced (§13.7) as one account's, not the book's.
+A view's argument reaches a rule only when the view is run by name (`view_run`, `POST
+/views/{name}/run` or `/invoke`, a lens); a view referenced as a label inside another query
+(`MATCH (v:SomeView {accountKey: 'x'})`) inlines its arguments and passes none on, so such a query
+passes the value as its own param. Param names may not shadow the engine's reserved names or a scope
+field (`userId`, `worldId`, `workspaceId`); a rule set declaring one is refused, naming the param.
 
 ### 13.2 What a rule may say — the validated fragment
 
