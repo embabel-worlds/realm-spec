@@ -30,6 +30,11 @@ IRIs it came in with. Import, never conform. [Binding realms](BINDING_REALMS.md)
 seam that import exposes: the ontology in one realm, the binding to a system in another, with every
 existing realm unchanged as the case where the two are the same.
 
+**Finishing a realm?** [Realm quality](REALM_QUALITY.md) is the bar: what a model is shown of each
+declaration and where it is cut, and the MUST and SHOULD rules for types, properties, keys, joins,
+pushdown, caching, views and examples. `embabel realm audit` scores a realm against the rules that
+can be checked from its files.
+
 **Asking for a result without writing the steps?** [Planning](VIRTUAL_CYPHER.md#16-planning-ask-for-the-result-not-the-steps)
 takes a goal — the final query, or a question in English — and a deterministic planner chooses the
 realm's views and DERIVE rules that reach it, compiled to one ordinary query that is shown before it
@@ -1008,7 +1013,7 @@ A `remote` repository declares `pushdown:` rules; the host renders matching pred
 ```yaml
 pushdown:
   - property: html_url            # the target-node property the predicate is on
-    op: contains                  # EQUALS (default) or CONTAINS
+    op: CONTAINS                  # CONTAINS (the default when op is left out), EQUALS, IN, or a range
     qualifier: "repo:{value}"     # native fragment; {value} ← the predicate's value
     valuePattern: '…([\w.-]+/[\w.-]+?)(?:/|$)'   # optional regex; group 1 replaces {value}
 ```
