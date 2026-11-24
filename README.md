@@ -1344,7 +1344,7 @@ Two consequences follow from the fact that a reference is an INLINE of the body,
 | `goal` | no | In place of `cypher`: the final read query only. The world plans the views and rules that reach it, and pins the compiled statement per world. A realm ships `goal:` alone — a shipped `compiled:` or `plan:` is a validation error. See [Virtual Cypher §16.10](VIRTUAL_CYPHER.md#1610-goal-views--a-saved-answer-whose-steps-are-planned). |
 | `description` | no | What it answers, for the Views list and for a model choosing between views. |
 | `params` | no | Declared bind values, each with a `type` (`string`, `int`, `number`, `float`, `double`, `boolean`, `date`), a `description`, and ideally a `default` so the view stays runnable bare. A param with no default must be supplied, unless it declares `required: false`: then an invocation may omit it and it is bound to `null` (so `WHERE $p IS NULL OR x.k = $p` skips the filter). An explicit `null` argument is accepted for any param — it takes the default when one is declared, and is bound as `null` otherwise. `default: null` alone does not make a param optional; declare `required: false`. One value each: a view needing a list reads it inside its own body rather than taking `IN $p`. |
-| `outputLabel` | inferred | The type a node view's rows are. **Inferred** when the body returns a single bare node variable, which is why most views never declare it. REQUIRED on a `materialized` view, where there is nothing to infer from until the body runs. |
+| `outputLabel` | inferred | The type a node view's rows are. **Inferred** when the body returns a single bare node variable, which is why most views never declare it. On a `materialized` view it chooses what is cached ([Virtual Cypher §8.4](VIRTUAL_CYPHER.md#84-what-a-materialized-view-caches)): with one, the member nodes, so the body must return a node of that type, and a label over a body that returns columns is an error; without one, the rows, which is right for a tabular view such as a table of judgements. A host that caches members only requires it on every materialized view; validate with `--host` for that host. |
 | `materialized` | no | `false` (default) expands the body at query time, always fresh. `true` commits the result and reads the cache until the TTL expires — the interactive query then does no producer calls at all. |
 | `ttl` | no | Cache lifetime for a materialized view (`30m`, `2h`, `1d`). Default `1h`. Ignored when regular. |
 | `returns` | no | Column types, `{column: type}`, for the columns the host cannot infer from the body or infers wrongly. Each entry overrides that column's inferred type. A type is a property type (`string`, `int`, `number`, `boolean`, `date`, `datetime`, …), `list`, `list<T>`, `map` or `unknown`. See [Typed rows](#typed-rows--what-a-views-columns-are). |
@@ -2113,6 +2113,8 @@ realm-hubspot/
 ```
 
 Use this when the upstream provider has stopped publishing OpenAPI specs (or never did), or when you want to pin a specific subset of operations and types without depending on a moving public URL. HTTP(S) and `file://` URLs work too — the relative-path mode is just the most ergonomic for vendored specs.
+
+A vendored document's server may be plain `http` — a local demo stack at `http://localhost:8069` is the usual case — and a conventional realm's entries are called at that URL as written. The [captured profile](TYPESCRIPT_REALMS.md#apis) is stricter: its gateway calls one `https` origin on port 443, or a plaintext origin the operator lists, so a captured realm, or a host that calls every API through that gateway, refuses any other server.
 
 **A realm's producers call the realm's own APIs.** A producer's `operation:` names an operation by
 its bare id, and another installed realm may ship an operation of the same id — two realms each
@@ -5102,6 +5104,7 @@ image at the appliance's own version, with nothing running.
 | `--with <dir>` | a realm installed beside this one; repeatable |
 | `--json` | the report as JSON: `realm`, `ok`, `passed`, `errors`, `warnings`, `notes`, `problems[]` with `severity`, `message`, `suggestion` and `location` (`file`, `path`, `line`, `column`) |
 | `--strict` | fail on warnings as well as errors |
+| `--host <host>` | the host to judge the realm for: `worlds`, the default, or `shinar`, an embedded host whose loader adds rules of its own — a vendored API's server must be `https` on port 443, and a `materialized` view must name its `outputLabel`. A rule that governs only another host is not reported. |
 
 Exit status `0` passes, `1` does not (an error, or a warning under `--strict`), and `2` could not
 validate — a directory that does not exist, or a check that itself failed. A note never fails.
