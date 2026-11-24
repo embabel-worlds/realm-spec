@@ -1310,11 +1310,12 @@ RETURN c.email, d.name
 | | Body | Used as |
 |---|---|---|
 | **Node view** | `MATCH … RETURN <one bare node variable>` | a label **or** by name. COMPOSES. |
-| **Tabular view** | a projection — `RETURN c.email AS email, count(d) AS deals` | by name only. TERMINAL. |
+| **Tabular view** | a projection — `RETURN c.email AS email, count(d) AS deals` | by name, or LEADING a query, where each row is a map of its columns. |
 
 A node view yields nodes of exactly one type and keeps their identity, so the view's name reads as a
-named subtype: `KeyAccounts ⊆ HubSpotContact`. A tabular view's rows are not nodes, so matching it as
-a label cannot answer — and is refused at validation rather than quietly returning nothing.
+named subtype: `KeyAccounts ⊆ HubSpotContact`. A tabular view's rows are not nodes, so it cannot
+stand in a traversal. It can open a query, though, and the caller then counts, totals and groups its
+rows. See [A tabular view leads a query](#a-tabular-view-leads-a-query).
 
 **The type may be VIRTUAL, and referencing the view materializes it.** This is the composition worth
 knowing about: a node view whose body traverses a declared join to a virtual type is, as a label, a
@@ -1341,8 +1342,10 @@ Two consequences follow from the fact that a reference is an INLINE of the body,
 | `outputLabel` | inferred | The type a node view's rows are. **Inferred** when the body returns a single bare node variable, which is why most views never declare it. REQUIRED on a `materialized` view, where there is nothing to infer from until the body runs. |
 | `materialized` | no | `false` (default) expands the body at query time, always fresh. `true` commits the result and reads the cache until the TTL expires — the interactive query then does no producer calls at all. |
 | `ttl` | no | Cache lifetime for a materialized view (`30m`, `2h`, `1d`). Default `1h`. Ignored when regular. |
+| `returns` | no | Column types, `{column: type}`, for the columns the host cannot infer from the body or infers wrongly. Each entry overrides that column's inferred type. A type is a property type (`string`, `int`, `number`, `boolean`, `date`, `datetime`, …), `list`, `list<T>`, `map` or `unknown`. See [Typed rows](#typed-rows--what-a-views-columns-are). |
 
-**What is refused, rather than answered wrong:** a tabular view matched as a label; a node view named
+**What is refused, rather than answered wrong:** a tabular view anywhere but the head of a query (see
+below); a node view named
 like an existing label; an argument the view never reads; a fractional number for an `int` parameter;
 and a label in the body that is a near miss for one the realm knows (`GitHubIsue` beside
 `GitHubIssue`), reported at the view's file and line.
@@ -1352,6 +1355,89 @@ declares — as a type, a parent, a derived label, a join's anchor, a `projected
 view's output — is reported on its realm, which reads `degraded`, and a run of it carries an
 `UNOWNED_LABEL` warning: a plain MATCH over such a label can never return a row, and an empty answer
 from it means "not installed", not "no data".
+
+### Typed rows — what a view's columns are
+
+A view's rows are typed, so a script can compose views without running each one first to learn its
+columns. The host infers each `RETURN` column's type from the body, and a column computed in a `WITH`
+is typed by what computed it:
+
+| Column | Type |
+|---|---|
+| a literal | its own type |
+| `count`, `sum`, `avg`, `size`, `toFloat`, `toInteger`, `round` and the other numeric functions; `-` `*` `/` `%` `^` | number |
+| `toString`, `toLower`, `replace`, `substring`, `date()`, `datetime()` and the other string functions | string |
+| `keys`, `labels`, `split` | a list of strings |
+| `min(x)`, `max(x)`, `coalesce(x, …)` | the type of `x` |
+| `collect(x)` | a list of the type of `x` |
+| `a + b` | number when both are numbers, string when either is a string |
+| a comparison, `IS NULL`, `AND`/`OR`/`NOT`, `exists`, `any`/`all` | boolean |
+| `n.key` | the type the world's types declare for `key` on `n`'s label (see below) |
+| a bare node variable | that type's declared properties, all optional, plus whatever else the node stores |
+| anything else (a `CASE`, an `ai.*` call, a property no type declares) | `unknown` |
+
+A `UNION` column has a type only when every branch agrees on it. Dates are ISO strings on the wire,
+so a `date` or `datetime` column is a string.
+
+A label is not a type: `MATCH (i:BillingInvoice)` also matches every type that carries the label. So
+`n.key` is typed first by the type the label NAMES, and otherwise by every type that carries it,
+when they all declare `key` the same way. A column nothing settles is `unknown`, never a guess. A
+script typed against a wrong column type misreads it, while `unknown` only tells it to check.
+
+`returns:` states the columns inference cannot reach. It overrides column by column and leaves the
+others inferred:
+
+```yaml
+- name: InvoiceRisk
+  cypher: |
+    MATCH (i:BillingInvoice) WHERE i.status = 'overdue'
+    RETURN i.invoiceNumber AS invoice,
+           i.amountDueCents / 100.0 AS amountDue,
+           CASE WHEN i.daysOverdue > 60 THEN 'high' ELSE 'watch' END AS risk
+  returns:
+    risk: string
+```
+
+`invoice` has the type `BillingInvoice` declares for `invoiceNumber`, `amountDue` is a number, and
+`risk`, a `CASE` the host cannot type, is what `returns:` says. A captured realm writes the same map as `returns` on the view in `realm.ts`.
+
+**Where the types show.** Each view is a typed function at `gateway.views.<Name>(params?)` in
+`code_mode`. Its parameters come from the view's `params`: one with a `default` or `required: false`
+is optional, and `choices` become a union of literals. It resolves to the same envelope as
+`gateway.view.run`, with every row typed:
+
+```typescript
+const r = await gateway.views.InvoiceRisk()
+// r.rows: Array<{ invoice: string; amountDue: number; risk: string }>
+const total = r.rows.reduce((t, row) => t + row.amountDue, 0)
+```
+
+A view's description becomes the function's documentation, with its defaults. A default `limit`
+silently shortens the rows, so the documentation always shows it. `view_run`'s description of a
+view carries the same column types as `returns`. `gateway.view.run({name, params})` still works and
+returns untyped rows.
+
+### A tabular view leads a query
+
+A tabular view may be the FIRST clause of a query, alone in its `MATCH`. Its body runs as it would by
+name, and each row is bound to the variable as a map of its columns, so the rest of the query counts,
+totals and groups rows that were only readable one at a time before:
+
+```cypher
+MATCH (v:Pipeline {minProbability: 0})
+RETURN v.stage AS stage, count(*) AS deals, sum(v.value) AS value
+```
+
+The map's properties are the view's arguments. The view's `ORDER BY`, `SKIP` and a `LIMIT` it fixes
+still bound its rows. A `LIMIT $p` whose `p` the caller left at its default is a page size, not part
+of the answer, so it is dropped: a total over the first page would read as a total over the whole
+set.
+
+Every other placement is refused, and the refusal names the form that works. That covers a later
+clause (the body would run once per incoming row, which is a subquery that scoped Cypher does not
+admit), a relationship on the row, a `MATCH` shared with another pattern, using the row as a node, a
+second view after it, and a body ending `RETURN *` or a `UNION`. A tabular view named like a label the
+world holds never composes, so the label keeps its meaning.
 
 ### Optional labels — reading a companion realm that may be absent
 
@@ -1528,8 +1614,9 @@ const result = await gateway.kg.query({
 });
 ```
 
-Only identity-preserving node views compose this way. A tabular/projection view is terminal: invoke
-it directly through the named-view surface rather than using its name as a label in a larger query.
+Only identity-preserving node views compose this way. A tabular/projection view cannot stand in a
+traversal. Invoke it by name, or let it lead the query
+([A tabular view leads a query](#a-tabular-view-leads-a-query)).
 
 ## `sources.yml` — declaring how a COLLECTION behaves
 
