@@ -4396,8 +4396,8 @@ answered quietly wrong:
 
 - **A node view named like a label the world already holds.** Matching that label anywhere —
   including inside other views — would silently mean "the nodes this view selects". Rename the view.
-- **A view that returns columns, matched as a label.** Its rows are not nodes, so `MATCH (x:that_view)`
-  could only answer nothing; run it by name instead.
+- **A view that returns columns, anywhere but the head of a query.** Its rows are not nodes, so it
+  cannot stand in a traversal. Run it by name, or open the query with it (§8.3).
 - **An argument the view never reads**, or **a fractional number for an `int` parameter** — the first
   would be ignored and the second truncated, so the answer would not be the one asked for. A view
   parameter holds one value: a view that needs a list should read it inside its own query, not as
@@ -4419,7 +4419,14 @@ single rule — does it preserve node identity?
    carrying `OWNED_BY` / `MENTIONS` — the real-vs-virtual distinction dissolves; only identity matters.
 2. **Projection view** — a reshaping `RETURN c.email AS email, count(d) AS docCount`: mints the view's own
    derived type; composes only via edges the view declares (usually a leaf).
-3. **Tabular view** — a `RETURN` of scalars/aggregates: a named result set (report-only), not traversable.
+3. **Tabular view** — a `RETURN` of scalars/aggregates: a named result set. Not traversable, but it may
+   lead a query (§8.3).
+
+Every view's rows are typed, whatever its shape. The host reads each `RETURN` column's type off the body
+(an aggregate, a function, an operator, a literal, or a property the world's types declare) and leaves
+`unknown` whatever the body does not settle, never a guess. A view's optional `returns: {column: type}`
+overrides inference column by column. Callers see the result as `gateway.views.<Name>(params?)`, a typed
+function per view. The rules are in [README — Typed rows](README.md#typed-rows--what-a-views-columns-are).
 
 ### 8.3 Composing views
 
@@ -4452,6 +4459,25 @@ fire:
 ```cypher
 MATCH (d:breach_mentions) RETURN count(DISTINCT d) AS incidents      -- an aggregate over a precomputed view
 ```
+
+**A tabular view leads a query.** As the FIRST clause, alone in its `MATCH`, a tabular view's body runs
+as written, its terminal `RETURN` becomes a `WITH` of the same items (its `ORDER BY`, `SKIP` and a `LIMIT`
+it fixes kept), and each row binds to the caller's variable as a map of its columns:
+
+```cypher
+MATCH (v:Pipeline {minProbability: 0}) RETURN v.stage AS stage, count(*) AS deals
+-- runs as
+-- <Pipeline's body up to its RETURN> WITH o.stage AS stage, o.value AS value ORDER BY value DESC
+-- WITH {stage: stage, value: value} AS v RETURN v.stage AS stage, count(*) AS deals
+```
+
+The view's part is its body with one keyword changed, so the scope rewrite, the cost caps (§9) and LIMIT
+pushdown see what they see when the view runs by name. A `LIMIT $p` left at its default is a page size and
+is dropped, so that a total covers the set rather than the first page. Any other placement is refused,
+naming the form that works: a later clause (the body would run per incoming row, a subquery scoped Cypher
+does not admit), a relationship on the row, a shared `MATCH`, the row used as a node, a second view after
+it, or a body ending `RETURN *` or a `UNION`. A tabular view named like a label the world holds never
+composes.
 
 ### 8.4 What a materialized view caches
 

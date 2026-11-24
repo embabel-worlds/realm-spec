@@ -66,7 +66,7 @@ checkout is mounted.
 | attach your records to a spine (yours, another realm's, or Person/Organization) | `types/` `hub:` on the property carrying the key | Virtual Cypher §5.4 |
 | a shared KIND of record (every ticket is a `SupportCase`) | `types/` `parents:` | LABELS_AND_COMPOSITION.md |
 | fetch a type **on demand** by traversal | `types/` `virtualJoins:` + `producers/` | "Joining types on demand" (Virtual Cypher) |
-| a named, parameterized ANSWER a caller runs by name | `views/` | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface |
+| a named, parameterized ANSWER a caller runs by name | `views/` | "Views" — the realm's answer surface: ship one per question the realm exists to answer, so nobody hand-writes Cypher over your join surface. Rows are typed (`gateway.views.<Name>()`); add `returns:` for a column the host types `unknown` (a `CASE`, an `ai.*` call) — "Typed rows" |
 | query the graph from a code_mode script or skill | `gateway.kg.query` | "CypherScript" |
 | query the graph from a WASM HANDLER | `ctx.gateway.cypher.query` | "CypherScript" and "Captured realms" |
 | a CAPTURED realm written in TypeScript (`defineRealm`) | `realm.ts`, read directly by the host | TYPESCRIPT_REALMS.md, and "Captured realms" below |
