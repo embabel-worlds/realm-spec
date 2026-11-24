@@ -4825,6 +4825,56 @@ Every field is required for a reason:
 - **`of:`** is required for `sum`/`min`/`max` — `sum` with no property is not a question a source
   can answer.
 
+**An aggregate is its own call, not the listing's page.** A `remote` capability declares how the
+source is ASKED as well as where the answer is. One mechanism covers the three shapes a source
+answers a number in:
+
+| the source answers… | declare | e.g. |
+|---|---|---|
+| a total on the listing's own envelope, beside the first page | `records: "$"` and the `valueField` path; no `operation`, no `args` — the listing call IS the aggregate call, and the walk stops after it | Lago `meta.total_count`, Chatwoot `data.meta.all_count` |
+| one number per key from a grouping endpoint | `operation`, `args`, `records`, `valueField`, `keyField` | Odoo `read_group` grouped by the key field |
+| the bare number as the whole body, for one key per call | `operation`, `args`, `valueField: "$"`, and `keyField` naming the producer's `echoKeyAs` stamp | Odoo `search_count` |
+
+`args:` REPLACES the listing's arguments for that call, and the listing's `paging:` does not apply.
+That is the point of it: a listing's arguments describe a page — a size, an offset, a field list, an
+order — and an aggregate endpoint handed them answers a different question. Odoo's `search_count`
+reads the page `limit` as an upper bound and counts at most a page; its `read_group` needs a
+`groupby` that no `search_read` call may carry. Both return a plausible number. What still reaches
+the aggregate call is what scopes the QUESTION: the keys (at the capability's `keyArg`, else the
+listing's), every pushed filter at its `argPath`, and the request inputs the edge supplied. So write
+the static part of the scope — the domain's fixed conjuncts — again in `args:`, where it may differ
+from the listing's. Omit `args:` to inherit the listing's call, which is right only for an envelope
+total.
+
+```yaml
+- name: unpaidInvoicesByPartner
+  kind: api
+  operation: invoicesSearchRead
+  keyArg: "domain.0.2"
+  args:
+    domain: [["partner_id", "in", []], ["state", "=", "posted"]]
+    fields: [name, partner_id, amount_residual]
+    limit: 1000
+  paging: { style: offset, param: offset, sizeParam: limit, size: 1000, maxPages: 50 }
+  compute:
+    partner_id: "CASE r.partner_id WHEN false THEN null ELSE r.partner_id[0] END"
+  aggregates:
+    - measure: sum
+      of: amount_residual
+      operation: invoicesReadGroup     # POST /json/2/account.move/read_group
+      args:                            # no limit, no offset, no field list of the listing's
+        domain: [["partner_id", "in", []], ["state", "=", "posted"]]
+        fields: ["amount_residual:sum"]
+        groupby: [partner_id]
+      records: "$[*]"
+      valueField: amount_residual
+      keyField: partner_id             # the producer's compute: has already made the pair an id
+```
+
+The aggregate's rows pass through the producer's `compute:` like its records, so a key the source
+echoes as a pair — Odoo's `[id, name]` — is attributed by the same expression that keys the records.
+A `sql` producer's aggregate is a generated statement with no call to shape; `args:` there is refused.
+
 `avg` is deliberately not supported: an average over one page cannot be recombined across pages, so
 a source reporting only an average cannot be trusted to have averaged everything. Declare `sum` and
 `count` instead.
@@ -5039,7 +5089,7 @@ is classified and surfaced as a warning on the result:
 | `MATERIALIZATION_FAILED` | the source returned data the graph could not store | the records **exist** but are missing from the result, so an answer of "none" is definitely wrong. The fix is the engine's, not the caller's. |
 | `REDUCTION_FAILED` | an `aggregate` reduction or an `extract` call failed | the anchor's reduced or extracted records are **absent**, not empty. Retried on the next traversal. |
 | `EMPTY_NOT_KEPT` | keys of a `ttl`-cached fetch answered **empty**, and the policy declares no `negativeTtlSeconds` | a **cost note over a correct answer**, not a data warning: the empty is the real answer for those keys, and the only thing it costs is the NEXT run's call. The note names how many of how many keys, and prints the declaration that would keep them. Nothing about the rows is in doubt, so an answer carrying it is never caveated. |
-| `PUSHDOWN_VALUE_UNMATCHED` | a declared `pushdown:` rule names the query's filter (same property, same operator) and refuses its **value** — it fails the rule's `valuePattern` as written and in its canonical temporal spelling | a **cost note over a correct answer**: the filter was not sent, the source was read without it, and the graph applied it afterwards. The note quotes the value and the pattern, which is the form to write. Rows are right within what the read reached; a `PARTIAL_RESULT` beside it is this filter's doing, not the cap's — rewrite the value and the fetch narrows instead of the result. |
+| `PUSHDOWN_VALUE_UNMATCHED` | the query's filter is named by a declared `pushdown:` rule (same property, same operator) and **no** rule sends its **value** — it fails every such rule's `valuePattern` as written and in its canonical temporal spelling. The producer's rules are judged together: a property whose values are split between rules (`'won'`/`'lost'` to one, `'open'` to another) raises nothing for a value one of them sends | a **cost note over a correct answer**: the filter was not sent, the source was read without it, and the graph applied it afterwards. The note quotes the value and the pattern, which is the form to write. Rows are right within what the read reached; a `PARTIAL_RESULT` beside it is this filter's doing, not the cap's — rewrite the value and the fetch narrows instead of the result. |
 
 A row is not proof of a complete answer. Rows and totals from an incomplete read are retained as
 `PARTIAL` and accompanied by an `incomplete` explanation; they are not presented as complete

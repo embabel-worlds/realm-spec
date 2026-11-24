@@ -347,6 +347,10 @@ aggregates:
   - { measure: count, valueField: data.meta.all_count, records: "$" }
 ```
 
+Where the count is a different call — a `count` or `group` endpoint — declare its `operation` and its
+own `args:`, so it is not sent the listing's page size (VIRTUAL_CYPHER.md, *An aggregate is its own
+call*).
+
 ### R10 — SHOULD: no N+1 where the source has a batch or list form, and respect the rate limit. *Review.*
 
 *Why:* one call per key over a thousand anchors is a thousand calls. Use the source's `IN`, bulk-by-ids
