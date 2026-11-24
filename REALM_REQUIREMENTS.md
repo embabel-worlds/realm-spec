@@ -509,6 +509,27 @@ requires one of those.
 | `heldBackCode` | The problem code that holds it back, such as `REALM_REQUIREMENT_MISSING`. Absent when not held back. |
 | `heldBackReason` | The sentence of that problem, as [gated text](#security). Absent when not held back. |
 
+### A label no installed realm declares
+
+A view that reads a label no installed realm declares can never return a row. `requires` is how a
+realm says which realm owns what it reads, and a plan installs that realm first, so a label still
+unowned once the plan is carried out means the realm is missing a requirement. One rule covers both
+places a host meets it, and both say it with problem code `UNOWNED_LABEL` and the same message:
+
+- **At install.** The install is refused and undone: nothing stays installed, by repository or by
+  local directory. The answer is `REALM_INSTALL_REFUSED`, and it says why: each label, the views
+  that read it, and the fix. When the host can see a realm that declares the label without fetching
+  anything, such as a checkout mounted beside a local install, the fix names it and its version as
+  the `requires` entry to write. Otherwise it says to require the realm that declares the label.
+- **At load.** A realm already installed whose label has since gone unowned, because the realm that
+  declared it was removed or no longer declares it, stays installed and is `degraded`, with the
+  same problem. A run of one of its views carries `UNOWNED_LABEL` among its warnings. Taking the
+  realm out of the world would trade one broken view for an outage, so a load never refuses it.
+
+A label the realm lists under [`optionalLabels`](README.md#optional-labels--reading-a-companion-realm-that-may-be-absent)
+and reads only under `OPTIONAL MATCH` is awaited, not unowned. It is a note in both places, and an
+install that meets only notes goes ahead.
+
 ## The lock
 
 A lock records what resolution chose: every realm that came into the world by a reference, each at
