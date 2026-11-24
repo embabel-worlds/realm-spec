@@ -1,6 +1,6 @@
 ---
 name: realm-authoring
-description: Author or extend an Embabel realm, a git repo of declarative capabilities (actions, types, APIs, virtual joins that fetch remote records, MCP servers, commands, webhooks, event sources, event handlers, skills, personalities, apps) that a host installs into a world. Activate for any request to create/build/scaffold/extend a realm, add a capability to a realm (a new action, type, API, producer, virtual join, verb, webhook, event source, event handler/reaction, skill, command), wire a new integration as a realm, or understand the realm format. The full contract is the spec at the repo root (README.md); this skill is the map; read the named section before writing a file.
+description: Author or extend an Embabel realm, a git repo of declarative capabilities (actions, types, APIs, virtual joins that fetch remote records, MCP servers, commands, webhooks, event sources, event handlers, skills, personalities, apps) that a host installs into a world. Activate for any request to create/build/scaffold/extend a realm, add a capability to a realm (a new action, type, API, producer, virtual join, verb, webhook, event source, event handler/reaction, skill, command), wire a new integration as a realm, or understand the realm format. Pushdown is designed first, from the source's documentation, and a realm is finished when `embabel realm audit` scores it at or near 100 against REALM_QUALITY.md, `realm validate --strict` passes, and its battery ends `ALL CHECKS PASS`. The full contract is the spec at the repo root (README.md); this skill is the map; read the named section before writing a file.
 ---
 
 # Authoring an Embabel realm
@@ -49,6 +49,310 @@ checkout is mounted.
 - **Reach for `src/` TypeScript handlers** only when there are invariants YAML can't hold:
   revision/optimistic-lock guards, multi-call orchestration, shaping a rich API into
   idiomatic methods, or giving a type *behaviour* (verbs). Handlers are separate from the realm definition.
+
+## Pushdown first — before you write a producer
+
+A realm's producers decide what every question over it costs. A filter the source applies costs
+nothing; a filter the graph applies costs every record the source returned. And the large win is
+not the filter's own page: the engine pushes a `LIMIT` (stop the page walk) and a `count()` (ask
+for a number, not the records) **only when the graph has nothing left to filter**. One filter the
+source could have applied and was not told about forfeits both, and the answer is identical, so
+nothing tells you. That is why pushdown is designed first, from the source's documentation, and
+not added later from a slow query.
+
+The standard is [REALM_QUALITY.md](https://github.com/embabel-worlds/realm-spec/blob/main/REALM_QUALITY.md)
+§5 and §6 (rules R1–R11). The full mechanics are the
+[README, predicate pushdown](https://github.com/embabel-worlds/realm-spec/blob/main/README.md#predicate-pushdown-pushdown--scope-the-fetch-at-the-source)
+and [Virtual Cypher](https://github.com/embabel-worlds/realm-spec/blob/main/VIRTUAL_CYPHER.md) (paging,
+caching, aggregates, diagnostics).
+
+### The method
+
+Work through it in order. Each step has its reason; skip one and the next step's work is wasted.
+
+1. **Read the source API's documentation and write an inventory before any YAML.** For each list
+   endpoint: every filter parameter and its operator (equality, set, range, text search), its sort
+   options, its maximum page size and paging style, whether the first page reports a total, its
+   by-id or bulk-by-ids endpoints, its count or grouping endpoints, and its rate limit. *Why:* the
+   planner can only push what you declare, and you can only declare what you listed.
+2. **Prove each filter narrows: call it with and without, and compare the counts.** *Why:* many
+   sources ignore an unknown or misspelled filter and return everything with a 200. A rule for a
+   filter the source ignores is a full scan that looks like success. Write the counts in a comment
+   beside the rule.
+3. **Read the source's comparison semantics, not just its parameter names.** Exact or substring?
+   Case-sensitive? Does a value outside its list return 422, empty, or everything? Is a date
+   compared as a string, a midnight, a UTC instant? *Why:* a pushed filter must keep at least every
+   row the graph's comparison keeps. Looser costs rows; stricter loses rows nothing can recover.
+4. **Choose the doors.** One producer per way in: the scan door (a whole status, the whole book),
+   a key-addressed door for single records, a batched door for "these 200 keys", a search door for
+   free text. *Why:* pushing a predicate makes each call cheaper; only another door changes how
+   many calls a question makes.
+5. **Declare every verified filter as a `pushdown:` rule with an explicit `op`.** *Why:* an omitted
+   `op` on a remote rule means `CONTAINS`, and an equality in a query never matches it.
+6. **Set paging to the source's maximum page size, with `total` where page one reports one.**
+   *Why:* fewer calls for the same records, and a known total lets the remaining pages be fetched
+   together instead of one after another.
+7. **Declare `orderedBy` for the order the source returns records in unasked.** *Why:* a top-N
+   question then reads one page, not the book.
+8. **Declare `aggregates:` where the source reports a true filtered total, and only there.** *Why:*
+   "how many" becomes one call, but a source total that ignores a filter, or is cached by the
+   source, is a confident wrong number.
+9. **Declare a cache matched to how the records change, with `negativeTtlSeconds`.** *Why:* the
+   default reads the source on every query, and a positive-only cache asks again for every clean
+   miss ("this customer has no open cases" is the common answer).
+10. **Write `pushdown: []` with a comment where the source filters nothing.** *Why:* an absent key
+    says "not yet declared" and the engine warns about it on every read; the empty list is a
+    statement.
+11. **Validate with `--strict`, then read `EXPLAIN` for the questions the realm exists to answer.**
+    *Why:* an unknown key is dropped at load and only `--strict` fails on it; `EXPLAIN` names, per
+    join, what was pushed and what the graph applied after fetching.
+12. **Prove the cost in the battery (L3, below) and put a before/after call table in the PR.**
+    *Why:* pushdown changes cost and never rows, so no row-level test can see a rule that does
+    nothing.
+
+### Patterns, each with a correct declaration
+
+The examples are from realm-lago, realm-chatwoot and realm-odoo, the reference realms for this
+standard. Every key is the same key in `realm.ts`, where `producers` is an object keyed by the
+producer's name (see the end of this section).
+
+**An equality, with its `op`.** Lago's `external_id` is exact (verified: 1 of 3,356).
+
+```yaml
+pushdown:
+  - { property: externalId, op: EQUALS, argPath: "external_id", clause: "{value}" }
+```
+
+**A set (`IN`).** A node that is exactly `"{values}"` becomes the member list as real JSON.
+
+```yaml
+- { property: partner_id, op: IN, argPath: "domain.-", clause: ["partner_id", "in", "{values}"] }
+```
+
+**A value the source would reject.** `valuePattern` admits only values the source accepts; any other
+value stays a graph-side filter instead of failing the question with a 422.
+
+```yaml
+- { property: paymentStatus, op: EQUALS, argPath: "payment_status", clause: "{value}",
+    valuePattern: '^(pending|succeeded|failed)$' }
+```
+
+**Ranges and dates.** Declare each bound as its own rule. Where the source compares a date as a
+string, admit only the bare `YYYY-MM-DD`; the engine re-spells a range bound into canonical UTC
+(`yyyy-MM-ddTHH:mm:ssZ`) and tries the pattern again, so write the pattern for the form the source
+takes. An equality on a day is both bounds.
+
+```yaml
+- { property: issuedOn, op: GREATER_THAN_OR_EQUAL, argPath: "issuing_date_from", clause: "{value}",
+    valuePattern: '^(\d{4}-\d{2}-\d{2})$' }
+- { property: issuedOn, op: LESS_THAN_OR_EQUAL, argPath: "issuing_date_to", clause: "{value}",
+    valuePattern: '^(\d{4}-\d{2}-\d{2})$' }
+- { property: issuedOn, op: EQUALS, argPath: "issuing_date_from", clause: "{value}",
+    valuePattern: '^(\d{4}-\d{2}-\d{2})$' }
+- { property: issuedOn, op: EQUALS, argPath: "issuing_date_to", clause: "{value}",
+    valuePattern: '^(\d{4}-\d{2}-\d{2})$' }
+```
+
+Do not push `>` a bare date against a date-time field: the source reads the date as midnight, the
+graph reads `'2026-10-22 00:00:00'` as after `'2026-10-22'`, and a record at midnight is lost.
+
+**Case-insensitive text (`match: ci`), and why it must not feed a count.** Odoo's `ilike` ignores case,
+so declaring `match: ci` lets it answer `toLower(c.name) CONTAINS 'acme'` too. It also reads `%` and
+`_` as wildcards, which only widens what comes back. The graph re-applies the query's own comparison,
+so rows stay exact, but a number cannot be re-filtered: on a producer that declares `aggregates:`,
+refuse wildcard characters so a widened match never becomes a count.
+
+```yaml
+- { property: name, op: CONTAINS, argPath: "domain.-", clause: ["name", "ilike", "{value}"],
+    match: ci, valuePattern: '^([^%_\\]*)$' }
+```
+
+A substring search is never an equality. Lago's only text filter, `search_term`, matches name,
+email and external id as substrings, so `name = 'Acme'` is NOT pushed through it: a count over a
+superset is exact, confident and wrong. A name lookup goes through a search door whose join says
+it is a search, and the query filters `c.name = …` on what it returns.
+
+**A single record by key, not by listing.** Where the source has `GET /plans/{code}` beside
+`GET /plans`, declare a producer over the by-key endpoint. `keyArgs` hands each key over as a
+scalar path parameter (`keyArg` would send a one-element list); `keySplit` splits a composite key
+on its delimiter.
+
+```yaml
+- name: lagoPlanByCode
+  kind: api
+  operation: lagoPlanGet
+  records: "$.plan"
+  keyArgs: [code]
+  pushdown: []
+  cache: { kind: ttl, seconds: 3600, negativeTtlSeconds: 3600 }
+```
+
+On the join, `materializedKeyField` tells the engine every record from that door carries the key in
+that property, so `MATCH (c:SupportCase) WHERE c.accountKey = 'acme.com'` takes the one-company door
+by itself instead of sweeping the desk.
+
+**A batch, not N+1.** Where the source takes a list of keys, put the list at `keyArg` and set
+`maxKeysPerCall` to the source's cap. A source whose key is a number matches nothing on strings,
+silently: declare `keyType: int`. When each record carries the key it belongs to, compute the link
+from the record rather than echoing it, because an echo costs one call per key.
+
+```yaml
+- name: unpaidInvoicesByPartner
+  kind: api
+  keyType: int
+  operation: invoicesSearchRead
+  records: "$[*]"
+  keyArg: "domain.0.2"
+  args:
+    domain: [["partner_id", "in", []], ["state", "=", "posted"]]
+    fields: [name, partner_id, amount_residual, invoice_date_due, currency_id]
+  maxKeysPerCall: 200
+  paging: { style: offset, param: offset, sizeParam: limit, size: 1000, maxPages: 50 }
+  compute:
+    partnerKey: "CASE r.partner_id WHEN false THEN null ELSE r.partner_id[0] END"
+```
+
+Keep `batchSafe: false` only for a source that really answers one key per call, such as a globally
+ranked, capped search, where a batch would starve the low-volume keys.
+
+**Page size at the source's maximum, with `total`.** Chatwoot's conversation list is 25 a page,
+fixed; its first page reports the desk's count, so the rest of the walk runs in parallel.
+
+```yaml
+paging: { style: page, param: page, size: 25, maxPages: 2000, total: data.meta.all_count }
+orderedBy: [{ property: createdAt }]
+```
+
+`maxPages` is the ceiling, sized so a real book is read whole: a walk that stops at the cap reports a
+partial answer. With `orderedBy`, "the 10 newest" reads the pages that hold ten and stops. Pick a
+size every supported source version accepts: Lago takes any `per_page` in one release and refuses
+more than 200 from the next, so 200 is right.
+
+**Counts the source answers.** Three shapes, one mechanism.
+
+```yaml
+# 1. A total on the listing's own envelope: the first page IS the count call.
+aggregates:
+  - { measure: count, valueField: data.meta.all_count, records: "$" }
+
+# 2. A grouping endpoint: its own operation and its own args, which REPLACE the listing's.
+aggregates:
+  - measure: sum
+    of: amount_residual
+    operation: invoicesReadGroup
+    args:
+      domain: [["partner_id", "in", []], ["state", "=", "posted"]]
+      fields: ["amount_residual:sum"]
+      groupby: [partner_id]
+    records: "$[*]"
+    valueField: amount_residual
+    keyField: partnerKey
+
+# 3. The bare number as the whole body (Odoo search_count).
+aggregates:
+  - measure: count
+    operation: invoicesSearchCount
+    args: { domain: [["state", "=", "posted"]] }
+    valueField: "$"
+    keyField: scopeKey
+```
+
+An aggregate endpoint handed the listing's page arguments answers a different question: Odoo's
+`search_count` reads the page `limit` as an upper bound. So declare its own `args:`, restating the
+fixed conjuncts; the keys and every pushed filter are still added to it. `count`, `sum`, `min` and
+`max` are delivered; `avg` is not supported, because an average cannot be recombined.
+
+**When NOT to declare a count.** Lago caches its invoice `total_count` for up to 30 minutes under a
+key built from scalar parameters only, so an array filter shares the unfiltered list's count. Its
+invoice producers declare no `aggregates:` and say why in a comment. Chatwoot's text search computes
+its count after cutting the page, so that door declares neither `total` nor a count. Before
+declaring a count, check it against the records with a filter applied, twice, a minute apart.
+
+**Caches matched to how records change.** One read holds records in every state, so the window is
+set by the most volatile thing in it.
+
+```yaml
+cache: { kind: ttl, seconds: 60, negativeTtlSeconds: 60 }        # a support desk: changes by the minute
+cache: { kind: ttl, seconds: 120, negativeTtlSeconds: 120 }      # invoices: payment status flips
+cache: { kind: ttl, seconds: 3600, negativeTtlSeconds: 3600 }    # plans: edited rarely
+cache: { kind: immutable }                                       # a filed document, a closed period
+```
+
+Put what changes into the key and the TTL can be long: Chatwoot's thread producer keys on the
+conversation and its `lastActivityAt`, so a new message is a new key and an unchanged thread is
+served for a day. Use `cache: { kind: none }` only when every read must be live, and say so.
+
+**A source that filters nothing.** A conversation's thread comes back whole or not at all:
+
+```yaml
+# The endpoint has no filter: a `messageType = 0` in a query is always applied graph-side.
+pushdown: []
+```
+
+A door meant to be shared by a family of views declares `readWhole: true` with a `ttl` cache
+instead: the rules stay declared, none is sent, and every view reads the same cached collection.
+
+**The same producer in `realm.ts`.** Conventional producers take the same keys, as an object keyed
+by name:
+
+```ts
+producers: {
+  lagoInvoicesAll: {
+    kind: "api",
+    operation: "lagoInvoicesList",
+    records: "$.invoices[*]",
+    keyTemplate: "{key}",
+    echoKeyAs: "scopeKey",
+    args: { per_page: 200, status: "finalized" },
+    paging: { style: "page", param: "page", size: 200, maxPages: 250, total: "meta.total_count" },
+    orderedBy: [{ property: "issuedOn", descending: true }],
+    pushdown: [
+      { property: "customerExternalId", op: "EQUALS", argPath: "external_customer_id", clause: "{value}" },
+      { property: "issuedOn", op: "GREATER_THAN_OR_EQUAL", argPath: "issuing_date_from",
+        clause: "{value}", valuePattern: "^(\\d{4}-\\d{2}-\\d{2})$" },
+    ],
+    // No aggregates: Lago's invoice total ignores array filters and is cached (see above).
+    cache: { kind: "ttl", seconds: 120, negativeTtlSeconds: 120 },
+  },
+},
+```
+
+A captured realm's handler-backed producer pushes through `pushdown: [{ property, argument }]`
+instead; see [Captured realms](#captured-realms-producers-graph-reads-apps-and-proposals).
+
+### Per source kind
+
+| Source | How a filter is sent | What to watch |
+|---|---|---|
+| REST with query parameters | `argPath` is the parameter name, `clause: "{value}"`; an array parameter (`status[]`) takes `clause: ["{value}"]` or `"{values}"` | Unknown parameters are often ignored with a 200. Some take an array form only (Lago's `status[]`; a scalar `status=` is ignored). A boolean `false` may arrive as the text "false" and read as true: push only the value that works. |
+| JSON-RPC with domains (Odoo) | `argPath: "domain.-"` appends a triple; a domain is an implicit AND, so no `linkPrevious` | Set `fields:` to what the type projects. Domain values are typed: declare `keyType: int`. Counts are `search_count` and `read_group` with their own `args:`. A many2one arrives as `[id, name]`: compute the id back. |
+| JSON filter payloads (Chatwoot) | `argPath: payload.-` with a `clause` object and `linkPrevious: { query_operator: AND }` | The conjunction lives on the preceding clause and must be absent from the last; a wrong shape is an HTTP 500. A clause on an undefined custom attribute is dropped silently and returns everything. |
+| SQL | `pushdown:` entries with `type` and `ops`; the engine binds the value into the generated statement | No `args` on a SQL aggregate; `measure` and `of` are the whole declaration. |
+| SPARQL | A `{{filter:<property>}}` slot in the query, before the expensive part; typed literals | Compare through the expression that makes the source agree with the graph (`expr: "STR(?label)"`), or a language-tagged literal is lost. |
+| Cypher | A `{{filter:<property>}}` slot after an existing condition; `expr` is required | Same exactness rule as SPARQL. |
+| GraphQL (a remote producer over an `apis/` entry of `type: graphql`) | `argPath` into the operation's variables (a `where:` input object), `clause` as its JSON | Set `first:` to the maximum; walk Relay cursors with `paging: { style: cursor }`. Read a `totalCount` from the envelope as a count only if it honours the filters. |
+| Server-side text search (Chatwoot `q`, Lago `search_term`) | Its own producer, keyed by the text (`keyArg: q`), on a search door | A search is a superset: never push an equality through it, and never read its count unless the source documents it as exact. |
+
+### Reading "filter not sent"
+
+The engine says when a filter was applied in the graph instead of at the source. Each note names its
+fix:
+
+- **At load:** "pushes 1 of the 3 filter(s) its source accepts — `since`, `labels` are fetched
+  over the wire and filtered in the graph." Declare the named ones, or say in a comment why not.
+- **`EXPLAIN`**, per join: `pushed to source: …` and `applied by the graph after fetching: …`. A
+  residual is the next rule to write, and it is costing on a query someone runs.
+- **`FILTERED_IN_GRAPH`** on a read: a `WHERE` was applied after the fetch on a producer with no
+  rule for it. Declare the rule, or `pushdown: []` if the source cannot filter.
+- **`PUSHDOWN_VALUE_UNMATCHED`**: a rule exists for the property and operator, but the value failed
+  every rule's `valuePattern`. The note quotes the value and the pattern. Fix the spelling or the
+  pattern. A producer's rules are judged together, so a property whose values are split between
+  rules raises nothing for a value one of them sends.
+- **`UNPUSHED_FILTER`**: a bounded read (page cap or limit reached) omitted a declared filter, so it
+  cannot prove absence. Push the filter or narrow the question; never report the zero as clean.
+- **`EMPTY_NOT_KEPT`**: clean misses were not cached. Add `negativeTtlSeconds`.
+- **`PARTIAL_RESULT` (`TRUNCATED`)**: the walk hit `maxPages`. Usually a filter that should have been
+  pushed; otherwise raise the cap to the source's real size.
 
 ## The pieces (read the spec section before writing one)
 
@@ -99,8 +403,8 @@ back is **Virtual Cypher** — see "Virtual Cypher — the engine" under "Joinin
   **`batchSafe: false`** so each key is fetched on its own call (else a low-volume key is
   starved; see "Per-key vs batched").
 - **Predicate pushdown** (`pushdown:`): a `WHERE` on the target node renders into the
-  source's native filter (`{filters}` in `args`) so the fetch is scoped at the source —
-  not fetched broadly and filtered in the graph.
+  source's native filter so the fetch is scoped at the source — not fetched broadly and
+  filtered in the graph. Design it first: [Pushdown first](#pushdown-first--before-you-write-a-producer).
 - **Pagination** (`paging:`): walk pages so a fetch exceeding one page is fully captured.
 - A literal-pinned anchor (`{login:'x'}` or `WHERE a.login='x'`) uses the real node if it
   exists, else seeds a named entity even when no such node exists, fetched with the
@@ -267,6 +571,77 @@ export class OdooCustomer extends Entity<CrmGateway> {
   `state.get("acme").addNote(...)`. Methods compose through labels, parents included. See
   "Acting on what a query finds".
 
+## The quality bar: metadata a model can act on
+
+A realm is finished when it meets [REALM_QUALITY.md](https://github.com/embabel-worlds/realm-spec/blob/main/REALM_QUALITY.md):
+46 rules, each with its reason and a good and bad example. `embabel realm audit <dir>` scores the
+checked ones from the files; aim for 100, and document every remaining finding as a deliberate
+exception in a comment beside the declaration. What a model is shown is cut short, so the words
+that matter go first:
+
+| Declared | A model sees | So |
+|---|---|---|
+| type `description` | first 320 characters, cut at a sentence | Open with what ONE node is, the system, and the property that identifies it. |
+| property `description` | 160 characters | Unit or currency, every status value and its meaning, which moment a date is and its format, what empty means. |
+| view `description` | first sentence, 80 characters, in the list a model picks from | Say what it answers in the first sentence; then what it leaves out. |
+| join `description` | whole | Write it for the question that traverses it, with its cost. |
+| `realm.yml` `description` | first sentence, 120 characters, in the realm index | Name the system and the kind of record. |
+| type `examples:` | in the query generator's prompt | Worked `q`/`cypher` pairs over the main joins. Keep each one true. |
+
+Checklist, with the reason for each:
+
+- **`values:` is a hard contract.** A query comparing the property with anything outside the list is
+  refused. Declare it only when the list is complete, in the case the data uses; otherwise list the
+  common values in the description and say the list is open.
+- **Declare measures as fields:** `unit:` (`cents`, `ms`, `kWh`), `currency:` (the name of the
+  property holding each row's ISO code, or a fixed code such as `GBP`) and `format:`
+  (`yyyy-MM-dd`). Models see them under the type whether or not the question names the property.
+  See [Property measures](https://github.com/embabel-worlds/realm-spec/blob/main/DECLARING_TYPES.md#property-measures--unit-currency-format).
+- **Never sum across currencies.** A view that totals money returns one row per currency. A
+  mixed-currency total is never the right answer, however it is labelled.
+- **Say which clock a date is.** `createdAt` may be when the row was written (system clock) or when
+  the customer raised the case (business date). Name the moment and the format in the description,
+  and give the business date its own property when both exist.
+- **Name params match exactly by default.** "Acme" must not return "Acme Holdings". Partial or
+  case-insensitive matching is a separate, documented param.
+- **Near-named entities are distinct; join on keys.** Two customers can share a name, and two
+  invoices a name and an amount. Views return ids beside names, and joins and dedupes key on ids.
+- **Honest names.** A view or column counting `urgent` and `high` is `UrgentOrHigh…`, not
+  `Urgent…`. The name is quoted before the body is read.
+- **Declare numeric and boolean types.** An undeclared property keeps the source's encoding, and a
+  quoted number compared with a number matches nothing.
+- **Nothing the host ignores.** An unknown key is dropped at load. `embabel realm validate` warns
+  with the nearest real key and `--strict` fails on it. `valuePattern` belongs on a pushdown rule,
+  not a property; `default:`, `examples:` and `dimension:` on a property do nothing. A
+  `fixes:` on a virtual join was silently ignored until validation started naming unknown keys.
+- **State `maturity:`** in `realm.yml` (`experimental`, `beta`, `stable`, `deprecated`). Absent is
+  read as unstated, never as finished.
+- **`requires:` every realm whose labels a view or join reads.** A view naming another realm's label
+  without requiring it leaves this realm degraded wherever that realm is missing. Use a Maven range
+  (`"[0.2.0,1.0.0)"`) with the lower bound at the version you tested against.
+- **A DERIVE rule set binds its params by name from the view's arguments** (Virtual Cypher §13.1).
+  Give the view a param of the same name to anchor the rules to one entity, and default every rule
+  param so implicit evaluation works.
+
+## Before you install
+
+Run these in order. Each catches a failure the next one cannot see.
+
+1. **`embabel realm validate <dir> --strict`** (or `realm_validate` / `realm_validate_path`): zero
+   errors, no new warnings. *Why:* strict mode fails on keys the host would silently drop.
+2. **`embabel realm audit <dir> -v`**: 100, or every finding documented as deliberate. *Why:* it
+   checks the metadata a model reads, which validation does not.
+3. **The pushdown inventory is complete:** every verified source filter declared with an `op`,
+   paging at the source maximum, a cache with `negativeTtlSeconds` on every remote producer,
+   `pushdown: []` with a comment where the source filters nothing. *Why:* the audit can only
+   check what is declared, not what the source offers.
+4. **`requires:` names every realm whose labels you read.** *Why:* the realm installs and then
+   reports itself degraded.
+5. **The battery exists and passes** (below). *Why:* a realm whose files are perfect and whose every
+   join matches nothing looks the same as an empty source.
+6. **A version bump is installed with an update or a reinstall, not a refresh.** *Why:* a realm
+   installed from git is pinned; a refresh reloads the pinned version.
+
 ## Build, test, ship
 
 ```bash
@@ -324,6 +699,35 @@ What that catches, every time, and static review does not:
 Read the WARNINGS in every response, not just the rows. A `PRODUCER_ERROR` / `FIELDS_WITHHELD` /
 `INCOMPLETE_TRAVERSAL` note is the host telling you the answer is not what it appears to be — a
 0-row result with a warning is a broken realm, not an empty source.
+
+### The battery: `tests/verify.sh`
+
+Every realm ships one. The contract is small so that any host, CI job or reviewer can run any
+realm's battery the same way:
+
+- **Inputs:** `APPLIANCE` (the host's URL) and `AUTH` (`user:pass`) or `TOKEN`. Source keys come from
+  environment variables the script's header names. Keep credentials off the command line.
+- **L1 — every view answers by name on its defaults.** Not "no error": rows, or a stated empty. A
+  view nobody has run is a view that does not work.
+- **L2 — ground truth from the source.** Read the counts and figures directly from the source's own
+  API and require the realm's to be EQUAL. A count off by one is a bug; a sum off by anything is a
+  money bug. Include one non-zero cross-realm count for every spine you key.
+- **L3 — cost.** Every pushdown you declared is checked: a single-entity read makes O(1) source calls,
+  a filtered count is one call, a one-day window is one page. Read `apiCalls` from a query result
+  and `metrics.externalCalls` from a view result. Run L3 on a cold cache (the edge directive
+  `{ai: {fresh: true}}`, or before anything sweeps the book): a read the cache answered costs 0 calls
+  and proves nothing about the request. A bound that fails means a filter was not sent.
+- **Output:** one line per check; on success the LAST line is exactly `ALL CHECKS PASS`; any failure
+  exits non-zero.
+
+Write the expected numbers before running the checks, and break one input once to watch the
+battery fail. Put the L3 calls before and after in the PR as a table:
+
+| Question | Source calls before | After |
+|---|---|---|
+| one customer by its id | every page of the customer list | 1 |
+| a count on one plan | every page of the subscriptions | 1 (the source's total) |
+| invoices issued on one day | every page of the invoices | 1 |
 
 ### If anyone types WORDS at your realm, ship `tests/questions.yml`
 
@@ -433,72 +837,14 @@ the rows you will show, *then* resolve their names — not the other way round.
 
 ### What you DECLARE decides what the engine may do
 
-Three declarations cost a few lines each and change the shape of every query over your realm. None
-of them is an optimisation you can add later without changing answers — they are what makes the
-difference between one call and one call *per account*.
+Pushdown, a second door, aggregates and the shape of your views change the shape of every query
+over the realm. None is an optimisation you can add later without changing what a question costs.
+The method and the patterns are in [Pushdown first](#pushdown-first--before-you-write-a-producer);
+the points below are about doors and views.
 
-**1. Declare the filters your source can apply (`pushdown:`).** Without one, a `WHERE` on your
-target is applied to the graph AFTER every record has been fetched. With one, the source scopes the
-fetch.
-
-That is the small win. The large one: what your source absorbs is what lets the engine push a
-`LIMIT` (stop the page walk) and ask for a `count()` instead of the records. Neither is safe while
-the graph still has filtering left to do, so **an undeclared filter costs far more than its own
-page**.
-
-**Declare EVERY filter the source accepts, not the obvious one.** That last sentence is not a
-figure of speech: the `LIMIT` and `count()` pushes happen only when the graph has *nothing* left to
-filter, so a *single* predicate your source could have applied and didn't forfeits both
-**entirely**.
-Declaring three filters of four buys you the small win and none of the large one — a query that
-should have been one counted call walks every page instead, and the answer is identical, so nothing
-tells you. Go and read the source's own parameter list, and cover it.
-
-Three things help you do that and check it:
-
-- **A mined realm already has the list.** The scaffold writes `sourceFilters:` onto each producer —
-  the query parameters its specification said it accepts. That is your checklist.
-- **Loading the realm names what you left.** "pushes 1 of the 3 filter(s) its source accepts —
-  `since`, `labels` are fetched over the wire and filtered in the graph."
-- **`EXPLAIN` names what a real query paid for**, per join: `pushed to source: genre` /
-  `applied by the graph after fetching: status`. A residual there is the predicate to go and
-  declare next — it is costing you on a query someone actually runs.
-
-**If the source applies no filters, write `pushdown: []` and say why in a comment.** A thread
-endpoint that returns the whole conversation, a list keyed by status that takes nothing else: there
-is no rule to declare, and leaving the key out does not say so — an absent key is read as "not yet
-declared", and the realm is warned at load and advised on every sizeable read to declare a rule it
-cannot have. The empty list clears the load warning, turns the read's cost note into a statement
-that the source applies no filters, and takes the instruction off `EXPLAIN`'s residual line. Do not
-reach for it to silence a warning on a source that does filter: a rule it would have applied is then
-never written, and the engine cannot tell.
-
-A captured realm's handler-backed producer follows the same rule through `pushdown` rules — see
-"Cover EVERY filter" under [Captured realms](#captured-realms-producers-graph-reads-apps-and-proposals).
-
-If your source's query is text, use `qualifier`. If it is JSON — an Odoo domain, an Elasticsearch
-`bool.filter`, a Chatwoot filter payload — use `argPath` + `clause`:
-
-```yaml
-pushdown:
-  - property: status
-    op: IN
-    argPath: payload.-            # `-` APPENDS to the list there
-    clause:
-      attribute_key: status
-      filter_operator: equal_to
-      values: "{values}"          # a node that IS "{values}" becomes the member LIST
-    linkPrevious: { query_operator: AND }   # only if the source links to the PRECEDING element
-```
-
-`linkPrevious` exists for sources that spell conjunction as a field on the previous clause, and
-where that field must be absent from the last one — Chatwoot is the example. It is written at
-append time, which is the only moment the engine knows which element stopped being last.
-
-**Verify pushdown against the live source.** The shapes are unforgiving and the failures are not
-subtle: Chatwoot answers HTTP 500 to a payload missing `query_operator`, and rejects one that
-carries it on the final clause. A rule that renders nothing is correctly reported as absorbing
-nothing, so a wrong rule is slow rather than incorrect — but slow is what you were fixing.
+**1. Every filter the source accepts is declared** (see Pushdown first). A mined realm already has
+the list: the scaffold writes `sourceFilters:` onto each producer, the parameters its specification
+said it accepts. That is your checklist, and loading the realm names the ones you left.
 
 **2. Declare a SECOND DOOR where your source offers one.** A join is one call per anchor, and the
 anchor cap counts anchors rather than records — so pushing a predicate on the target makes each call
@@ -547,10 +893,10 @@ count cannot be pushed. If you want both, that is two views.
 
 **What blocks a pushed aggregate, in the order the engine checks it:** `count(*)` (it folds rows of
 the whole pattern, which no single source can answer); any `collect` over the target; the target
-projected outside an aggregate; a predicate on the target the source does not absorb. Today `count`
-is delivered; `sum`/`min`/`max` are recognised and left graph-side, and the engine pushes only when
-EVERY measure in the query is deliverable — so a counts view mixing `count` with `max` does not yet
-push.
+projected outside an aggregate; a predicate on the target the source does not absorb. `count`,
+`sum`, `min` and `max` are delivered, each through its own declared aggregate, and the engine pushes
+only when EVERY measure in the query is declared — so a view mixing `count` with an undeclared `max`
+reads the records.
 
 ## Hard rules (don't get these wrong)
 
@@ -575,14 +921,22 @@ push.
   or the edge to it. A model given only the id answers with the id. Check every type: no
   reference without its name, and no name that comes back null on live data.
 - **Money twice: minor and major units, plus currency.** `amountCents` goes out with `amount`
-  and `currency`, and each description names its unit. Without that pair, models divide by 100
+  and `currency`, each declaring `unit:` and `currency:` as fields, not only in the description. Without that pair, models divide by 100
   twice or not at all. See `DECLARING_TYPES.md` §3.3.
 - **An identity is a spine; a record is a parent label.** Never `parents:` a spine; never
   normalize a shared key on your own side; always assert a non-zero cross-realm count in
   `tests/verify.sh`. A broken cross-realm join is an empty result, not an error.
-- **An undeclared filter is a per-anchor fetch.** If your source can filter, say so with
-  `pushdown:` — and verify it against the live source, because a rule that renders nothing is
-  silently just slow. See "What you DECLARE decides what the engine may do".
+- **Pushdown is designed first, from the source's documentation.** Every verified filter is a rule
+  with an explicit `op`, paging is at the source's maximum, single records are read by key, keys are
+  batched, and every remote producer declares a cache with `negativeTtlSeconds`. See
+  [Pushdown first](#pushdown-first--before-you-write-a-producer).
+- **A count is declared only where the source's total honours the filters.** A cached or
+  filter-blind total is a confident wrong number; a widened match (`match: ci`, wildcards) never
+  feeds one.
+- **`values:` is a contract, and money is never summed across currencies.** A query outside the
+  list is refused; a money view returns one row per currency.
+- **`requires:` every realm whose labels you read**, or the realm goes degraded where it is missing.
+- **Validate with `--strict` and audit before you install.** See [Before you install](#before-you-install).
 - **How many and which are two views.** One view that counts AND `collect`s always pays the
   collecting price, so triage over the whole book costs what the detail pane costs.
 - **An untested view is an unshipped view.** Declarative capabilities are only proven by a live
