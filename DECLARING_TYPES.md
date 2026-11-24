@@ -1,6 +1,6 @@
 # Declaring Types
 
-**Spec version: 0.1.0**
+**Spec version: 0.1.1**
 
 Normative. New realms declare types in the `types` record of `realm.ts`. Definition fragments
 may be imported and merged; see [Composing a realm](REALM_COMPOSITION.md). The host reads
@@ -37,7 +37,8 @@ export default {
 The record key is the label. `properties` is a record keyed by property name. A string value
 is shorthand for a property's description; an object can declare `description`, `type`
 (`string`, `int`, `number`, `boolean`), `identity`, `required`, `cardinality`, `validation`,
-`values`, `metadata`, `annotatable` and `annotationVersion`. `parents` names ancestor labels.
+`values`, `metadata`, `annotatable`, `annotationVersion`, `unit`, `currency` and `format`
+(see [Property measures](#property-measures--unit-currency-format)). `parents` names ancestor labels.
 `visibility: 'internal'` corresponds to legacy `internal: true`; absent visibility is public.
 Internal types are omitted from public discovery, not exempt from authorization.
 
@@ -58,6 +59,71 @@ The complete rule vocabulary, `nonEmpty` and `range` parameter/default semantics
 behavior and enforcement across other write paths are not yet specified. Declaring a rule must not be presented as proof that every
 write path enforces it. Authors needing a guaranteed handler boundary must also use the
 [handler schema profile](README.md#captured-handler-schema-profile).
+
+### Property measures — `unit`, `currency`, `format`
+
+What a property's value is measured in, stated where every model that reads the property sees it.
+`amountCents` and `int` do not say whether to divide by a hundred, nor which currency the cents are
+in, and money in one world routinely arrives in several currencies.
+
+```ts
+properties: {
+  amountCents:  { type: 'int', unit: 'cents', currency: 'currencyCode', description: 'Total incl. tax.' },
+  currencyCode: { type: 'string', description: 'ISO 4217 code of the amount.' },
+  vatGbp:       { type: 'decimal', currency: 'GBP' },
+  issuedOn:     { type: 'string', format: 'yyyy-MM-dd' },
+  energy:       { type: 'number', unit: 'kWh' },
+}
+```
+
+- **`unit`** — free text naming one unit of the value: `cents`, `pence`, `kWh`, `seconds`, `percent`.
+- **`currency`** — the currency of a money property, in one of two forms:
+  - **per row** (the common case): the name of another property of the same type, or of a type it
+    extends, that holds each row's ISO 4217 code. `currency: currencyCode`. A leading dot is allowed
+    (`.currencyCode`).
+  - **fixed**: a three-letter ISO 4217 code, when every row of the type is in that one currency.
+    `currency: GBP`.
+
+  The value is read as per-row when it names a property, and as a fixed code otherwise. A value that
+  is neither a property nor three upper-case letters is shown to models as written, and validation
+  warns about it.
+- **`format`** — free text naming the textual shape of the value: `yyyy-MM-dd`, `E.164`,
+  `ISO 8601 duration`.
+
+**Requirement — never sum across currencies.** A per-row `currency` is a declaration that the
+property's values are not comparable across rows with different codes. A query that totals such a
+property groups by the currency property first. The host keeps the currency property in every schema
+it shows beside the amount, so the grouping is always writable.
+
+**Where a model sees them.** The query guide and the generator's schema show each declared measure on
+the line under its type, whether or not the question names the property:
+
+```
+(:Invoice {invoiceId, amountCents, currencyCode, vatGbp, issuedOn})
+  .amountCents (int, cents; currency in .currencyCode)
+  .vatGbp (decimal, GBP)
+  .issuedOn (string; format yyyy-MM-dd)
+```
+
+The declared type leads, because a unit only means something against the kind of value it qualifies.
+When the question names the property, its description follows the measure on the same line. The
+schema endpoints carry the same facts as `unit`, `currency` (a fixed code), `currencyProperty` (the
+per-row property) and `format`, and a typed entity's TypeScript interface states them in the
+property's doc comment.
+
+These fields are also read from a legacy YAML property object, since both forms declare the same
+property record, and from the legacy `metadata:` map. A first-class key wins over `metadata`.
+
+**Keys on a property that are not read.** Validation warns about any key on a type, a property, a
+producer or a view that the host does not read, with the nearest key it does read as a suggestion.
+Four property-level keys realms have written were considered and are deliberately not read:
+
+| Key | Why not | Write instead |
+|-----|---------|---------------|
+| `valuePattern` | It gates what a producer sends to its source, which is a producer's concern. | `valuePattern` on the producer's `pushdown` rule; `format` for the shape a model should see. |
+| `default` | A record without the value reads null, which is the truth about it. A default would invent data. | `metadata: { default: … }` on an identity property, for a door's default key. |
+| `examples` | Example values for an open set are prose; a closed set already has a home. | `values:` for a closed set; sample values in the description; a worked question in the type's `examples:`. |
+| `dimension` | Marking an axis does not tell a model what to do with it. | Say in the description that the property is an axis to filter on, and never to sum across. |
 
 ## Legacy declarations
 
@@ -313,6 +379,10 @@ nothing checks them for you in either form.
 ---
 
 ## Changelog
+
+**0.1.1** — property measures: `unit`, `currency` (per-row property or fixed ISO 4217 code) and
+`format` are read and shown to models; property keys the host does not read are warned about at
+validation, with the decisions for `valuePattern`, `default`, `examples` and `dimension`.
 
 **0.2.1** — two property requirements: a reference carries the name people use, and an amount
 in minor units travels with the same amount in major units and its currency.

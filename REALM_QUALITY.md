@@ -48,9 +48,11 @@ The consequence: guidance a model must act on goes in a type's first 320 charact
 first 160, on the join the question traverses, or in a view's first sentence. Guidance in a YAML
 comment or a README helps the next author and no model.
 
-**A field the host does not read is a promise nothing keeps.** Unknown keys on types, producers and
-views are dropped at load, and on a property silently. `unit:`, `currency:`, `format:`, `pattern:`,
-`valuePattern:`, `examples:` and `default:` on a *property* do nothing: a unit or a format belongs in
+**A field the host does not read is a promise nothing keeps.** Unknown keys on types, properties,
+producers and views are dropped at load, and validation warns about each one with the nearest key that
+is read. `unit:`, `currency:` and `format:` on a property ARE read and shown to models (see
+[Property measures](DECLARING_TYPES.md#property-measures--unit-currency-format)); `pattern:`,
+`valuePattern:`, `examples:`, `default:` and `dimension:` on a *property* do nothing: guidance belongs in
 the description, `valuePattern` on a pushdown rule. Rule [Z1](#z1--must-nothing-is-declared-that-the-host-ignores-checked)
 covers this.
 
@@ -147,16 +149,16 @@ title: "The headline as the publisher wrote it, unedited; may be in the source l
 ### P2 — SHOULD: money and measures state their currency or unit. *Checked (heuristic).*
 
 *Why:* `amount > 1000` means one thing in cents and another in dollars, and a sum across currencies
-is meaningless. Say the unit in the description, and for money whether it is major or minor units and
-which property holds the ISO 4217 currency. A sibling property named `currency` or `unit` is what lets
-the host warn about a sum across mixed units. There is no `unit:` field: it is dropped.
+is meaningless. Declare `unit:` and, for money, `currency:` — the property holding each row's ISO 4217
+code, or a fixed code — and the host shows both beside the property to every model
+([Property measures](DECLARING_TYPES.md#property-measures--unit-currency-format)).
 
 ```yaml
 # Bad
 amount: { type: number, description: "Invoice amount." }
 # Good
-amountCents: { type: int, description: "Total incl. tax, in minor units (cents) of `currency`." }
-durationMs: { type: int, description: "Wall-clock run time in milliseconds." }
+amountCents: { type: int, unit: cents, currency: currency, description: "Total incl. tax." }
+durationMs: { type: int, unit: milliseconds, description: "Wall-clock run time." }
 ```
 
 ### P3 — SHOULD: an enumerated property lists its values, exactly as they appear. *Checked (heuristic).*
@@ -458,7 +460,8 @@ the kind of record: "Chatwoot support conversations and messages, read live thro
 ### Z1 — MUST: nothing is declared that the host ignores. *Checked.*
 
 *Why:* a declaration that does nothing looks like it works. The checked cases are the ones found in
-real realms: `unit:`, `currency:`, `format:`, `dimension:`, `valuePattern:` and the like on a property;
+real realms: `dimension:`, `valuePattern:`, `default:`, `examples:` and the like on a property (validation
+names each unread key, with the nearest key that is read);
 `ttlSeconds` where a `ttl` cache wants `seconds`; `cache: { kind: session }`, which is accepted and
 read as none; `cache: { kind: graph }` on a producer other than `aggregate` or `extract`; and
 `cost.latencyMs`, which nothing reads.
