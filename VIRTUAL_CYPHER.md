@@ -573,6 +573,8 @@ a short one arrives. Cursor paging is always serial.
 paging: { style: page, param: page, size: 25, maxPages: 200, total: data.meta.all_count }
 ```
 
+A total trusted only for some requests says which: `totalIgnores` names the request parameters it does not count by, and `totalRespects` the only ones it does (README, *Pagination*). A read that sends a filter the total does not count by is walked serially, to a short page, as though no `total` were declared.
+
 **A known total may finish the list past `maxPages`.** When page one of a page-number or offset
 walk reports its `total`, and the pages that total needs (cut to a pushed-down `LIMIT`) exceed
 `maxPages` but not twice `maxPages`, the walk reads on to the end of the book, or to the page that

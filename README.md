@@ -1170,6 +1170,18 @@ paging: { style: cursor, size: 100, maxPages: 10, cursorParam: after, cursorPath
 | `size` | 100 | Records per page (set to the endpoint's max). |
 | `maxPages` | 5 | Hard cap on pages fetched, independent of page numbers. `startPage: 0, maxPages: 2` fetches pages 0 and 1. For page-number or offset paging, a `total` reported on page one may extend it up to twice `maxPages` (VIRTUAL_CYPHER §5.3). |
 | `cursorParam` / `cursorPath` | `after` / — | Cursor style only: request arg + JSONPath to the next cursor. `startPage` is ignored. |
+| `total` | — | Page-number or offset style: JSONPath to the count of the whole collection on a page (`meta.total_count`). With it the pages after the first are fetched together, and a short page that the total says is not the last is reported (VIRTUAL_CYPHER §5.3). |
+| `totalIgnores` | `[]` | Request parameters the `total` does NOT count by. A read that sends a filter under one of them is walked as though no `total` were declared. See below. |
+| `totalRespects` | — | The other spelling: the only parameters the `total` counts by. A read whose pushed filters are not all among them is walked without the total. Omitted, the total is trusted for every read `totalIgnores` does not exclude. |
+
+**A total that does not count every filter: `totalIgnores` / `totalRespects`.** Some sources report a collection's total without applying every filter the request carried. One billing API answers a request for one customer's 13 invoices with the book's `total_count` of 4,638. Read as the walk's total, that announces pages that do not exist, and the exact 13 is reported as a possibly incomplete answer. Name the parameters the total ignores, as the SOURCE's parameter names (the first segment of a pushdown rule's `argPath`):
+
+```yaml
+paging: { style: page, param: page, size: 200, maxPages: 250,
+          total: meta.total_count, totalIgnores: [external_customer_id] }
+```
+
+A read that sends a filter under a listed parameter is walked to a short page with no total: it reports nothing the total cannot vouch for, and it fetches its pages one after another. Every other read keeps the total. `totalRespects: [status, currency]` says the same thing from the other side, for a source whose total counts by only a few of its parameters: the total holds only when every pushed filter is sent under one of those. Check each parameter before declaring it: call the source with the filter and walk the records, and the declared total should equal the walked count wherever it is trusted.
 
 Omitting `startPage` preserves one-based requests (`1, 2, …`). A negative value is invalid. For either starting convention, a short page ends the walk normally; a full final page at `maxPages` reports the existing truncation warning.
 
