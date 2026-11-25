@@ -884,7 +884,8 @@ separate slice.
 **Pins.** An entry is one of two disjoint shapes, and any other field set is refused. A wheel
 entry has exactly `name` (canonical lowercase), `version` (exact), `filename` (the original wheel
 filename), `tags` and `sha256`. `tags` is the filename's expanded compatibility tags, normalized
-and sorted, and must equal what the filename yields. A provided entry has exactly `name`,
+and sorted, and must equal what the filename yields and the wheel's `WHEEL` `Tag` entries expand to;
+any mismatch among filename, `WHEEL` and lock is refused. A provided entry has exactly `name`,
 `version` and `provided: true`. `filename` is metadata and never a path. For a wheel entry, the canonical distribution name and exact
 version must agree among the lock, the parsed wheel filename and the wheel's `METADATA`; any
 disagreement is refused. Ranges, URLs, paths,
@@ -900,8 +901,9 @@ re-admit, rewrite the lock or fall back to another runtime.
 **Closure.** Every requirement in a captured wheel's metadata, or in the published pinned runtime
 inventory's dependency metadata for a provided entry, that applies to the target must resolve to
 an entry of that target whose exact version satisfies it, and every `direct` name must have an
-entry. A `Requires-Dist` that refers to an extra is refused in this first contract. Entries
-unreachable from `direct` and duplicate names are refused.
+entry. A requirement that requests extras, such as `foo[bar]`, is refused in this first contract.
+Under normal marker semantics no extra is requested, so an extra-gated `Requires-Dist` is
+inapplicable and ignored. Entries unreachable from `direct` and duplicate names are refused.
 
 **Compatibility.** A host binds a target only when its `target` and `runtime` equal what the host
 reports and, for every wheel, at least one of its expanded tags is supported by that target and
@@ -909,7 +911,9 @@ its `Requires-Python`, when present, admits the reported runtime's Python versio
 `(target, runtime)` pair at most once; duplicates are refused.
 
 - A compatible pure-Python wheel is admitted on either backend; its tags need not be exactly
-  `py3-none-any`.
+  `py3-none-any`. On Wasm, purity needs `WHEEL` `Root-Is-Purelib: true`, every expanded tag with
+  ABI `none` and platform `any`, and an import payload free of native or unclassifiable files. A
+  wheel with a native or unclassifiable payload is refused even when its metadata claims pure.
 - A native wheel is admitted only on Docker, and only when its ABI and platform tags are compatible
   with the reported target.
 - A provided entry is valid only for a Wasm target. On Docker it is refused. On Wasm a native package
@@ -943,7 +947,10 @@ claimed by admission.
 **Checks.** Identical inputs give identical files and digest; each wheel hashes to its entry and
 file name; `tags` equal the filename's; the closure is complete, minimal and unambiguous per
 target; provided entries match the reported inventory exactly; and a refused candidate leaves the
-prior capture invoking. These need no network.
+prior capture invoking. Negative controls refuse a `WHEEL` tag differing from the filename or lock,
+a `foo[bar]` requirement, a Wasm wheel with `Root-Is-Purelib: false` or a non-pure tag, and one
+with a native or unclassifiable payload under pure-claiming metadata, while an extra-gated
+`Requires-Dist` stays inapplicable. These need no network.
 
 ## Realm bundles
 
