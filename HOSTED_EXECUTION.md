@@ -765,7 +765,13 @@ changes it. Both rows may share the same source.
 | `host` | Target for `runtime: "python"` |
 | --- | --- |
 | `"docker"` | The host's own Python driver, which the host selects and provisions. Never Wasm or Node |
-| `"wasm"` or absent | Wasm, following the existing inference from handler source under `wasm/`. The host must run the handler on a supported Python Wasm runtime, or refuse it as under **Unavailable runtime** below |
+| `"wasm"` | Wasm. The host must run the handler on a supported Python Wasm runtime, or refuse it as under **Unavailable runtime** below |
+| absent | Wasm, only when `entry` is omitted and the default `wasm/handlers.py` exists; otherwise the conflict below |
+
+With `host` absent the host infers nothing from any other path. A custom `entry`, even a valid
+realm-relative `.py` file, requires an explicit `host`; without one the realm has the existing
+placement conflict, with a reason that asks for `host`. An explicit `host` accepts any valid
+`entry` that exists.
 
 A realm never names or supplies an image, interpreter, command, registry or driver. Author
 configuration for choosing between runtimes would be a future contract; until then the host does
@@ -786,9 +792,12 @@ subset `[A-Za-z_][A-Za-z0-9_]*`, excluding Python's hard keywords (`False`, `Non
 as `$ref` or `naïve`, refuses binding. The verb binds the exact module-level name in `entry`
 (default `wasm/handlers.py`), spelled and cased identically, and that name must be a synchronous
 `def`. A missing name, a non-function, an `async def` or a generator refuses binding, naming the
-handler. No other name, attribute or file stands in for it.
+handler. No other name, attribute or file stands in for it. In this function slice a handler with
+`className`, or `onType`, is refused for Python, pending a contract for type methods.
 
-**Call.** The host calls `verb(input, ctx)` once per dispatch. `input` is a JSON object, checked by
+**Call.** The host calls `verb(input, ctx)` once per dispatch, in module state created for that
+dispatch alone. A host may pool workers, but nothing a call sets in module globals, caches, files
+or the environment is observable to any later dispatch. `input` is a JSON object, checked by
 the [handler schema profile](README.md#captured-handler-schema-profile) before the call. The return
 value is a JSON value the declared `output` accepts; the default is `{"type": "object"}`. Output
 checks, including the treatment of optional null fields, are those of [handlers](TYPESCRIPT_REALMS.md#handlers).
@@ -800,10 +809,11 @@ rejects becomes the envelope's fixed refusal. The caller sees no exception class
 arguments, traceback, local value or payload. A host may keep the exception class name and a
 bounded diagnostic in its own log and audit, never in the response.
 
-**Cancellation.** The host may stop a call at its deadline or when its caller goes away. A stopped
-call ends as the same fixed refusal. A result or exception the handler produces after that point is
-discarded: it is not validated, delivered, admitted or stored, and the host may audit only that a
-late completion was discarded. Effects already made are not undone.
+**Cancellation.** The host must enforce a deadline on every call. At the deadline the call ends as
+the same fixed refusal, and any reply the handler produces afterward is ignored: it is not
+validated, delivered, admitted or stored, and the host may audit only that a late completion was
+discarded. Stopping a call because its caller went away is best effort. Effects already made are
+not undone.
 
 **Context.** `ctx` is the admitted [handler context](TYPESCRIPT_REALMS.md#the-handler-context): the
 same members, approvals, refusals and audit as a TypeScript handler. Each is a brokered call. The
@@ -818,9 +828,13 @@ the owner approved. The host's driver provenance is recorded with the dispatch, 
 capture's identity, and changing the driver does not widen any grant.
 
 **Unavailable runtime.** A realm still loads its declarative content. When the chosen driver or
-backend, or a supported Python Wasm runtime, is absent, disabled or not running, its functions are unavailable and attempted dispatches
-produce the recorded refusal that the [placement](README.md#placement) notes give for a disabled
-Wasm host. A conflict between `host` and the files on disk is the existing placement conflict.
+backend, or a supported Python Wasm runtime, is absent, disabled or not running, its functions are
+unavailable and attempted dispatches produce the recorded refusal that the
+[placement](README.md#placement) notes give for a disabled Wasm host. As a target, a host should
+keep this refusal distinguishable from a handler failure; this adds no field to the envelope.
+The reference Me/Shinar host's operator-visible basis for an unbound executor is
+`EXECUTOR_UNBOUND`. That is a reference-host name, not a portable code. A conflict between `host`
+and the files on disk is the existing placement conflict.
 
 Role additions and the locked package format belong to separate slices; this one defines neither.
 
