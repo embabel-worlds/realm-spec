@@ -841,7 +841,126 @@ The reference Me/Shinar host's operator-visible basis for an unbound executor is
 `EXECUTOR_UNBOUND`. That is a reference-host name, not a portable code. A conflict between `host`
 and the files on disk is the existing placement conflict.
 
-Role additions and the locked package format belong to separate slices; this one defines neither.
+Role additions belong to a separate contract. See [pinned Python packages](#pinned-python-packages-target) for the package format.
+
+### Pinned Python packages (target)
+
+This is a target contract. No host yet admits Python packages, and nothing here names a supported
+package or target. Python packages are a separate ecosystem. They are independent of
+[`requires`](TYPESCRIPT_REALMS.md#realm-metadata), which grants nothing, and of the brokered
+[module dependencies](TYPESCRIPT_REALMS.md#dependencies). Declaring one never satisfies or
+widens another, and `dependencies/manifest.json` is not read for them.
+
+**Declaration and bytes.** A realm with Python packages carries `python/lock.json` and the wheel
+files it names at `python/wheels/<sha256 hex>.whl`. Both are realm files, so
+[capture identity](#python-handlers) covers them. A host does not fetch, build or substitute a
+package. An absent lock requests none; imports outside the closure, the standard library and the
+host's driver fail.
+
+```json
+{
+  "version": 1,
+  "direct": ["markdown-it-py"],
+  "targets": [
+    {
+      "target": "example-target",
+      "runtime": "example-runtime-1",
+      "packages": [
+        {"name": "markdown-it-py", "version": "3.0.0", "filename": "markdown_it_py-3.0.0-py3-none-any.whl", "tags": ["py3-none-any"], "sha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+        {"name": "mdurl", "version": "0.1.2", "filename": "mdurl-0.1.2-py3-none-any.whl", "tags": ["py3-none-any"], "sha256": "2222222222222222222222222222222222222222222222222222222222222222"}
+      ]
+    }
+  ]
+}
+```
+
+The hashes, `example-target` and `example-runtime-1` are illustrative, not supported values. `direct`
+names the root distributions the author pins, not Python imports; a module's import name need not
+match. `markdown-it-py` is direct and `mdurl` is transitive. Each target lists the whole closure
+built for it. A `target` is an identifier a host's support statement publishes, and `runtime` is
+the runtime identity that host reports. The first-party author tool that writes the file is a
+separate slice.
+
+**Pins.** An entry is one of two disjoint shapes, and any other field set is refused. A wheel
+entry has exactly `name` (canonical lowercase), `version` (exact), `filename` (the original wheel
+filename), `tags` and `sha256`. `tags` is the filename's expanded compatibility tags, normalized
+and sorted, and must equal what the filename yields and the wheel's `WHEEL` `Tag` entries expand to;
+any mismatch among filename, `WHEEL` and lock is refused. A provided entry has exactly `name`,
+`version` and `provided: true`. `filename` is metadata and never a path. For a wheel entry, the canonical distribution name and exact
+version must agree among the lock, the parsed wheel filename and the wheel's `METADATA`; any
+disagreement is refused. Ranges, URLs, paths,
+extras, source distributions and unknown fields are refused. A host runs no `pip`, build step,
+install hook, `setup.py` or other script a wheel carries, and contacts no registry.
+
+**Driver and runtime.** The host selects and verifies its own configured pinned driver and runtime;
+a realm never supplies one. Before binding, and again before each new invocation, the host rechecks
+that runtime's identity and availability against the lock's `runtime`. If a change leaves them no
+longer matching, the host refuses that invocation and keeps the stored prior admission; it does not
+re-admit, rewrite the lock or fall back to another runtime.
+
+**Closure.** Every requirement in a captured wheel's metadata, or in the published pinned runtime
+inventory's dependency metadata for a provided entry, that applies to the target must resolve to
+an entry of that target whose exact version satisfies it, and every `direct` name must have an
+entry. A requirement that requests extras, such as `foo[bar]`, is refused in this first contract.
+Under normal marker semantics no extra is requested, so an extra-gated `Requires-Dist` is
+inapplicable and ignored. Entries unreachable from `direct` and duplicate names are refused.
+
+**Compatibility.** A host binds a target only when its `target` and `runtime` equal what the host
+reports and, for every wheel, at least one of its expanded tags is supported by that target and
+its `Requires-Python`, when present, admits the reported runtime's Python version. A realm lists a
+`(target, runtime)` pair at most once; duplicates are refused.
+
+- A compatible pure-Python wheel is admitted on either backend; its tags need not be exactly
+  `py3-none-any`. On Wasm, purity needs `WHEEL` `Root-Is-Purelib: true`, every expanded tag with
+  ABI `none` and platform `any`, and every wheel member admitted by the target's wheel file-admission
+  policy. A filename or pure metadata alone never suffices.
+- A native wheel is admitted only on Docker, and only when its ABI and platform tags are compatible
+  with the reported target.
+- A provided entry is valid only for a Wasm target. On Docker it is refused. On Wasm a native package
+  is admitted only as one when the host reports that exact name and version as pinned in the runtime
+  identity the target names. The pin is the host's, not the realm's.
+- Anything else native, unknown or unpinned is refused, never attempted.
+
+**Wasm file admission.** The published `(target, runtime)` pair identifies one fixed, versioned
+wheel file-admission policy. All hosts reporting that pair apply the same policy. Changing the
+policy requires a new target or runtime identifier. The policy defines the accepted member paths
+and a deterministic classification rule using each member's path and content. It applies to
+every archive member, including root files, `.dist-info` and every `.data` subtree. The host
+refuses a wheel containing `.data/platlib`, `.data/scripts`, native payloads or members the policy
+cannot classify or admit. The Wasm driver stages only admitted files and disables wheel script
+registration and dynamic loading of wheel code.
+
+**Staging and activation.** Before activation the host verifies the whole set: grammar, file
+presence and digests, tags, closure and compatibility. It then stages the complete closure into
+host-owned immutable storage and binds functions only from that. Staging is bounded by the
+host's stated limits on entries, per-file and total uncompressed bytes. Across all wheels and the
+pinned runtime's provided packages, the effective staged paths must not collide: two entries
+may share a directory, as namespace packages do, but a path that more than one source supplies as a
+file, or as a file where another supplies a directory, is refused. The staged closure is keyed by
+the captured artifact digest, the selected target and the pinned runtime identity. A wheel with an absolute
+or `..` path, a link, a `.pth` file, an editable or `direct_url.json` marker, or bytes past a
+limit is refused. The only import path entries are those the host creates. Nothing runs at
+verification or staging.
+
+**Refusal.** A failure refuses the candidate as a whole with the reason named, binds no function and
+runs no package code. A realm already admitted keeps its prior approved capture until revoked or
+superseded; a refused candidate never replaces it, and nothing falls back to partial packages.
+
+**What each proves.** A host checks the lock schema and the rules above. Separately, a lock or
+bundle that rebuilds to the same bytes from the same registry state is author-tool evidence, which
+the host neither requires nor checks. A bundle's `contentDigest` covers the captured files,
+not that reproducibility. A
+realized install, meaning the packages import and run on a backend, is later proof and is not
+claimed by admission.
+
+**Checks.** Identical inputs give identical files and digest; each wheel hashes to its entry and
+file name; `tags` agree across the lock, filename and `WHEEL`; the closure is complete, minimal and unambiguous per
+target; provided entries match the reported inventory exactly; and a refused candidate leaves the
+prior capture invoking. Included fixtures cover the standard typing and metadata members the policy
+admits. Negative controls refuse a `WHEEL` tag differing from the filename or lock, a `foo[bar]`
+requirement, a Wasm wheel with `Root-Is-Purelib: false` or a non-pure tag, and wheels whose disguised
+native member, `.data/platlib` member, script or unclassifiable member sits under pure-claiming
+metadata, while an extra-gated `Requires-Dist` stays inapplicable. These need no network.
 
 ## Realm bundles
 
