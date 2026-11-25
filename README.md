@@ -4958,6 +4958,13 @@ author's head re-verifies nothing.
 Scope the view sweep to THIS realm's own views — a world carries other realms' and the host's
 too, and a harness that fails on a neighbour's defect is a harness people learn to ignore.
 
+**Read every figure through the engine's verdict.** An answer says beside its rows whether it is
+whole: a query's `error`, `reason` and `warnings`, a view's `status`, `outcome` and `warnings`.
+A figure read past them reports a source that failed under load, or a page it capped, as drift
+in the realm, and a negative check passes on rows that are not all there. Use the
+[battery library](battery/README.md): a pinned copy in `tests/lib/` prints `PARTIAL <n>: <reason>`
+or `REFUSED: <why>` where a short figure would be, so an exact check fails with the engine's words.
+
 ## `seed/`
 
 Demo data for the SOURCE system, declared where anyone can read it before it runs. A realm

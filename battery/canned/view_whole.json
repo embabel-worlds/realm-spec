@@ -1,0 +1,1 @@
+{"status": "SUCCEEDED", "outcome": "OK", "data": [{"a": 1}, {"a": 2}], "warnings": [{"code": "FILTER_NOT_PUSHED", "message": "cost"}]}

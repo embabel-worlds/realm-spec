@@ -1,0 +1,59 @@
+# The battery library (battery/): its three copies agree on every canned answer, and its code
+# lists are the engine's. The engine check reads the codes out of published server images, so
+# it runs weekly too: a new kind of note on main fails here before a realm's battery reads it
+# as whole.
+
+name: Battery library
+
+on:
+  push:
+    branches: [main]
+    paths: ["battery/**", ".github/workflows/battery.yml"]
+  pull_request:
+    paths: ["battery/**", ".github/workflows/battery.yml"]
+  schedule:
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verdicts:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: short.py, short.mjs, short.sh and the script form agree with expected.json
+        run: python3 battery/test_short.py
+      - name: shellcheck short.sh
+        run: shellcheck -s sh battery/short.sh
+
+  engine-codes:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # main as merged: every code it writes is decided, and every decided code is still written
+          - image: ghcr.io/embabel/assistant:canary
+            older: ""
+          # the stable release may predate codes the library knows; it must still have none undecided
+          - image: ghcr.io/embabel/assistant:latest
+            older: "--older"
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+      - name: pull ${{ matrix.image }}
+        run: docker pull --quiet "${{ matrix.image }}"
+      - name: every engine code is decided
+        run: python3 battery/engine_codes.py --image "${{ matrix.image }}" ${{ matrix.older }}

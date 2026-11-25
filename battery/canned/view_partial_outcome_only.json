@@ -1,0 +1,10 @@
+{
+ "status": "SUCCEEDED",
+ "outcome": "PARTIAL",
+ "data": [
+  {
+   "a": 1
+  }
+ ],
+ "warnings": []
+}

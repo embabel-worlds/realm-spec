@@ -1,0 +1,11 @@
+{
+ "rows": [
+  {
+   "n": 4
+  }
+ ],
+ "error": null,
+ "answerBoundary": {
+  "kind": "RECORD_CARD"
+ }
+}
