@@ -862,31 +862,48 @@ built for it. A `target` is an identifier a host's support statement publishes, 
 the runtime identity that host reports. The first-party author tool that writes the file is a
 separate slice.
 
-**Pins.** Each entry has a canonical lowercase `name`, an exact `version`, the original wheel
-`filename` and its `sha256`. `tags` is the filename's expanded compatibility tags, normalized and
-sorted, and must equal what the filename yields. `filename` is metadata and never a path. Ranges,
-URLs, paths, extras, source distributions and unknown fields are refused. A host runs no `pip`,
-build step, install hook or `setup.py`, and contacts no registry.
+**Pins.** An entry is one of two disjoint shapes, and any other field set is refused. A wheel
+entry has exactly `name` (canonical lowercase), `version` (exact), `filename` (the original wheel
+filename), `tags` and `sha256`. `tags` is the filename's expanded compatibility tags, normalized
+and sorted, and must equal what the filename yields. A provided entry has exactly `name`,
+`version` and `provided: true`. `filename` is metadata and never a path. For a wheel entry, the canonical distribution name and exact
+version must agree among the lock, the parsed wheel filename and the wheel's `METADATA`; any
+disagreement is refused. Ranges, URLs, paths,
+extras, source distributions and unknown fields are refused. A host runs no `pip`, build step,
+install hook, `setup.py` or other script a wheel carries, and contacts no registry.
 
-**Closure.** Every requirement in a captured wheel's metadata that applies to the target must resolve
-to an entry of that target whose exact version satisfies it, and every `direct` name must have an
+**Driver and runtime.** The host selects and verifies its own configured pinned driver and runtime;
+a realm never supplies one. Before binding, and again before each new invocation, the host rechecks
+that runtime's identity and availability against the lock's `runtime`. If a change leaves them no
+longer matching, the host refuses that invocation and keeps the stored prior admission; it does not
+re-admit, rewrite the lock or fall back to another runtime.
+
+**Closure.** Every requirement in a captured wheel's metadata, or in the published pinned runtime
+inventory's dependency metadata for a provided entry, that applies to the target must resolve to
+an entry of that target whose exact version satisfies it, and every `direct` name must have an
 entry. Entries unreachable from `direct` and duplicate names are refused.
 
 **Compatibility.** A host binds a target only when its `target` and `runtime` equal what the host
-reports and every wheel's tags fit that target.
+reports and, for every wheel, at least one of its expanded tags is supported by that target and
+its `Requires-Python`, when present, admits the reported runtime's Python version. A realm lists a
+`(target, runtime)` pair at most once; duplicates are refused.
 
-- Pure Python (`py3-none-any`) wheels are admitted on either backend.
+- A compatible pure-Python wheel is admitted on either backend; its tags need not be exactly
+  `py3-none-any`.
 - A native wheel is admitted only on Docker, and only when its ABI and platform tags are compatible
   with the reported target.
-- On Wasm a native package is admitted only as `{"name", "version", "provided": true}`, with no
-  wheel or `sha256`, when the host reports that exact name and version as pinned in the runtime
+- On Wasm a native package is admitted only as a provided entry when the host reports that exact name and version as pinned in the runtime
   identity the target names. The pin is the host's, not the realm's.
 - Anything else native, unknown or unpinned is refused, never attempted.
 
 **Staging and activation.** Before activation the host verifies the whole set: grammar, file
 presence and digests, tags, closure and compatibility. It then stages the complete closure into
 host-owned immutable storage and binds functions only from that. Staging is bounded by the
-host's stated limits on entries, per-file and total uncompressed bytes. A wheel with an absolute
+host's stated limits on entries, per-file and total uncompressed bytes. Across all wheels and the
+pinned runtime's provided packages, the effective staged paths must not collide: two entries
+may share a directory, as namespace packages do, but a path that more than one source supplies as a
+file, or as a file where another supplies a directory, is refused. The staged closure is keyed by
+the captured artifact digest, the selected target and the pinned runtime identity. A wheel with an absolute
 or `..` path, a link, a `.pth` file, an editable or `direct_url.json` marker, or bytes past a
 limit is refused. The only import path entries are those the host creates. Nothing runs at
 verification or staging.
@@ -895,9 +912,9 @@ verification or staging.
 runs no package code. A realm already admitted keeps its prior approved capture until revoked or
 superseded; a refused candidate never replaces it, and nothing falls back to partial packages.
 
-**What each proves.** The lock schema and the checks above are what a host verifies. A lock or bundle
-that rebuilds to the same bytes from the same registry state is evidence from the author tool,
-which the host does not require or check. A bundle's `contentDigest` covers the captured files,
+**What each proves.** A host checks the lock schema and the rules above. Separately, a lock or
+bundle that rebuilds to the same bytes from the same registry state is author-tool evidence, which
+the host neither requires nor checks. A bundle's `contentDigest` covers the captured files,
 not that reproducibility. The identity of a staged closure is the captured artifact digest. A
 realized install, meaning the packages import and run on a backend, is later proof and is not
 claimed by admission.
