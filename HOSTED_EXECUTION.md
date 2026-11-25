@@ -768,7 +768,8 @@ changes it. Both rows may share the same source.
 | `"wasm"` | Wasm. The host must run the handler on a supported Python Wasm runtime, or refuse it as under **Unavailable runtime** below |
 | absent | Wasm, only when `entry` is omitted and the default `wasm/handlers.py` exists; otherwise the conflict below |
 
-With `host` absent the host infers nothing from any other path. A custom `entry`, even a valid
+A data-only realm, with no handlers, may omit `host` and `entry` as today. With `host` absent
+and handlers declared, the host infers nothing from any other path. A custom `entry`, even a valid
 realm-relative `.py` file, requires an explicit `host`; without one the realm has the existing
 placement conflict, with a reason that asks for `host`. An explicit `host` accepts any valid
 `entry` that exists.
@@ -796,8 +797,10 @@ handler. No other name, attribute or file stands in for it. In this function sli
 `className`, or `onType`, is refused for Python, pending a contract for type methods.
 
 **Call.** The host calls `verb(input, ctx)` once per dispatch, in module state created for that
-dispatch alone. A host may pool workers, but nothing a call sets in module globals, caches, files
-or the environment is observable to any later dispatch. `input` is a JSON object, checked by
+dispatch alone. A host may pool workers, but nothing a call sets in guest module globals, caches,
+scratch files or the environment is observable to any later dispatch. Persistence the host brokers
+and the realm is admitted to, such as [dependency state](TYPESCRIPT_REALMS.md#dependency-state),
+may survive as its own contract says. `input` is a JSON object, checked by
 the [handler schema profile](README.md#captured-handler-schema-profile) before the call. The return
 value is a JSON value the declared `output` accepts; the default is `{"type": "object"}`. Output
 checks, including the treatment of optional null fields, are those of [handlers](TYPESCRIPT_REALMS.md#handlers).
@@ -809,8 +812,10 @@ rejects becomes the envelope's fixed refusal. The caller sees no exception class
 arguments, traceback, local value or payload. A host may keep the exception class name and a
 bounded diagnostic in its own log and audit, never in the response.
 
-**Cancellation.** The host must enforce a deadline on every call. At the deadline the call ends as
-the same fixed refusal, and any reply the handler produces afterward is ignored: it is not
+**Cancellation.** The host must enforce a deadline on every call. At the deadline, or on
+cancellation, the invocation ceases to authorize any new brokered call, and the call ends as the
+same fixed refusal. Effects already authorized or completed follow the shared semantics. Any reply
+the handler produces afterward is discarded: it is not
 validated, delivered, admitted or stored, and the host may audit only that a late completion was
 discarded. Stopping a call because its caller went away is best effort. Effects already made are
 not undone.
@@ -836,7 +841,7 @@ The reference Me/Shinar host's operator-visible basis for an unbound executor is
 `EXECUTOR_UNBOUND`. That is a reference-host name, not a portable code. A conflict between `host`
 and the files on disk is the existing placement conflict.
 
-Role additions and the locked package format belong to separate slices; this one defines neither.
+Role additions belong to a separate contract. See [pinned Python packages](#pinned-python-packages-target) for the package format.
 
 ### Pinned Python packages (target)
 
@@ -895,7 +900,8 @@ re-admit, rewrite the lock or fall back to another runtime.
 **Closure.** Every requirement in a captured wheel's metadata, or in the published pinned runtime
 inventory's dependency metadata for a provided entry, that applies to the target must resolve to
 an entry of that target whose exact version satisfies it, and every `direct` name must have an
-entry. Entries unreachable from `direct` and duplicate names are refused.
+entry. A `Requires-Dist` that refers to an extra is refused in this first contract. Entries
+unreachable from `direct` and duplicate names are refused.
 
 **Compatibility.** A host binds a target only when its `target` and `runtime` equal what the host
 reports and, for every wheel, at least one of its expanded tags is supported by that target and
@@ -906,7 +912,8 @@ its `Requires-Python`, when present, admits the reported runtime's Python versio
   `py3-none-any`.
 - A native wheel is admitted only on Docker, and only when its ABI and platform tags are compatible
   with the reported target.
-- On Wasm a native package is admitted only as a provided entry when the host reports that exact name and version as pinned in the runtime
+- A provided entry is valid only for a Wasm target. On Docker it is refused. On Wasm a native package
+  is admitted only as one when the host reports that exact name and version as pinned in the runtime
   identity the target names. The pin is the host's, not the realm's.
 - Anything else native, unknown or unpinned is refused, never attempted.
 
@@ -929,7 +936,7 @@ superseded; a refused candidate never replaces it, and nothing falls back to par
 **What each proves.** A host checks the lock schema and the rules above. Separately, a lock or
 bundle that rebuilds to the same bytes from the same registry state is author-tool evidence, which
 the host neither requires nor checks. A bundle's `contentDigest` covers the captured files,
-not that reproducibility. The identity of a staged closure is the captured artifact digest. A
+not that reproducibility. A
 realized install, meaning the packages import and run on a backend, is later proof and is not
 claimed by admission.
 
