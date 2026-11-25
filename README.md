@@ -3038,7 +3038,7 @@ Two hosts exist:
 | `docker` | the compiled `dist/` JS modules, in the host's Node code sandbox | Default. Handlers need npm dependencies or the full TS project layout. Portable realm code still has no raw network or ambient credential access. |
 | `wasm` | `dist/handlers.wasm`, in-process inside the host runtime | Functions are small and dependency-free, per-dispatch latency matters, or the deployment offers no Node code sandbox. |
 
-The `docker` value names the Node bundle host, not a container technology. A host runs a realm's
+For a Node bundle, the `docker` value names the Node bundle host, not a container technology. An explicit `host: docker` with `runtime: python` instead targets the host's Python container driver; see [Python handlers](HOSTED_EXECUTION.md#python-handlers). A host runs a realm's
 Node bundle in whatever conforming way it chooses, natively or in a container, unless the realm
 itself declares a requirement. A realm observes only the capability set below, whichever way the
 host runs it.
