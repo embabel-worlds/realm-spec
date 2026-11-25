@@ -824,6 +824,89 @@ Wasm host. A conflict between `host` and the files on disk is the existing place
 
 Role additions and the locked package format belong to separate slices; this one defines neither.
 
+### Pinned Python packages (target)
+
+This is a target contract. No host yet admits Python packages, and nothing here names a supported
+package or target. Python packages are a separate ecosystem. They are independent of
+[`requires`](TYPESCRIPT_REALMS.md#realm-metadata), which grants nothing, and of the brokered
+[module dependencies](TYPESCRIPT_REALMS.md#dependencies). Declaring one never satisfies or
+widens another, and `dependencies/manifest.json` is not read for them.
+
+**Declaration and bytes.** A realm with Python packages carries `python/lock.json` and the wheel
+files it names at `python/wheels/<sha256 hex>.whl`. Both are realm files, so
+[capture identity](#python-handlers) covers them. A host does not fetch, build or substitute a
+package. An absent lock requests none; imports outside the closure, the standard library and the
+host's driver fail.
+
+```json
+{
+  "version": 1,
+  "direct": ["markdown-it-py"],
+  "targets": [
+    {
+      "target": "example-target",
+      "runtime": "example-runtime-1",
+      "packages": [
+        {"name": "markdown-it-py", "version": "3.0.0", "filename": "markdown_it_py-3.0.0-py3-none-any.whl", "tags": ["py3-none-any"], "sha256": "1111111111111111111111111111111111111111111111111111111111111111"},
+        {"name": "mdurl", "version": "0.1.2", "filename": "mdurl-0.1.2-py3-none-any.whl", "tags": ["py3-none-any"], "sha256": "2222222222222222222222222222222222222222222222222222222222222222"}
+      ]
+    }
+  ]
+}
+```
+
+The hashes, `example-target` and `example-runtime-1` are illustrative, not supported values. `direct`
+names the root distributions the author pins, not Python imports; a module's import name need not
+match. `markdown-it-py` is direct and `mdurl` is transitive. Each target lists the whole closure
+built for it. A `target` is an identifier a host's support statement publishes, and `runtime` is
+the runtime identity that host reports. The first-party author tool that writes the file is a
+separate slice.
+
+**Pins.** Each entry has a canonical lowercase `name`, an exact `version`, the original wheel
+`filename` and its `sha256`. `tags` is the filename's expanded compatibility tags, normalized and
+sorted, and must equal what the filename yields. `filename` is metadata and never a path. Ranges,
+URLs, paths, extras, source distributions and unknown fields are refused. A host runs no `pip`,
+build step, install hook or `setup.py`, and contacts no registry.
+
+**Closure.** Every requirement in a captured wheel's metadata that applies to the target must resolve
+to an entry of that target whose exact version satisfies it, and every `direct` name must have an
+entry. Entries unreachable from `direct` and duplicate names are refused.
+
+**Compatibility.** A host binds a target only when its `target` and `runtime` equal what the host
+reports and every wheel's tags fit that target.
+
+- Pure Python (`py3-none-any`) wheels are admitted on either backend.
+- A native wheel is admitted only on Docker, and only when its ABI and platform tags are compatible
+  with the reported target.
+- On Wasm a native package is admitted only as `{"name", "version", "provided": true}`, with no
+  wheel or `sha256`, when the host reports that exact name and version as pinned in the runtime
+  identity the target names. The pin is the host's, not the realm's.
+- Anything else native, unknown or unpinned is refused, never attempted.
+
+**Staging and activation.** Before activation the host verifies the whole set: grammar, file
+presence and digests, tags, closure and compatibility. It then stages the complete closure into
+host-owned immutable storage and binds functions only from that. Staging is bounded by the
+host's stated limits on entries, per-file and total uncompressed bytes. A wheel with an absolute
+or `..` path, a link, a `.pth` file, an editable or `direct_url.json` marker, or bytes past a
+limit is refused. The only import path entries are those the host creates. Nothing runs at
+verification or staging.
+
+**Refusal.** A failure refuses the candidate as a whole with the reason named, binds no function and
+runs no package code. A realm already admitted keeps its prior approved capture until revoked or
+superseded; a refused candidate never replaces it, and nothing falls back to partial packages.
+
+**What each proves.** The lock schema and the checks above are what a host verifies. A lock or bundle
+that rebuilds to the same bytes from the same registry state is evidence from the author tool,
+which the host does not require or check. A bundle's `contentDigest` covers the captured files,
+not that reproducibility. The identity of a staged closure is the captured artifact digest. A
+realized install, meaning the packages import and run on a backend, is later proof and is not
+claimed by admission.
+
+**Checks.** Identical inputs give identical files and digest; each wheel hashes to its entry and
+file name; `tags` equal the filename's; the closure is complete, minimal and unambiguous per
+target; provided entries match the reported inventory exactly; and a refused candidate leaves the
+prior capture invoking. These need no network.
+
 ## Realm bundles
 
 A realm bundle is one zip that carries a realm and the module bytes its dependencies name.
