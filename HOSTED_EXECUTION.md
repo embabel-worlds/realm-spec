@@ -912,14 +912,23 @@ its `Requires-Python`, when present, admits the reported runtime's Python versio
 
 - A compatible pure-Python wheel is admitted on either backend; its tags need not be exactly
   `py3-none-any`. On Wasm, purity needs `WHEEL` `Root-Is-Purelib: true`, every expanded tag with
-  ABI `none` and platform `any`, and an import payload free of native or unclassifiable files. A
-  wheel with a native or unclassifiable payload is refused even when its metadata claims pure.
+  ABI `none` and platform `any`, and every wheel member admitted by the target's wheel file-admission
+  policy. A filename or pure metadata alone never suffices.
 - A native wheel is admitted only on Docker, and only when its ABI and platform tags are compatible
   with the reported target.
 - A provided entry is valid only for a Wasm target. On Docker it is refused. On Wasm a native package
   is admitted only as one when the host reports that exact name and version as pinned in the runtime
   identity the target names. The pin is the host's, not the realm's.
 - Anything else native, unknown or unpinned is refused, never attempted.
+
+**Wasm file admission.** The published `(target, runtime)` pair identifies one fixed, versioned
+wheel file-admission policy. All hosts reporting that pair apply the same policy. Changing the
+policy requires a new target or runtime identifier. The policy defines the accepted member paths
+and a deterministic classification rule using each member's path and content. It applies to
+every archive member, including root files, `.dist-info` and every `.data` subtree. The host
+refuses a wheel containing `.data/platlib`, `.data/scripts`, native payloads or members the policy
+cannot classify or admit. The Wasm driver stages only admitted files and disables wheel script
+registration and dynamic loading of wheel code.
 
 **Staging and activation.** Before activation the host verifies the whole set: grammar, file
 presence and digests, tags, closure and compatibility. It then stages the complete closure into
@@ -945,12 +954,13 @@ realized install, meaning the packages import and run on a backend, is later pro
 claimed by admission.
 
 **Checks.** Identical inputs give identical files and digest; each wheel hashes to its entry and
-file name; `tags` equal the filename's; the closure is complete, minimal and unambiguous per
+file name; `tags` agree across the lock, filename and `WHEEL`; the closure is complete, minimal and unambiguous per
 target; provided entries match the reported inventory exactly; and a refused candidate leaves the
-prior capture invoking. Negative controls refuse a `WHEEL` tag differing from the filename or lock,
-a `foo[bar]` requirement, a Wasm wheel with `Root-Is-Purelib: false` or a non-pure tag, and one
-with a native or unclassifiable payload under pure-claiming metadata, while an extra-gated
-`Requires-Dist` stays inapplicable. These need no network.
+prior capture invoking. Included fixtures cover the standard typing and metadata members the policy
+admits. Negative controls refuse a `WHEEL` tag differing from the filename or lock, a `foo[bar]`
+requirement, a Wasm wheel with `Root-Is-Purelib: false` or a non-pure tag, and wheels whose disguised
+native member, `.data/platlib` member, script or unclassifiable member sits under pure-claiming
+metadata, while an extra-gated `Requires-Dist` stays inapplicable. These need no network.
 
 ## Realm bundles
 
