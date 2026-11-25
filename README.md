@@ -766,7 +766,7 @@ A virtual type declares one or more `virtualJoins:`. Each says how the type is r
           id: id
 ```
 
-`virtualJoins` fields: `anchorLabel`, `relationship`, `keyField`, `recordKeyField` (defaults to `keyField` — a same-property id-match), `producer`, optional `materializedKeyField` (the property on every fetched TARGET record that holds this join's key — see *Finding a virtual node by its key* below), optional `brings` (declared sub-graph), `maxAnchors`/`maxFanoutTotal` (caps). For a join to an **external-identity node** (a bridge like `GitHubIdentity` / `HubSpotOwner`), declare a `resolve:` rule chain + `writeThrough`/`refreshAfter` instead — see **Identity bridges** below (`persist: true` is the older eager-only form, and is refused on a join that is not a bridge — VIRTUAL_CYPHER §5.2.1). There is no flag that keeps a MINTED anchor: an unbound back-hop mints one per `materializedKeyField` value for the length of the query, and keeping a discovered identity is a bridge's job. A list with more than one entry, or any join that can fan in, requires an `identity` property so convergent paths dedupe to one node.
+`virtualJoins` fields: `anchorLabel`, `relationship`, `keyField`, `recordKeyField` (defaults to `keyField` — a same-property id-match), `producer`, optional `materializedKeyField` (the property on every fetched TARGET record that holds this join's key — see *Finding a virtual node by its key* below), optional `sweepDoor` (the whole-book producer read in this join's place — see *Which book a sweep reads* below), optional `brings` (declared sub-graph), `maxAnchors`/`maxFanoutTotal` (caps). For a join to an **external-identity node** (a bridge like `GitHubIdentity` / `HubSpotOwner`), declare a `resolve:` rule chain + `writeThrough`/`refreshAfter` instead — see **Identity bridges** below (`persist: true` is the older eager-only form, and is refused on a join that is not a bridge — VIRTUAL_CYPHER §5.2.1). There is no flag that keeps a MINTED anchor: an unbound back-hop mints one per `materializedKeyField` value for the length of the query, and keeping a discovered identity is a bridge's job. A list with more than one entry, or any join that can fan in, requires an `identity` property so convergent paths dedupe to one node.
 
 The query may only reach a virtual label by **traversing a declared join from a bound anchor** — a naked `MATCH (hc:HubSpotContact)` is rejected. Every materialized node carries the extra `:Virtual` label, a `dateRetrieved` ISO-8601 timestamp, and the host-bound `worldId`, `contextId`, and access-policy revision (so the normal scope rewriter matches it) — bookkeeping that `labels()`, `keys()` and `properties()` leave out, so a fetched node reads as the stored record would ([VIRTUAL_CYPHER.md §2](VIRTUAL_CYPHER.md#2-the-execution-model)); the user's query runs through the rewriter unchanged, and the whole materialization is rolled back when the query completes.
 
@@ -786,6 +786,16 @@ A query may also reach a virtual node by **pinning the anchor with a literal** �
 ```
 
 Then the target can be matched by that property directly, with no door written: `MATCH (p:BiblePerson {name:'Moses'})` — or `WHERE p.name = 'Moses'`, `WHERE p.name IN [...]`, or a value bound upstream — is answered as if `(:BibleNameQuery {name:'Moses'})-[:NAMED]->(p)` had been written, and `p` anchors any join that leaves it (`(p)-[:FATHER*]->(a:BiblePerson)`). The query's own predicate still applies to the fetched rows with Cypher's semantics, so a producer that matches keys case-insensitively may fetch rows an exact `=` then filters out. The declaration is required: a target property that merely shares the key's name is never treated as the key, because fetching by a coincidence of spelling answers a different question with full confidence. Without it the bare match is still rejected as a naked scan, and the rejection names the keyed form when one is declared. When several joins declare a `materializedKeyField` the query pins, the first in declaration order is taken.
+
+**Which book a sweep reads: `sweepDoor`.** When a keyed join has more keys than one fetch may ask for, or the keys would cost more than reading the book, the engine reads a whole-book door in its place and links the records back by the join's `materializedKeyField` (or, on a spine edge, by `ridesHub`). Undeclared, that book is the target type's implicit door, which is right only when it holds every record the join could return. When it does not (an implicit door over ACTIVE subscriptions, beside a join over subscriptions of every status), name the book that does:
+
+```yaml
+- { anchorLabel: Customer, relationship: HAS_ANY_SUBSCRIPTION, keyField: externalId,
+    recordKeyField: customerExternalId, producer: subscriptionsByCustomerAnyStatus,
+    materializedKeyField: customerExternalId, sweepDoor: subscriptionsAnyStatus }
+```
+
+The sweep then reads that book and no other, spine edges included. The engine cannot check a population, so `sweepDoor` is the author's assertion that its records are a superset of the join's, like `ridesHub` and `implicitDoor`. Loading refuses a `sweepDoor` that names no other book join on the type, and a `sweepDoor` on a join with nothing to link the read back (no `materializedKeyField` and no `ridesHub`).
 
 ### `producers/`
 
@@ -1015,7 +1025,7 @@ pushdown:
   - property: html_url            # the target-node property the predicate is on
     op: CONTAINS                  # CONTAINS (the default when op is left out), EQUALS, IN, or a range
     qualifier: "repo:{value}"     # native fragment; {value} ← the predicate's value
-    valuePattern: '…([\w.-]+/[\w.-]+?)(?:/|$)'   # optional regex; group 1 replaces {value}
+    valuePattern: '…([\w.-]+/[\w.-]+?)(?:/|$)'   # optional regex; group 1 replaces {value} (the whole match when it has no group)
 ```
 
 So `WHERE i.html_url CONTAINS 'acme-corp/widgets'` turns `is:issue author:X {filters}` into `is:issue author:X repo:acme-corp/widgets` — one scoped search instead of fetching the author's thousands and intersecting in the graph. The mapping is declarative and source-specific; the engine knows nothing of `repo:`.
@@ -1023,6 +1033,24 @@ So `WHERE i.html_url CONTAINS 'acme-corp/widgets'` turns `is:issue author:X {fil
 **Only a LITERAL is pushed.** `run.created_at >= '2026-09-16T00:00:00Z'` renders into the source's filter; `run.created_at >= toString(datetime() - duration({days: 7}))` does not — the value is not known when the fetch is planned, so the fetch is broad and the comparison is applied in the graph. A view's declared params become literals before the query is read (VIRTUAL_CYPHER §7.6.1), which is how a windowed view gets a pushed-down window: take `since` as a parameter and let the app or the asker supply the date. A relative window ("the last 7 days") cannot be pushed by any spelling; say so in the view's description and bound the fetch with `paging.maxPages`.
 
 **Every common spelling of a date reaches a temporal rule.** A range bound (`>`, `>=`, `<`, `<=`) that fails a rule's `valuePattern` as written is tried once more in its canonical UTC spelling, `yyyy-MM-ddTHH:mm:ssZ`, and the pattern decides again: `'2026-10-22'`, `'2026-10-22T00:00:00+00:00'`, `'2026-10-22T00:00:00.000Z'`, `'2026-10-22 00:00:00'` and `'2026-10-22T00:00:00'` all reach a `since:` rule declared on that form as `2026-10-22T00:00:00Z`. A bare date is midnight UTC; a date-time with no zone is read as UTC. The source keeps exactly the rows the graph's own comparison keeps: under `>` and `<=` the bound sent is the second before the instant, since a stored `…T00:00:00Z` sorts after the bare `'2026-10-22'`. A spelling the graph compares differently — an offset other than zero (`…T02:00:00+02:00`), or a space before a time other than midnight — is not re-spelled, and nor is an equality (`= '2026-10-22'` names a day, which midnight is not). A value that still fails the pattern stays a graph-side filter, as before, and is now **said**: see `PUSHDOWN_VALUE_UNMATCHED` (VIRTUAL_CYPHER §diagnostics).
+
+**A rule can say how its source spells a date: `format:`.** Some sources compare a date or date-time only in their own spelling and refuse any other; one answers HTTP 500 to `'2000-01-01T00:00:00Z'` because it expects `'2000-01-01 00:00:00'`. A rule may declare `format:`, a `java.time` pattern for that spelling. Every ISO-8601 spelling of a range bound (a bare date, `Z`, `+00:00`, a fraction, no zone) is then re-spelled into it, in UTC, before `valuePattern` sees it, and the bound is the instant the graph's own comparison of the written text keeps (the second before it under `>` and `<=`, as above). A pattern with no time of day (`yyyy-MM-dd`) is a date column, and takes only bare dates. An equality, and each `IN` member, is taken only in the canonical spelling. A bound that cannot be said exactly in the format is not sent, and `PUSHDOWN_VALUE_UNMATCHED` names the format.
+
+```yaml
+- { property: create_date, op: GREATER_THAN_OR_EQUAL, argPath: "domain.-",
+    clause: ["create_date", ">=", "{value}"], format: "yyyy-MM-dd HH:mm:ss" }
+```
+
+The source's spelling and the graph's should agree, or a bound sent correctly is compared wrongly when the records come back. Store the property as ISO-8601 UTC with a `compute:` when the source returns its own spelling: `create_date: "CASE r.create_date WHEN false THEN null ELSE replace(r.create_date, ' ', 'T') + 'Z' END"`. That also lets the host's date functions (`datetime(x.create_date)`) read it, since they take ISO-8601 text only.
+
+**A source that compares by the day: `granularity: day`.** Some sources compare a date only by the day and offer only strict comparisons. A rule declaring `granularity: day` also takes the inclusive (or strict) partner of its own operator on a BARE date, with the date moved by a day. Under a `>` rule, `>= D` is sent as `> D-1`. Under a `<` rule, `<= D` is sent as `< D+1`. The mirrors apply under `>=` and `<=` rules. Over stored bare dates, the two keep the same rows. A bound with a time of day is not moved, and stays a graph-side filter, said as `PUSHDOWN_VALUE_UNMATCHED`. Any other granularity is refused at load.
+
+```yaml
+- { property: openedOn, op: GREATER_THAN, argPath: payload.-, granularity: day,
+    valuePattern: '^(\d{4}-\d{2}-\d{2})$',
+    clause: { attribute_key: opened_on, filter_operator: is_greater_than, values: ["{value}"] } }
+# WHERE c.openedOn >= '2026-09-01' is sent as is_greater_than 2026-08-31
+```
 
 **Three consequences of "attached" predicates, verified the hard way (2026-09-23) and the first two re-measured (2026-10-17) now that a predicate over a projected name is pushed like any other:**
 
