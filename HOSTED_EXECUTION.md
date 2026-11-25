@@ -768,7 +768,8 @@ changes it. Both rows may share the same source.
 | `"wasm"` | Wasm. The host must run the handler on a supported Python Wasm runtime, or refuse it as under **Unavailable runtime** below |
 | absent | Wasm, only when `entry` is omitted and the default `wasm/handlers.py` exists; otherwise the conflict below |
 
-With `host` absent the host infers nothing from any other path. A custom `entry`, even a valid
+A data-only realm, with no handlers, may omit `host` and `entry` as today. With `host` absent
+and handlers declared, the host infers nothing from any other path. A custom `entry`, even a valid
 realm-relative `.py` file, requires an explicit `host`; without one the realm has the existing
 placement conflict, with a reason that asks for `host`. An explicit `host` accepts any valid
 `entry` that exists.
@@ -796,8 +797,10 @@ handler. No other name, attribute or file stands in for it. In this function sli
 `className`, or `onType`, is refused for Python, pending a contract for type methods.
 
 **Call.** The host calls `verb(input, ctx)` once per dispatch, in module state created for that
-dispatch alone. A host may pool workers, but nothing a call sets in module globals, caches, files
-or the environment is observable to any later dispatch. `input` is a JSON object, checked by
+dispatch alone. A host may pool workers, but nothing a call sets in guest module globals, caches,
+scratch files or the environment is observable to any later dispatch. Persistence the host brokers
+and the realm is admitted to, such as [dependency state](TYPESCRIPT_REALMS.md#dependency-state),
+may survive as its own contract says. `input` is a JSON object, checked by
 the [handler schema profile](README.md#captured-handler-schema-profile) before the call. The return
 value is a JSON value the declared `output` accepts; the default is `{"type": "object"}`. Output
 checks, including the treatment of optional null fields, are those of [handlers](TYPESCRIPT_REALMS.md#handlers).
@@ -809,8 +812,10 @@ rejects becomes the envelope's fixed refusal. The caller sees no exception class
 arguments, traceback, local value or payload. A host may keep the exception class name and a
 bounded diagnostic in its own log and audit, never in the response.
 
-**Cancellation.** The host must enforce a deadline on every call. At the deadline the call ends as
-the same fixed refusal, and any reply the handler produces afterward is ignored: it is not
+**Cancellation.** The host must enforce a deadline on every call. At the deadline, or on
+cancellation, the invocation ceases to authorize any new brokered call, and the call ends as the
+same fixed refusal. Effects already authorized or completed follow the shared semantics. Any reply
+the handler produces afterward is discarded: it is not
 validated, delivered, admitted or stored, and the host may audit only that a late completion was
 discarded. Stopping a call because its caller went away is best effort. Effects already made are
 not undone.
