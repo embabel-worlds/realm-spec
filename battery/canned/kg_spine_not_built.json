@@ -1,0 +1,11 @@
+{
+ "rows": [
+  {
+   "n": 3356
+  }
+ ],
+ "error": null,
+ "warnings": [
+  "PARTIAL_RESULT: SPINE_NOT_BUILT \u2014 the records that feed the spine have not been read in full"
+ ]
+}

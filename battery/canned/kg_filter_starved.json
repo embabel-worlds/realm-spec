@@ -1,0 +1,11 @@
+{
+ "rows": [
+  {
+   "n": 0
+  }
+ ],
+ "error": null,
+ "warnings": [
+  "FILTER_STARVED: candidates were found and the filter rejected every one"
+ ]
+}

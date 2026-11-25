@@ -1,0 +1,15 @@
+{
+ "status": "SUCCEEDED",
+ "outcome": "OK",
+ "data": [
+  {
+   "a": 1
+  }
+ ],
+ "warnings": [
+  {
+   "code": "REDUCTION_FAILED",
+   "message": "A summarising step did not complete."
+  }
+ ]
+}

@@ -1,0 +1,22 @@
+{
+ "kg_answer_boundary": "PARTIAL 7: the rows are supporting context, not an answer (answerBoundary)",
+ "kg_filter_starved": null,
+ "kg_honest_empty": null,
+ "kg_partial": "PARTIAL 7: PARTIAL_RESULT: lago capped at 200",
+ "kg_producer_error": "PARTIAL 7: PRODUCER_ERROR: CONNECTIVITY — timeout",
+ "kg_reason_short": "PARTIAL 7: reason PARTIAL_NOT_MATCHED",
+ "kg_refused": "REFUSED: INCOMPLETE_RANKING: a ranking over a capped fetch",
+ "kg_run_unfinished": "PARTIAL 7: the run had not finished ({\"runId\":\"r-1\",\"state\":\"RUNNING\"})",
+ "kg_spine_not_built": "PARTIAL 7: PARTIAL_RESULT: SPINE_NOT_BUILT — the records that feed the spine have not been read in full",
+ "kg_whole": null,
+ "tool_incomplete": "PARTIAL 7: Incomplete: based on the first 100 rows, more exist",
+ "tool_source_answered_empty": null,
+ "tool_source_unanswered": "PARTIAL 7: emptyCause SOURCE_UNANSWERED",
+ "view_empty": null,
+ "view_ok_reduction_failed": "PARTIAL 7: REDUCTION_FAILED: A summarising step did not complete.",
+ "view_ok_stale": null,
+ "view_partial": "PARTIAL 7: PARTIAL: A source capped its result.",
+ "view_partial_outcome_only": "PARTIAL 7: outcome PARTIAL",
+ "view_refused": "REFUSED: FAILED SOURCE_UNAVAILABLE A required data source could not be reached.",
+ "view_whole": null
+}

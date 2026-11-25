@@ -1,0 +1,1 @@
+{"status": "SUCCEEDED", "outcome": "PARTIAL", "data": [{"a": 1}], "warnings": [{"code": "PARTIAL", "message": "A source capped its result."}]}

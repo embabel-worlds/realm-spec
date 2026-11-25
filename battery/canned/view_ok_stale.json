@@ -1,0 +1,15 @@
+{
+ "status": "SUCCEEDED",
+ "outcome": "OK",
+ "data": [
+  {
+   "a": 1
+  }
+ ],
+ "warnings": [
+  {
+   "code": "STALE_DATA",
+   "message": "The copy may be out of date."
+  }
+ ]
+}

@@ -1,0 +1,40 @@
+# Is this realm's copy of the battery library the one its pin names, unedited? For a realm
+# repository's own CI:
+#
+#   # .github/workflows/battery-pin.yml in a realm repository
+#   on: [push, pull_request]
+#   jobs:
+#     battery:
+#       uses: embabel-worlds/realm-spec/.github/workflows/battery-pin.yml@main
+#
+# It reads tests/lib/BATTERY and compares each pinned file with realm-spec at that tag.
+
+name: Battery pin
+
+on:
+  workflow_call:
+    inputs:
+      path:
+        description: The realm directory, relative to the repository root.
+        type: string
+        default: "."
+
+permissions:
+  contents: read
+
+jobs:
+  pin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          path: realm
+      - uses: actions/checkout@v4
+        with:
+          repository: embabel-worlds/realm-spec
+          persist-credentials: false
+          fetch-depth: 0
+          path: realm-spec
+      - name: tests/lib is realm-spec's battery library at the pinned tag
+        run: python3 realm-spec/battery/pin.py check "realm/${{ inputs.path }}" --spec realm-spec
