@@ -1,6 +1,6 @@
 # Realm requirements
 
-**Spec version: 0.2.0**
+**Spec version: 0.3.0**
 
 Status: proposed. No host is required to implement this yet.
 
@@ -14,6 +14,9 @@ The model is Maven's: a requirement is a recommended version or a hard range in 
 notation, requirements are followed transitively, and a world holds one version of each realm.
 Versions themselves are ordered the way npm orders them, by Semantic Versioning (see
 [Version order](#version-order)).
+
+A realm can also say which versions of its host it needs, with `requiresHost` (see
+[Host requirements](#host-requirements)).
 
 A requirement grants nothing. It does not import another realm's source, module bytes, credentials,
 handlers or grants. [Graph composition](LABELS_AND_COMPOSITION.md) and gateway calls work as before;
@@ -530,6 +533,129 @@ A label the realm lists under [`optionalLabels`](README.md#optional-labels--read
 and reads only under `OPTIONAL MATCH` is awaited, not unowned. It is a note in both places, and an
 install that meets only notes goes ahead.
 
+## Host requirements
+
+A realm can also rely on its host: on behaviour a host gained in one release, such as a filter it
+learned to send to a source or a count it learned to report. On an older host such a realm loads
+and gives wrong answers, and nothing says why. `requiresHost` states that need.
+
+```typescript
+export default {
+  name: 'support-desk',
+  version: '0.3.0',
+  requiresHost: {
+    embabel: '[0.4.4,)', // 0.4.4 or newer
+  },
+} satisfies Realm
+```
+
+```yaml
+requiresHost:
+  embabel: "[0.4.4,)"
+```
+
+A realm with no `requiresHost` runs on any host, exactly as before. A host that does not implement
+this section ignores the field with an unknown-field note, as an older host ignores `requires`.
+
+### Why a field of its own
+
+- **Not a key under `requires`.** Every key under `requires` is a realm name, and a host that reads
+  `requires` looks for a realm of each name. A host is not a realm, so a host entry there would be
+  reported as a missing realm. A reserved key that no realm name can spell would avoid the clash,
+  but would make one record mean two things, so the need is a field of its own.
+- **Not `host`.** [`host`](README.md#execution-hosts) names the runtime a realm's functions run on,
+  such as `wasm` or `docker`, and says nothing about versions. `requiresHost` leaves it alone.
+- **Keyed by product.** A version means something only along one product's own releases, so each
+  entry names the host product it is about. The Embabel host is `embabel`. A host judges the entry
+  that names it and only notes the others: a realm can state one range for each host it runs on.
+- **realm.yml and realm.ts say the same thing.** The field has the same name and shape in both, and
+  realm.ts wins when both declare it, as for every other field.
+
+### Declaring
+
+- `requiresHost` is a record. Each key is a host product name, with the realm name syntax:
+  kebab-case, at most 64 characters. Each value is a hard requirement in the grammar of
+  [Version requirements](#version-requirements): `[0.4.4,)`, `[0.4.4,0.6.0)`, `[0.5.0-rc.1,)`.
+- **Only a range.** A plain version is a recommendation under `requires`, which accepts every
+  version, and nothing installs a host, so here it would constrain nothing. An author who writes
+  `0.4.4` almost always means 0.4.4 or newer. A plain version is a malformed entry, and the warning
+  gives the range: `Write "[0.4.4,)" for 0.4.4 or newer.`
+- A malformed entry, a key that is not a host name, or a value that is not text is
+  `REALM_REQUIREMENT_MALFORMED`, a warning, with the entry left out, by the same rules as a
+  malformed `requires` entry. A `requiresHost` that is not a record is left out whole.
+- A host's versions are the versions it publishes. For the Embabel host they are its release tags
+  without the `v`, such as `0.4.4` and `0.5.0-rc.1`, ordered by [Version order](#version-order), so
+  `[0.4.4,)` does not accept `0.4.4-rc.2`.
+
+### What version a host is
+
+A host reports its own version as one of three things.
+
+| A host is | When | Example |
+| --- | --- | --- |
+| **a release** | It knows it is a published version: it was built from that version's tag, or its operator chose that exact version when installing it and that version is not older than what the build contains. | `embabel 0.4.4` |
+| **a development build** | It knows the newest published version it contains, and that it has changes beyond it. | a development build of embabel, 12 commits after 0.4.4-rc.2 (631c72a) |
+| **unknown** | It knows neither, as a build made without its release tags is. | |
+
+A development build is newer than the version it contains, and that is all it knows. It may hold a
+change that a later release will carry, or not. A release can be the very same build as an earlier
+development build, published again under a version once it was tested, so a build cannot always
+name the release it became. Then the version its operator chose names it.
+
+An operator's choice that is older than the version the build contains cannot describe that build
+and is set aside. Any other version the operator chose is believed: it is their host.
+
+### Judging a requirement
+
+| Host | Met | Not met | Cannot tell |
+| --- | --- | --- | --- |
+| a release `V` | the range accepts `V` | the range does not accept `V` | never |
+| a development build after `B` | every version newer than `B` is in one set of the range: a set with no upper bound and a lower bound at or below `B` | no version newer than `B` is in the range | otherwise |
+| unknown | never | never | always |
+
+| Requirement | Host | Answer |
+| --- | --- | --- |
+| `[0.4.4,)` | `0.4.4` | met |
+| `[0.4.4,)` | `0.4.4-rc.2` | not met: a release candidate is older than its release |
+| `[0.4.4,)` | development build after `0.4.4` | met |
+| `[0.4.4,)` | development build after `0.4.4-rc.2` | cannot tell |
+| `[0.4.0,0.5.0)` | development build after `0.4.4` | cannot tell: a newer build may be past `0.5.0` |
+| `(,0.4.4)` | development build after `0.4.4` | not met |
+| any | unknown | cannot tell |
+
+Only a certain answer refuses. A build that may hold what the realm needs is never refused it, and
+never passes without saying so: "cannot tell" is a warning wherever the realm is reported.
+
+### At install, at load and in validation
+
+| Where | Not met | Cannot tell | An entry for another host |
+| --- | --- | --- | --- |
+| Install | Refused once the realm's metadata is read, before anything is installed or changed: `409 Conflict` with the code `REALM_HOST_UNSATISFIED`. A realm an install plan would bring in is judged too, and the refusal names the realm that was asked for. | Installed, with the warning `REALM_HOST_UNVERIFIED`. | Installed, with the note `REALM_HOST_NOT_CHECKED`. |
+| Load | The realm stays installed and loaded, and is `degraded` with the error `REALM_HOST_UNSATISFIED`. | The warning `REALM_HOST_UNVERIFIED`. | The note. |
+| Validation | The error `REALM_HOST_UNSATISFIED`, so the realm does not pass. | The warning. | The note. |
+
+**Why a load does not hold the realm back.** An unmet [realm requirement](#at-load) holds a realm
+back. An unmet host requirement does not, because a host's version changes only when its operator
+changes it, most often by moving back a release to get out of trouble. Taking realms out of the
+world at that moment would turn a rollback into an outage. The realm is kept, its status says it is
+degraded and why, and the owner decides. This is the rule for
+[a label no installed realm declares](#a-label-no-installed-realm-declares), for the same reason.
+
+Validation judges the realm against the host doing the validating. A validator that runs inside a
+host's image judges it against that image.
+
+The sentences, with names, versions and ranges shown as [gated text](#security):
+
+| Code | Severity | Sentence template |
+| --- | --- | --- |
+| `REALM_HOST_UNSATISFIED` | error | `<realm> requires host <host> <range>, but this host is <shown>.` and the action, `Move the appliance to a release in <range>: ...`, naming how this host is upgraded. At install it ends `Then install <realm> again.`; at load it adds `<realm> stays installed, and what it relies on the newer host for may answer wrongly until the host is in range.` |
+| `REALM_HOST_UNVERIFIED` | warning | `<realm> requires host <host> <range>, and this host is <shown>, so it cannot tell whether it is in that range.` The action: `Nothing to do if this build has what <realm> needs. If <realm> answers wrongly, move the appliance to a release in <range>: ...` |
+| `REALM_HOST_NOT_CHECKED` | note | `<realm> requires host <other> <range>, which is not this host, so it is not checked here. This host is <host>.` |
+
+`<shown>` is what the host is, in the words of [What version a host is](#what-version-a-host-is):
+`embabel 0.4.3`, `a development build of embabel, 12 commits after 0.4.4-rc.2 (631c72a)`, or
+`a build of embabel that does not know its own version`.
+
 ## The lock
 
 A lock records what resolution chose: every realm that came into the world by a reference, each at
@@ -785,5 +911,6 @@ These are observable limits of the behaviour above.
 - An owner's override that pins a version against a declared requirement.
 - Requirements that apply only when another realm is present.
 - The entry format by which an index source lists versions.
+- How a host learns which release it is when its build cannot say, beyond its operator's choice.
 - The dependency source `from: { realm: ... }`, which stays reserved (see
   [How requires fits with what exists](#how-requires-fits-with-what-exists)).

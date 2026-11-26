@@ -619,6 +619,10 @@ Checklist, with the reason for each:
 - **`requires:` every realm whose labels a view or join reads.** A view naming another realm's label
   without requiring it leaves this realm degraded wherever that realm is missing. Use a Maven range
   (`"[0.2.0,1.0.0)"`) with the lower bound at the version you tested against.
+- **`requiresHost:` the host release whose behaviour you rely on.** When a view is right only on a
+  host that gained a pushdown or a count in a given release, declare `requiresHost: { embabel:
+  "[0.4.4,)" }`, a range and never a plain version. An older host then refuses the install by name
+  instead of answering wrongly. See [Host requirements](../../REALM_REQUIREMENTS.md#host-requirements).
 - **A DERIVE rule set binds its params by name from the view's arguments** (Virtual Cypher §13.1).
   Give the view a param of the same name to anchor the rules to one entity, and default every rule
   param so implicit evaluation works.
