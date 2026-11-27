@@ -1109,7 +1109,7 @@ The source's spelling and the graph's should agree, or a bound sent correctly is
 
 ##### Declared pushdown for query, table, file and feed producers
 
-`remote` is not the only kind that can filter at its source. A `sparql`, `sql`, `cypher`, `tabular` or `feed` producer declares `pushdown:` too. Each entry names a property the source can filter on, the operators it applies, and the type its values take at the source:
+`remote` is not the only kind that can filter at its source. A `sparql`, `sql`, `cypher`, `tabular`, `feed` or `elasticsearch` producer declares `pushdown:` too. Each entry names a property the source can filter on, the operators it applies, and the type its values take at the source:
 
 ```yaml
 - kind: sparql
@@ -1137,15 +1137,23 @@ Where the filter goes depends on the kind:
 | `cypher` | At its `{{filter:<property>}}` slot, as ` AND (<expr> <op> $param)`, so place it after an existing condition (`WHERE o.customer IN $keys {{filter:total}}`). `expr` is required (`expr: "o.total"`). |
 | `sql` | Appended to the generated statement as `AND (<column> <op> :param)`. The property is the column. No `expr`: the statement stays generated. |
 | `tabular`, `feed` | Applied while reading, before a row becomes a record or counts against a per-key cap. A feed filters on `title`, `url`, `publishedAt` or `summary`. |
+| `elasticsearch` | A filter clause on every retriever of the search, so the `k` hits are the best of the documents that match (VIRTUAL_CYPHER §5.16). `expr` names the index field (`status.keyword`) when it is not the property. Exact matches (`EQUALS`, `IN`, `HAS_MEMBER`, `HAS_ANY_MEMBER`) are sent only to a field the index maps as `keyword`; the host checks the mapping. |
 | `generative`, `aggregate`, `agentic-rag` | Not supported. Every predicate is applied after the fetch. |
 
-The operators are `EQUALS`, `CONTAINS` (text only), `GREATER_THAN`, `GREATER_THAN_OR_EQUAL`, `LESS_THAN`, `LESS_THAN_OR_EQUAL` and `IN`.
+The operators are `EQUALS`, `CONTAINS` (text only), `GREATER_THAN`, `GREATER_THAN_OR_EQUAL`, `LESS_THAN`, `LESS_THAN_OR_EQUAL` and `IN`, plus two for a property that holds a LIST, on `elasticsearch` only:
+
+| Operator | The query writes | Means |
+|---|---|---|
+| `HAS_MEMBER` | `'PHASE3' IN t.phases` | the record's list holds this member |
+| `HAS_ANY_MEMBER` | `any(c IN t.countries WHERE c IN ['France', 'Spain'])` | the record's list shares a member with the query's list |
+
+Neither is ever a default: an entry absorbs one only when its `ops:` names it, which is the author saying the field holds a list. A parameter (`$phase IN t.phases`, `c IN $countries`) is bound before the filter is read, so it pushes like a literal. Another kind declaring them pushes nothing for them; the graph applies the filter after the fetch.
 
 Rules:
 
 - **Only the author knows where the filter saves work.** The host can always wrap a query and filter its result, but that saves the source nothing. The slot puts the filter inside the query, before the expensive part. If nothing is pushed, the slot renders as empty text.
 - **The host binds or escapes every value; none is spliced in raw.** Each value is parsed as the declared `type` and written from the parsed value: a typed RDF literal (`"20"^^xsd:integer`, an `xsd:dateTime`, an escaped string), or a bound SQL or Cypher parameter. A value that does not parse as its type, or an operator the entry does not list, is not pushed. It stays a filter the graph applies after the fetch and never causes an error.
-- **The cache key holds exactly the predicates pushed.** A predicate the producer pushes changes what the source returns, so it is keyed. A predicate it does not push shares the cached fetch with the unfiltered query, and a predicate it does push is served from a cached complete read of the same key taken without it (VIRTUAL_CYPHER §5.13).
+- **The cache key holds exactly the predicates pushed.** A predicate the producer pushes changes what the source returns, so it is keyed. A predicate it does not push shares the cached fetch with the unfiltered query, and a predicate it does push is served from a cached complete read of the same key taken without it (VIRTUAL_CYPHER §5.13). The exception is a **top-k read** — an `elasticsearch` producer in any relevance mode — which returns the k best for its key, not the key's collection: its entry is keyed by the filter it sent and by its declaration (so `hits.k` too), and is served only to that same filter. The 100 closest studies are not a superset of the 100 closest Phase 3 ones, so neither answers for the other.
 - **A pushed filter must be exact.** The graph still applies every predicate after the fetch, so a looser source filter only costs extra rows. A stricter one, such as an equality that misses a language-tagged literal, loses rows nothing can recover. Compare through the expression that makes the source agree with the graph, for example `expr: "STR(?label)"`.
 - **Validation.** `realm_validate` reports an error for a declared entry whose slot is missing from the query, and for an entry the kind cannot honour (`having` without `expr`, a `cypher` entry without `expr`, an `sql` entry on a stored procedure or an unexposed column, a field a feed item does not have). It warns about a slot with no entry, and about a declared property the query does not appear to project.
 

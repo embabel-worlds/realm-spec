@@ -2303,6 +2303,34 @@ ORDER BY rel.score DESC
   that field IS the identity and a hit lacking it is DROPPED and reported — never silently
   keyed by the document id instead, which would split one document across two identities. The
   document id remains available as `docId` provenance either way.
+- **Filters at the source choose the k.** A `pushdown:` entry (README, *Declared pushdown*) turns a
+  WHERE on the target into a filter clause on every retriever, so the k hits are the best of the
+  documents that match — not the matches among everyone's k, which can be short of k while the index
+  holds plenty more. Equality and `IN` push as `term` / `terms`; a LIST field declares the membership
+  operators it is filtered by, which are never a default:
+
+  ```yaml
+  pushdown:
+    - { property: status, ops: [EQUALS, IN] }                         # t.status IN ['RECRUITING', 'NOT_YET_RECRUITING']
+    - { property: phases, ops: [HAS_MEMBER, HAS_ANY_MEMBER] }         # 'PHASE3' IN t.phases
+    - { property: facilityCountries, ops: [HAS_MEMBER, HAS_ANY_MEMBER] }   # any(c IN t.facilityCountries WHERE c IN $countries)
+  ```
+
+  On an array field Elasticsearch matches a `term` when any element equals it, which is the graph's
+  `'x' IN t.list`, and a `terms` when any element is any term, which is `any(… WHERE … IN [...])`.
+- **An exact match goes only to a keyword field.** A `term` on an analyzed `text` field compares the
+  value with its tokens and drops rows the graph keeps. So the host reads the index mapping (once per
+  cluster and index, re-read every ten minutes) and does not send an `EQUALS`, `IN` or membership
+  filter on a string property whose field is not mapped `keyword` (or `constant_keyword`, `wildcard`),
+  or is not mapped at all; the run carries a `FILTERED_AFTER_TOP_K` note naming the filter, the field
+  and its type. Point `expr:` at a keyword sub-field (`conditions.keyword`) or map the field as
+  keyword. A mapping the credentials cannot read proves nothing, and the declaration is trusted. A
+  filter no entry absorbs is applied by the graph to the k hits, and named in the same note.
+- **The cache key is the filter sent and k.** A relevance read is a ranked prefix, so the record
+  cache keys it by the filters it sent and by the producer's declaration (`hits.k` included) and
+  serves it only to the same filters: a filtered top-k never answers an unfiltered question, nor the
+  reverse (§5.13's superset rule does not apply). A filter no entry absorbs is not sent, so it shares
+  the unfiltered entry. `mode: scan` reads the collection, and the superset rule holds for it.
 - **`minScore` filters at the source.** Fused (RRF) scores are small and not comparable to
   BM25 scores; leave the floor at 0 for `hybrid` unless you have measured the distribution.
 - **Reranking is opt-in.** A declared reranker re-scores the retrieval it wraps. It is the one
