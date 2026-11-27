@@ -1000,6 +1000,11 @@ host ships no domain prompt and no model (the aggregation uses the ops-controlle
   cache: { kind: ttl, seconds: 604800 }   # weekly-refreshed node
 ```
 
+`collect` may instead be a statement — `collect: { cypher: "… $key …", text: "…" }` — which gathers
+anything a query can read, including another aggregate's node, so a summary can be made from
+summaries. With `cache: { kind: graph }` the result is stored, kept while its `fingerprint:` matches,
+and shared as widely as what it was made of. See `VIRTUAL_CYPHER.md` §5.5.1–5.5.5.
+
 The node is virtual like any other: reached only from a bound anchor (`(me:AssistantUser)-
 [:HAS_MOVIE_TASTE_SUMMARY]->(ts:MovieTasteSummary)`), materialized on demand, rolled back after the query. Give
 its type a Movie/Foo **prefix** so the label and edge can't collide with another realm's summary type.

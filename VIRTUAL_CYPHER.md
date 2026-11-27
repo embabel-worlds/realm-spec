@@ -946,10 +946,12 @@ The rules, all engine-enforced:
   per-ANCHOR: each producer key names one anchor (matched on that property, guarded to the acting
   user's own nodes), and each anchor's neighborhood reduces independently. `incoming: true` flips the
   traversal for containment shapes like `(Chunk)-[:PART_OF]->(Document)`.
-- **Freshness is an INPUT HASH, not a clock.** The persisted node carries a hash of the collected
-  items plus the full reduce fingerprint (function, effective instruction, role, band).
+- **Freshness is a FINGERPRINT, not a clock.** The persisted node carries a hash of the collected
+  items plus what the producer's fingerprint includes — by default the function, the effective
+  instruction, the role and temperature, and the band (§5.5.3).
   Edit the document — or the realm's prompt, or the role — and exactly that node regenerates, in place.
-  The re-check costs one graph read; the model runs only when something actually changed.
+  The re-check costs one graph read; the model runs only when something actually changed. Nothing
+  else evicts a stored result: there is no expiry.
 - **Wordcount BANDS.** A query's `{ai: {wordcount: N}}` quantizes to the nearest persisted band —
   gist (~40 words), standard (~200), long (~600) — and each band is its own committed node. The
   directive-free canonical **is** the standard band; a nearby request (250) is a hit on the same node.
@@ -983,6 +985,191 @@ Cost intuition: the expensive thing (the reduction) runs once per
 `(worldId, contextId, access-policy revision, anchor, band)` and again only on
 change — and on change, only over the windows that changed; everything else — the freshness probe,
 the hit path, the re-link — is indexed graph reads.
+
+#### 5.5.1 Gathering with a statement — `collect.cypher`
+
+`anchorLabel` / `via` / `targetLabel` gather **stored** nodes one hop from a stored anchor. That is
+the right shape for a document's chunks and the wrong one for anything read from a source as the
+query runs, which is most of what a realm exposes. `collect.cypher` gathers with a statement
+instead:
+
+```yaml
+# producers/summaries.yml
+- name: methodSummary
+  kind: aggregate
+  edgeType: HAS_SUMMARY
+  collect:
+    cypher: |
+      MATCH (p:CodeProject {key: split($key, '|')[0]})-[:DECLARES]->(m:Method)
+      WHERE m.id = $key
+      RETURN m.name AS name, m.text AS body
+    text: "{{ name }}: {{ body }}"
+  reduce: { using: summarize, into: summary, args: ["Say what this method does, in two sentences."] }
+  identityField: id
+  anchorKeyField: of
+  cache: { kind: graph }
+```
+
+- **It is ordinary read-only Virtual Cypher**, one row per item, with the anchor's key as `$key`.
+  It may read anything a query may: stored nodes, virtual nodes, several realms, and another
+  aggregate's node through its edge. `text` renders over each row's columns.
+- **It runs inside the query that reached the producer** — the same transaction, the same
+  model-call allowance (§9), the same time limit, the same kill. It is scoped as the acting
+  principal exactly as a query is, so it gathers nothing the asker could not have read themselves.
+- **It is always per-anchor**: each key gathers and reduces alone. The anchor need not be a stored
+  node, and no `anchorKeyProperty` is declared.
+- **Lazy, always.** A statement runs when a query reaches the edge and for the anchors that query
+  reached. `LIMIT 1` over a hundred anchors gathers and reduces one. Nothing is made ahead of a
+  question, and installing a realm makes nothing.
+- **Refused when the realm is validated, and again as it runs:** a statement that never reads
+  `$key` (every anchor would gather the same items), one that writes or calls a procedure, and a
+  producer that declares neither a statement nor `targetLabel` and `via`.
+- **`limit`** (default 500) still caps the items. Reaching it is an incomplete gather (§5.5.5).
+
+Any reduction can be declared this way, not only prose: `classify` with a closed label set, or
+`holds` for a yes/no, gives a stored **judgment** about an anchor — "handles credentials",
+"performs encryption" — that a query filters and joins on like any property. Prefer a fact where
+one exists (an import, a call, an annotation is repeatable and free); keep a stored judgment for
+what no fact states, and name its type so a reader can tell the two apart.
+
+#### 5.5.2 A summary of summaries
+
+Because the statement may cross another aggregate's edge, a result can be made from results:
+
+```yaml
+- name: typeSummary
+  kind: aggregate
+  edgeType: HAS_SUMMARY
+  collect:
+    cypher: |
+      MATCH (p:CodeProject {key: split($key, '|')[0]})-[:DECLARES]->(m:Method) WHERE m.owner = $key
+      MATCH (m)-[:HAS_SUMMARY]->(s:MethodSummary)
+      RETURN m.name AS name, s.summary AS summary, s.fingerprint AS fingerprint
+    text: "{{ name }}: {{ summary }}"
+  reduce: { using: summarize, into: summary, args: ["Say what this type is for."] }
+  fingerprint: { item: "{{ name }}={{ fingerprint }}" }
+  identityField: id
+  anchorKeyField: of
+  cache: { kind: graph }
+```
+
+Reaching `(m)-[:HAS_SUMMARY]->` fetches each method's summary in the same run: found stored, or
+made and stored. So asking for a type's summary cold costs one reduction per method and one for the
+type; asking again costs none; changing one method remakes that method and the type and nothing
+else. A package over types and a project over packages are the same declaration again. Nothing in
+this is particular to code: it is the shape for sections of a contract, tickets of an account,
+accounts of a region.
+
+- **A higher level is exactly as lazy as a lower one.** Asking for a project's summary cold makes
+  everything beneath it, and each reduction is charged to the query's model-call limit as it is
+  made. A query over more than it may pay for is refused part-way, and what was made before the
+  refusal stays stored — the next ask continues from there.
+- **The up-front quote does not price these.** Pricing would mean running the statement, which
+  may itself be made by a model. They are charged one anchor at a time as each is found cold.
+- **A producer that reaches itself for the same key is refused**, and nesting stops at 12 levels.
+- **Give higher levels facts as well as prose.** Each level compresses the one below; a package
+  summary that also reads its types' names, entry points and dependencies drifts less than one
+  made of summaries alone.
+
+#### 5.5.3 The fingerprint — what makes a stored result stale
+
+A stored result is served while its fingerprint matches what it would be made from now, and made
+again when it does not. The producer declares what the fingerprint is:
+
+```yaml
+fingerprint:
+  item: "{{ name }}={{ fingerprint }}"          # what stands for one item (default: its text)
+  version: "MATCH (p:CodeProject {key: split($key,'|')[0]}) RETURN p.commit AS version"
+  includes: [instruction, role, temperature]    # the default
+```
+
+| Field | What it decides |
+|---|---|
+| *(always)* | The gathered items, and the length band — the band is the node's identity |
+| `includes: instruction` | The reduction and its arguments. Change the prompt and the result is made again |
+| `includes: role` | The role the reduction is asked of, by name |
+| `includes: temperature` | The sampling temperature |
+| `includes: model` | The model the role resolves to. **Not included by default** |
+| `item` | What stands for one item in place of its text; with `collect.cypher` |
+| `version` | One value that moves whenever the items could have; with `collect.cypher` |
+
+- **A model change does not make anything stale by default.** A deployment that moves a role to a
+  newer model keeps every stored result, because each is still a fair account of unchanged input
+  and re-making a codebase's worth of text on its next read is a cost nobody chose. A realm whose
+  results must track the model adds `model` to `includes`; `{ai: {fresh: true}}` remakes one on
+  request.
+- **Every stored node has a `fingerprint` property**: what it was made *from*. Declare it on the
+  type to read it.
+- **A parent names the child's `fingerprint` as its `item`.** Model output is not a stable function
+  of its input: a child remade from unchanged input words itself differently, and a parent that
+  compared the words would be remade for nothing. Comparing what each child was made from, the
+  parent goes stale exactly when something beneath it changed — its source, or a prompt below it.
+- **`item` also serves long text**: a source's own content id (a blob id, an ETag) in place of the
+  text it identifies.
+- **`version` is the cheap check.** Without it a stored result is checked by gathering its items
+  again, which for a summary of summaries reads everything beneath it — no model call, but every
+  source. With it, the statement returns one value (a commit, a tree id, a modified time); while
+  that is what it was when the result was made, and the rest of the fingerprint is unchanged, the
+  result is served without gathering anything.
+- **The default is unchanged from before `fingerprint:` existed**, so a result stored earlier is
+  still found current.
+
+#### 5.5.4 Who a stored result is shared with
+
+**Inherited, by default.** A result is stored as widely as *everything it was made of* is shared,
+and no wider:
+
+- every fetch its statement caused, every stored label the statement names, and every lower
+  result it read is shared at some scope, or is the caller's own;
+- if all of them are shared at **one** scope, the result is stored once at that scope and served to
+  everyone it reaches;
+- if any is the caller's own — or two disagree — the result is the caller's own.
+
+A summary of summaries inherits through the summaries beneath it, so one private input anywhere
+below keeps everything above it private.
+
+Which labels are shared is never a realm's to say: fetched rows are the caller's own unless the
+platform or the world's owner says otherwise. The owner says it in `config/world.yml`, by naming
+realms whose sources answer every member alike:
+
+```yaml
+# config/world.yml — human-only: no tool, realm or API write can change it
+sharedRealms: [realm-polyglot-code, realm-git]
+```
+
+Every label those realms declare, and those types' parents, is then shared at that world and no
+wider. A record fetched into one is cached once for the world, and a stored result made only of
+such records is stored once. Name a realm here only when its sources are read with the world's own
+credentials; one read with each member's would serve a member's rows to the next.
+
+```yaml
+cache: { kind: graph }                  # inherited (the default)
+cache: { kind: graph, shared: true }    # one for the world, on the realm's word
+cache: { kind: graph, shared: false }   # the caller's own, whatever it read
+```
+
+`shared: true` stores one result for the world whatever it read, without the owner having named
+the realm. It is the realm's promise, and `sharedRealms` is the better place to make it. A
+wrong promise hands one member a summary of what only another may read, because a shared result is
+made from what the *first* asker could reach. `shared: false` keeps a result private over shared
+inputs. A stored-neighborhood collect (`via` / `targetLabel`) reads the caller's own nodes and is
+the caller's own unless it says `shared: true`.
+
+Whatever the store, the query is handed the result under the asker's own scope: sharing changes
+who pays for a result, never what a query is allowed to see.
+
+#### 5.5.5 What is not stored
+
+- **A part is not stored as the whole.** When something the statement read failed, was cut short,
+  left keys unanswered, could not be reduced, or passed `limit`, the result still answers the
+  query — with a `PARTIAL_RESULT` warning naming the anchor — and is made again by the next. The
+  levels above it are not stored either, since they were made from it.
+- **An honest miss**, as above.
+- **A steered ask** (`hint`, `voice`, a role or model override), as above.
+
+Each stored node records the day it was last served, so a deployment can tell results still being
+read from results nobody asks for. Nothing is deleted on it yet: a result whose anchor no longer
+exists stays until the deployment removes it.
 
 ### 5.6 Typed extraction — `kind: extract` (lazy entities)
 
