@@ -246,6 +246,7 @@ tags:
 | `optionalLabels` | No | Labels this realm's views read but do not need: each owned by a companion realm that may be absent, and read only under `OPTIONAL MATCH`. See [Optional labels](#optional-labels--reading-a-companion-realm-that-may-be-absent). |
 | `vocabulary` | No | A file the realm ships, relative to the realm root, listing the things it holds one per line, so a host can route a question that names one of them to this realm. See [Vocabulary](#vocabulary). |
 | `requires` | No | Realms this realm needs: a map of realm name to a version range in Maven notation, such as `crm-core: "[2.0.0,3.0.0)"`, or a bare version that is only recommended. Keys follow the realm name rule (kebab-case, at most 64 characters). Versions are ordered by Semantic Versioning, and a realm's published versions are its `v<version>` Git tags. A host that does not know the field ignores it with an unknown-field note. Proposed. See [Realm requirements](REALM_REQUIREMENTS.md). |
+| `requiresHost` | No | The host versions this realm needs: a map of host product to a version range in Maven notation, such as `embabel: "[0.4.4,)"`. Only a range; a plain version is refused with the range it most likely meant. An install on a host outside the range is refused, a development build that cannot tell installs with a warning, and a realm already installed when its host moves out of range stays, degraded. Unrelated to `host`. See [Host requirements](REALM_REQUIREMENTS.md#host-requirements). |
 
 ### Icons
 
