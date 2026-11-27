@@ -833,6 +833,37 @@ Producers are the source-specific fetchers a `virtualJoins.producer` references 
   query: "SELECT id, customer_email, total FROM orders WHERE customer_email IN (:keys)"
 ```
 
+A `kind: sql` producer's `datasource` names an entry of the realm's `sql/datasources.yml` (or of the
+world's own `config/sql/datasources.yml`, for a database the owner connected). A realm's entry is
+keyed the way an API entry is, so the realm carries no host, database or user of its own and installs
+anywhere: `${VAR}` in `jdbcUrl` and `username` resolves from the realm's [`keys.yml`](#keysyml--the-keys-a-realm-needs)
+when the realm loads, as an API entry's `server-variables` do, and `passwordEnv` may name a declared
+secret key, read from the owner's keys before the process environment. `credential` (a wallet item
+named for the datasource) keeps precedence over `passwordEnv` where both are given.
+
+```yaml
+# sql/datasources.yml
+- name: warehouse
+  jdbcUrl: "${WAREHOUSE_JDBC_URL}"      # a key the realm declares; never a literal host
+  username: "${WAREHOUSE_USER}"
+  passwordEnv: WAREHOUSE_PASSWORD        # a declared secret key, else an ops environment variable
+
+# keys.yml — the datasource's connection is a key the owner sets once
+- name: warehouse
+  displayName: Warehouse database
+  fields:
+    - { variable: WAREHOUSE_JDBC_URL, displayName: JDBC URL, secret: false }
+    - { variable: WAREHOUSE_USER, displayName: User, secret: false }
+    - { variable: WAREHOUSE_PASSWORD, displayName: Password }
+  validate: { datasource: warehouse }    # the host opens it and asks SELECT 1
+```
+
+A realm names only its own keys here too: a `${VAR}` that the realm's `keys.yml` does not declare is
+refused when the realm loads, with a problem naming the datasource and the variable, and so is one
+that is declared but not set — the datasource is not registered until the key is, and a literal
+`${…}` never reaches a JDBC driver. Setting the key and refreshing the realms registers it. The
+world's own `config/sql/datasources.yml` is read as written, with no keys to resolve from.
+
 `keyArg` and a pushdown rule's `argPath` are paths into `args`: a dot descends into an object
 and a digit indexes a list, so `filterGroups.0.filters.0.values` builds the nested body above.
 A source whose parameter is itself spelled with a dot (ClinicalTrials.gov's `query.cond`,
@@ -2396,18 +2427,26 @@ once.
 
 ### Validation
 
-`validate` names **one of the realm's own API operations** and the arguments to call it with. To check
-a candidate value, the host calls that operation with the value bound into the entry's credential
-slot, using the API's declared auth. The call is the host's, made through the gateway like any other;
-the realm never sees the value.
+`validate` names **one of the realm's own API operations** and the arguments to call it with, or **one
+of the realm's own SQL datasources**. To check a candidate value against an API, the host calls that
+operation with the value bound into the entry's credential slot, using the API's declared auth. The
+call is the host's, made through the gateway like any other; the realm never sees the value. To check
+it against a datasource, the host resolves the datasource's declaration with the candidate values in
+front of the keys already set, opens it, and asks `SELECT 1`; the database refusing the password is
+`refused`, a database it cannot reach is `unreachable`.
 
 | `validate` field | Required | Description |
 |---|---|---|
-| `api` | yes | An API this realm declares in `apis/`. |
-| `operation` | yes | An operation of that API. Pick the cheapest one any valid key may call. |
+| `api` | with `operation` | An API this realm declares in `apis/`. |
+| `operation` | with `api` | An operation of that API. Pick the cheapest one any valid key may call. |
+| `datasource` | alone | A datasource this realm declares in `sql/datasources.yml`. Takes none of the other fields: a database answers a bad password with a driver error, not a status. |
 | `args` | no | Arguments for the call. Fixed, so the answer can only be about the key. |
 | `refusedOn` | no | Response statuses that mean the key is refused. Default `[401, 403]`. |
 | `interpret` | no | A Realm Function that decides the verdict from the response, for a vendor whose refusal is not a status. |
+
+A `validate` that gives neither form, or mixes them, is dropped as a problem: the key can be set, not
+checked. One naming a datasource the realm does not declare is dropped the same way an API the realm
+does not declare is.
 
 **A check has four outcomes**, and every host reports them the same way:
 
