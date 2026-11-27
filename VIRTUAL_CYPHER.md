@@ -2051,7 +2051,9 @@ Guarantees:
   cannot read would make it an oracle over hidden values.
 - **A scan is bounded by declaration.** `limit` is required and capped again by
   `governance.caps.maxRows`, whichever is lower. There is no unbounded scan: a door that
-  returns the table is an import, not a question.
+  returns the table is an import, not a question. A scan may still declare `aggregates:` with
+  `measure: count` (see "Which kinds may declare `aggregates:`"): the count is a number about the
+  filtered table, not a read of its rows, so it carries no row limit.
 - **`echoKeyAs` is required**, and is what makes a keyless read joinable — every returned row
   carries the pinned value under that property, which is the join's `recordKeyField`.
 - Exposure, `where:` predicates and masks apply exactly as they do to a keyed fetch.
@@ -4887,7 +4889,7 @@ it is not.
 | kind | may declare | why |
 |---|---|---|
 | `remote` (`api`) | **yes** | the capability declares the source's own aggregate endpoint and where the number sits in its response |
-| `sql` | **yes**, on a KEYED table read | the statement is generated, so `count` compiles to `SELECT COUNT(*) … GROUP BY <keyColumn>` with the same keys, the same governance `where:` and the same pushed filters |
+| `sql` | **yes**, on a KEYED table read; `count` only on a `scan:` | the statement is generated, so `count` compiles to `SELECT COUNT(*) … GROUP BY <keyColumn>` with the same keys, the same governance `where:` and the same pushed filters; on a scan to `SELECT COUNT(*) … WHERE <where:> AND <pushed filters>` with no ORDER BY and no row limit |
 | `cypher`, `sparql`, `graphql` | **no, not yet** | each could answer one — `count(o)`, `COUNT(DISTINCT ?x)`, a Relay `totalCount` — but its query is AUTHORED, and nothing in the declaration says which second query returns the number. Refused rather than guessed |
 | `generative`, `compute`, `extract`, `aggregate` | **no** | there are no source rows to count: the records are produced here, so counting them means producing them |
 | `tabular`, `files`, `jar`, `source`, `feed`, `vector`, `keyword`, `elasticsearch`, `publisher`, … | **no** | the unit of cost is the whole download or the whole retrieval, which has to happen before anything can be counted |
@@ -4913,8 +4915,35 @@ A `sql` producer's declaration is lighter, because the engine writes the stateme
 `valueField` still has to be named — it is the alias the number comes back under — and must not be
 the key column, which the same row already carries.
 
-Four `sql` shapes are REFUSED when they declare an aggregate, each for its own reason: a `scan:` is
-already a bounded TOP N (counting its rows answers a question about the bound, not about the table);
+**A scan's count describes the filtered table, never the bound.** A `scan:` producer may declare
+`measure: count` and nothing else; `keyField` defaults to its `echoKeyAs`, the pinned value the
+number is attributed to. The statement is `SELECT COUNT(*) FROM <table> WHERE <governance where:>
+AND <pushed filters>` — no `ORDER BY`, no row limit — so the number is every row the filters select,
+not the TOP N the scan would read. The engine asks for it only when EVERY predicate on the counted
+node is one the source applies EXACTLY: a predicate left to the graph, or one the source answers as a
+superset keeps the rows read and capped, and the capped read says so. A count is never a superset:
+its bounds are sent as written, and a `pushdown:` rule on text is a claim that the column compares
+with case and without padding — a learned scaffold declares none on an engine or a column type that
+compares text without case, nor on a padded `CHAR`. A literal compares as the graph compares it:
+`x.score = '7'` counts no row whose score is the number 7, and an `IN` list mixing a number and text
+(`x.score IN [7,'8']`) is not pushed. Nor is a count whose filtered property is read again, by another
+condition (`x.name IN ['A','B'] AND x.name <> 'A'`) or by a measure (`min(x.at)` under a range on `at`),
+unless an equality on that property itself fixes every row's value (`x.score = 7` with `min(x.score)`;
+a case-folded `toLower(x.name) = 'a'` fixes none); a
+`sum` over a filtered property is never pushed. An OR of equalities on one property
+(`x.name = 'A' OR x.name = 'B'`) pushes as the `IN` it spells, each arm keeping the type it was
+written in. A count filtered on the counted node's identity, or on its join's `recordKeyField`, is not
+pushed, and EXPLAIN says so.
+A range written `datetime('…')` / `date('…')` is pushed only to a source that returns the property as a
+native temporal, never to one that returns dates as text. Two counts under different filters that
+share one producer call are not pushed, since the call sends only the filters they share. One edge is
+not exact: the source compares instants, while the graph orders two spellings of one moment by offset,
+so a row stored at exactly a bound's instant in another offset can differ by one from a record read. A filter on a masked or secret-looking column is never pushed, so a count
+cannot report what a mask withholds. Grouping the count by a column of the counted rows
+(`RETURN x.at.month, count(x)`) is not pushed either: ask one count per period.
+
+Four `sql` shapes are REFUSED when they declare an aggregate, each for its own reason: a `scan:`
+declaring any measure but `count` (a total over the table is a keyed producer's to declare);
 a `procedure:` returns whatever it returns, with no `SELECT` list to replace; `keyMatch: ci` answers
 one key per statement and a row may satisfy several keys at once, so a `GROUP BY` over it would
 attribute one key's number to another; and a key column under an identity `dialect:` comes back in
