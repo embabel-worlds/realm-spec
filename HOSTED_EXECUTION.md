@@ -723,6 +723,126 @@ is present. This does not change legacy package loading.
 Unsupported storage requirements must be rejected before handler execution. No VFS syntax
 is introduced here.
 
+## Python handlers
+
+This section is the portable, normative contract a host meets to claim Python handler support.
+It claims no implementation. TypeScript, Node bundle and Wasm handlers are unchanged. The
+captured profile still refuses `channels`, `sources` and `consumers` when `runtime` is not `"typescript"`
+([realm metadata](TYPESCRIPT_REALMS.md#realm-metadata)), so a Python realm declares none.
+
+```typescript
+// realm.ts
+import { defineRealm } from "@embabel/realm-types";
+
+export default defineRealm({
+  name: "greeter",
+  version: "0.1.0",
+  host: "docker",
+  runtime: "python",
+  execution: "captured",
+  handlers: {
+    greet: {
+      namespace: "hello",
+      input: { type: "object", properties: { name: { type: "string" } }, required: ["name"] },
+      output: { type: "object", properties: { text: { type: "string" } }, required: ["text"] },
+    },
+  },
+});
+```
+
+```python
+# wasm/handlers.py
+def greet(input, ctx):
+    ctx.log("greeting")
+    return {"text": "hello " + input["name"]}
+```
+
+**Placement.** This section adds Python runtime routing to the portable
+[placement](README.md#placement) table for `runtime: "python"` only. Every other runtime keeps
+that table unchanged. The author envelope is unchanged, and `host` is explicit: the host never
+changes it. Both rows may share the same source.
+
+| `host` | Target for `runtime: "python"` |
+| --- | --- |
+| `"docker"` | The host's own Python driver, which the host selects and provisions. Never Wasm or Node |
+| `"wasm"` | Wasm. The host must run the handler on a supported Python Wasm runtime, or refuse it as under **Unavailable runtime** below |
+| absent | Wasm, only when `entry` is omitted and the default `wasm/handlers.py` exists; otherwise the conflict below |
+
+A data-only realm, with no handlers, may omit `host` and `entry` as today. With `host` absent
+and handlers declared, the host infers nothing from any other path. A custom `entry`, even a valid
+realm-relative `.py` file, requires an explicit `host`; without one the realm has the existing
+placement conflict, with a reason that asks for `host`. An explicit `host` accepts any valid
+`entry` that exists.
+
+A realm never names or supplies an image, interpreter, command, registry or driver. Author
+configuration for choosing between runtimes would be a future contract; until then the host does
+not choose for the author.
+
+*Reference host observation (non-normative).* At Me `f17be13579` the reference Me/Shinar host
+places `host: "docker"` with `runtime: "python"` as a conflict and places `wasm/handlers.py` on
+Wasm, but no executor runs it, so binding is refused. That is the reference host's status, not
+part of this contract.
+
+**Handler identity.** A handler is `namespace.verb` as in [handlers](TYPESCRIPT_REALMS.md#handlers).
+For `runtime: "python"` the verb narrows the shared JavaScript identifier rule to the ASCII
+subset `[A-Za-z_][A-Za-z0-9_]*`, excluding Python's hard keywords (`False`, `None`, `True`, `and`,
+`as`, `assert`, `async`, `await`, `break`, `class`, `continue`, `def`, `del`, `elif`, `else`,
+`except`, `finally`, `for`, `from`, `global`, `if`, `import`, `in`, `is`, `lambda`, `nonlocal`,
+`not`, `or`, `pass`, `raise`, `return`, `try`, `while`, `with`, `yield`). Soft keywords such as
+`match`, `case`, `type` and `_` are valid verbs. A JavaScript identifier outside that subset, such
+as `$ref` or `naïve`, refuses binding. The verb binds the exact module-level name in `entry`
+(default `wasm/handlers.py`), spelled and cased identically, and that name must be a synchronous
+`def`. A missing name, a non-function, an `async def` or a generator refuses binding, naming the
+handler. No other name, attribute or file stands in for it. In this function slice a handler with
+`className`, or `onType`, is refused for Python, pending a contract for type methods.
+
+**Call.** The host calls `verb(input, ctx)` once per dispatch, in module state created for that
+dispatch alone. A host may pool workers, but nothing a call sets in guest module globals, caches,
+scratch files or the environment is observable to any later dispatch. Persistence the host brokers
+and the realm is admitted to, such as [dependency state](TYPESCRIPT_REALMS.md#dependency-state),
+may survive as its own contract says. `input` is a JSON object, checked by
+the [handler schema profile](README.md#captured-handler-schema-profile) before the call. The return
+value is a JSON value the declared `output` accepts; the default is `{"type": "object"}`. Output
+checks, including the treatment of optional null fields, are those of [handlers](TYPESCRIPT_REALMS.md#handlers).
+The host wraps the outcome in the shared `{ result }` / `{ error }` envelope of
+[what placement never changes](README.md#what-placement-never-changes). Authors never write it.
+
+*Failure detail.* A raised exception, a return that is not JSON-serializable, or an output the schema
+rejects becomes the envelope's fixed refusal. The caller sees no exception class, message,
+arguments, traceback, local value or payload. A host may keep the exception class name and a
+bounded diagnostic in its own log and audit, never in the response.
+
+**Cancellation.** The host must enforce a deadline on every call. At the deadline, or on
+cancellation, the invocation ceases to authorize any new brokered call, and the call ends as the
+same fixed refusal. Effects already authorized or completed follow the shared semantics. Any reply
+the handler produces afterward is discarded: it is not
+validated, delivered, admitted or stored, and the host may audit only that a late completion was
+discarded. Stopping a call because its caller went away is best effort. Effects already made are
+not undone.
+
+**Context.** `ctx` is the admitted [handler context](TYPESCRIPT_REALMS.md#the-handler-context): the
+same members, approvals, refusals and audit as a TypeScript handler. Each is a brokered call. The
+driver adds no ambient socket, environment, credential or file authority, and nothing here widens
+the credential or file capabilities a realm is admitted with. The Python spelling of each member is
+a separate slice.
+
+**Capture identity.** Admission captures the realm files, `entry` bytes included. An approved
+capture keeps invoking those immutable captured bytes after the checkout is edited, until it is
+revoked or superseded; an edit alone does not refuse the call. Editing the checkout changes nothing
+the owner approved. The host's driver provenance is recorded with the dispatch, apart from the
+capture's identity, and changing the driver does not widen any grant.
+
+**Unavailable runtime.** A realm still loads its declarative content. When the chosen driver or
+backend, or a supported Python Wasm runtime, is absent, disabled or not running, its functions are
+unavailable and attempted dispatches produce the recorded refusal that the
+[placement](README.md#placement) notes give for a disabled Wasm host. As a target, a host should
+keep this refusal distinguishable from a handler failure; this adds no field to the envelope.
+The reference Me/Shinar host's operator-visible basis for an unbound executor is
+`EXECUTOR_UNBOUND`. That is a reference-host name, not a portable code. A conflict between `host`
+and the files on disk is the existing placement conflict.
+
+Role additions and the locked package format belong to separate slices; this one defines neither.
+
 ## Realm bundles
 
 A realm bundle is one zip that carries a realm and the module bytes its dependencies name.
