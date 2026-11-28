@@ -635,7 +635,8 @@ A type whose `parents:` includes `Signal` (the host-defined signal base type) is
 Every entry created via `create_entry` for a type defined here lands as a node in the world graph (the same graph the host's Cypher / schema-projector / proposition-recall tools talk to). Two consequences worth knowing when writing a realm:
 
 - **The entry's `name` is the host's headline for it.** The host picks a single field per type to use as the node `name` for rendering — first `title`, then `name`, then `summary` if any exists. Add at least one of those if you want list / Cypher output to be human-readable.
-- **The host can add an implicit edge to the acting human principal's `AssistantUser` node.** The
+- **The host can add an implicit edge to the acting human principal's `WorldsUser` node** (stored as
+  `AssistantUser`, which remains an alias; see [the user anchor's name](VIRTUAL_CYPHER.md#two-concepts-the-rest-of-the-spec-leans-on)). The
   compatibility default is `(entry)-[:OWNED_BY]->(principal)` — fine for most human-authored types.
   Service principals have no implicit anchor. When the predicate reads more naturally in the other
   direction, declare a `userAnchor:` on the type:
@@ -987,7 +988,7 @@ host ships no domain prompt and no model (the aggregation uses the ops-controlle
   identityField: anchorKey       # ONE node per bound anchor inside the host-bound world
   anchorKeyField: anchorKey      # the join's recordKeyField — links the one node back to the anchor
   collect:                       # the fan-IN neighborhood: a scoped read (a:anchorLabel)-[:via]->(t:targetLabel)
-    anchorLabel: AssistantUser
+    anchorLabel: WorldsUser
     via: RATED
     targetLabel: MovieRating
     text: "{{ title }} — rated {{ rating }}/10"   # Jinja per neighbor node → one text item for the reducer
@@ -1000,7 +1001,7 @@ host ships no domain prompt and no model (the aggregation uses the ops-controlle
   cache: { kind: ttl, seconds: 604800 }   # weekly-refreshed node
 ```
 
-The node is virtual like any other: reached only from a bound anchor (`(me:AssistantUser)-
+The node is virtual like any other: reached only from a bound anchor (`(me:WorldsUser)-
 [:HAS_MOVIE_TASTE_SUMMARY]->(ts:MovieTasteSummary)`), materialized on demand, rolled back after the query. Give
 its type a Movie/Foo **prefix** so the label and edge can't collide with another realm's summary type.
 
@@ -1036,7 +1037,7 @@ it (up to `MAX_STAGES` deep). So a fan-IN → fan-OUT pipeline is expressible �
 
 ```cypher
 -- two-stage chain: HAS_MOVIE_TASTE_SUMMARY (fan-IN) materializes ts, then SUGGESTS (fan-OUT) generates off it
-MATCH (me:AssistantUser)-[:HAS_MOVIE_TASTE_SUMMARY]->(ts:MovieTasteSummary)-[:SUGGESTS]->(m:Movie)
+MATCH (me:WorldsUser)-[:HAS_MOVIE_TASTE_SUMMARY]->(ts:MovieTasteSummary)-[:SUGGESTS]->(m:Movie)
 WHERE NOT EXISTS { (me)-[:RATED]->(seen:MovieRating) WHERE seen.imdbId = m.imdbId }
 RETURN DISTINCT m
 ```
@@ -1342,7 +1343,7 @@ Anywhere a realm ships code that runs in the host's `code_mode` sandbox — a **
 ```ts
 // CypherScript: a graph query (through Virtual Cypher) + JS + integration + LLM in ONE program.
 const people = await gateway.kg.query({
-  cypher: `MATCH (me:AssistantUser)-[:EMAILED]->(p:Person)-[:HAS_GITHUB]->(g:GitHubIdentity)-[:RAISED]->(i:GitHubIssue)
+  cypher: `MATCH (me:WorldsUser)-[:EMAILED]->(p:Person)-[:HAS_GITHUB]->(g:GitHubIdentity)-[:RAISED]->(i:GitHubIssue)
            WHERE toLower(p.name) CONTAINS $who
            RETURN p.name AS name, collect(i.title) AS issues`,
   params: JSON.stringify({ who: "governor" }),
@@ -1369,7 +1370,7 @@ of the two shapes **composes**: its name is a label, and a larger query may matc
 - name: KeyAccounts
   description: Contacts worth more than £100k ARR, whoever owns them.
   cypher: |
-    MATCH (me:AssistantUser)-[:HAS_HUBSPOT_OWNER]->()-[:OWNS_CONTACT]->(c:HubSpotContact)
+    MATCH (me:WorldsUser)-[:HAS_HUBSPOT_OWNER]->()-[:OWNS_CONTACT]->(c:HubSpotContact)
     WHERE c.arr > 100000
     RETURN c
 ```
@@ -2081,9 +2082,9 @@ Semantics:
 
 - **Idempotent.** A record whose `type` declares an `identity` property is upserted on that key, so re-seeding on every boot is a no-op (or an in-place update). Types with no identity would duplicate — give reference types an identity.
 - **Principal-anchored reference is per principal.** The compatibility type name is `userAnchor`;
-  each seeded record gets its `(:AssistantUser)-[:PREDICATE]->(record)` edge automatically inside the
+  each seeded record gets its `(:WorldsUser)-[:PREDICATE]->(record)` edge automatically inside the
   host-bound world and context — the way to seed a human principal's preference (e.g. which services
-  that person subscribes to). A service principal has no implicit `AssistantUser` anchor. Global
+  that person subscribes to). A service principal has no implicit `WorldsUser` anchor. Global
   catalog data uses `userAnchor: false`.
 - **Relations resolve like `create_entry`.** An optional `relations: [{ predicate, to: { type, ...keyProps } }]` links a record to another entry that must already exist (seed it first / in another realm's `reference/`), else the record is refused.
 - **Merges with virtual data.** A reference type can also be a virtual-join *target* (e.g. `StreamingService` seeded here AND materialized on demand by a producer): both write paths MERGE on the shared identity, so a producer-fetched node picks up the catalog's stable fields.

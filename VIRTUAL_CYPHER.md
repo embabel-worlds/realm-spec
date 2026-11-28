@@ -1,6 +1,6 @@
 # Virtual Cypher — Specification
 
-**Spec version: 0.2.0**
+**Spec version: 0.3.0**
 
 > **Status: normative.** This document defines what a Virtual Cypher query means, what it
 > guarantees, and what it refuses. It states OBSERVABLE behaviour only — never how the engine is
@@ -35,11 +35,11 @@ and do not need to know, which labels are persisted and which are fetched live.
 The defining property: **one `MATCH` spans persisted and live data uniformly.**
 
 ```cypher
-MATCH (me:AssistantUser)-[:EMAILED]->(p:Person)-[:HAS_GITHUB]->(g:GitHubIdentity)-[:RAISED]->(i:GitHubIssue)
+MATCH (me:WorldsUser)-[:EMAILED]->(p:Person)-[:HAS_GITHUB]->(g:GitHubIdentity)-[:RAISED]->(i:GitHubIssue)
 RETURN p.name, i.title
 ```
 
-`AssistantUser`, `EMAILED`, `Person` are **persisted** (the contact graph). `GitHubIdentity`,
+`WorldsUser` (stored as `AssistantUser`), `EMAILED`, `Person` are **persisted** (the contact graph). `GitHubIdentity`,
 `HAS_GITHUB`, `RAISED`, `GitHubIssue` are **virtual** — resolved from GitHub through the connecting
 user's credentials when the query runs. The author wrote one query; the engine decided what to
 fetch.
@@ -216,9 +216,20 @@ Twelve records arrived and none matched. The answer is "no fetched record matche
 - pinned by an inline literal — `(p:Person {primaryEmail:'a@b.com'})`, or
 - pinned by a `WHERE` equality — `WHERE p.primaryEmail = 'a@b.com'`, or
 - narrowed by **any** property predicate — `WHERE toLower(p.name) CONTAINS 'grace'`, or
-- the acting human principal — `(me:AssistantUser)` (the scope rewriter resolves the node linked to
+- the acting human principal — `(me:WorldsUser)` (the scope rewriter resolves the node linked to
   `principalId`; a service principal has no implicit `me` anchor), or
 - reachable over a *required* edge from another bound node.
+
+**The user anchor's name.** The acting human principal is `WorldsUser`. A host stores that node with
+the label `AssistantUser`, and the two names are one label: a query may write either, `(me:WorldsUser)`
+or `(me:AssistantUser)`, and gets the same rows, the same scope and the same joins; a realm may
+declare either as a join's or a collect's `anchorLabel`. `AssistantUser` is a permanent alias, so a
+query, view or realm written with it keeps its meaning. The name is read wherever a label stands —
+after a label colon, inside a label expression, after `IS` — and nowhere else: a string, a property
+key, a relationship type or a variable spelled `WorldsUser` is left as written. What the store itself
+holds is unchanged, so `labels(me)` answers `AssistantUser`, and a query sent to the database
+directly, beneath Virtual Cypher, must use `AssistantUser`. A realm that writes `WorldsUser` relies on
+a host that reads it and should say so with `requiresHost` ([Host requirements](REALM_REQUIREMENTS.md)).
 
 A number pinned on an anchor key also matches the key's text form. `(q:EventQuery {eventId: 2779})`
 and `WHERE q.eventId = 2779` find an anchor keyed `2779` or `'2779'`, whether it is a stored node or
@@ -1573,7 +1584,7 @@ What it guarantees and what it does not:
 **An anchor keyed by a value computed from fetched rows is fetched for each value.** In
 
 ```cypher
-MATCH (me:AssistantUser)-[:HAS_LOG_EVENT]->(e:LogEvent)-[:HAS_FRAME]->(f:JavaStackFrame)
+MATCH (me:WorldsUser)-[:HAS_LOG_EVENT]->(e:LogEvent)-[:HAS_FRAME]->(f:JavaStackFrame)
 WITH DISTINCT f.jarPath AS jar
 MATCH (j:Jar)-[:HAS_PACKAGE]->(p:JavaPackage) WHERE j.path = jar
 RETURN jar, count(p)
@@ -2280,7 +2291,7 @@ Query it like any relevance edge, selecting it with `via` where a target is reac
 one way:
 
 ```cypher
-MATCH (me:AssistantUser)-[:TRACKS]->(t:ResearchTopic)
+MATCH (me:WorldsUser)-[:TRACKS]->(t:ResearchTopic)
 MATCH (t)-[rel:RELEVANT_TO {via: 'elasticsearch'}]->(d:IndexedDocument)
 RETURN d.title, rel.score, rel.docId, rel.index
 ORDER BY rel.score DESC
@@ -3026,7 +3037,7 @@ same target, each embedding a different field (`name`, `name`, `subject`). And a
 composes with keyed traversals in one query:
 
 ```cypher
-MATCH (me:AssistantUser)-[:EMAILED]->(p:Person)-[r:RELEVANT_TO]->(t:RelevantEmailThread)
+MATCH (me:WorldsUser)-[:EMAILED]->(p:Person)-[r:RELEVANT_TO]->(t:RelevantEmailThread)
 WHERE r.score > 0.7
 RETURN p.name, t.subject, r.score ORDER BY r.score DESC
 ```
@@ -3034,7 +3045,7 @@ RETURN p.name, t.subject, r.score ORDER BY r.score DESC
 — structure (people I email) and meaning (threads relevant to each) in a single `MATCH`.
 
 > **Not a factual edge.** `RELEVANT_TO` means *semantically similar*, never *corresponded with*.
-> "Did I email Ada / how much" is the persisted `(:AssistantUser)-[:EMAILED]->(:Person)` edge;
+> "Did I email Ada / how much" is the persisted `(:WorldsUser)-[:EMAILED]->(:Person)` edge;
 > `RELEVANT_TO` is "threads that read as being about Ada." The join's `description` says so, so the
 > query generator never confuses the two.
 
@@ -3379,7 +3390,7 @@ missing `{realm: {…}}` entry, and never sent bare. For
 example, a declared string `segment` can narrow a contact-list operation:
 
 ```cypher
-MATCH (me:AssistantUser)
+MATCH (me:WorldsUser)
 MATCH (me)-[:HAS_MAILBOX_CONTACT {realm:{segment:me.segment}}]->(c:MailboxContact)
 RETURN c.email
 ```
@@ -3424,7 +3435,7 @@ normalize explicitly before comparing or ordering.
 ### 7.3 `ai.relevant` — the per-row relevance filter
 
 ```cypher
-MATCH (me:AssistantUser)-[:TRACKS]->(n:NewsItem)
+MATCH (me:WorldsUser)-[:TRACKS]->(n:NewsItem)
 WHERE ai.relevant(n, 'about my company\'s Series A funding round')
   AND n.published > date() - duration('P7D')
 RETURN n.title, n.url
@@ -3453,7 +3464,7 @@ field, an ordinary `WHERE` is cheaper and exact.
 ### 7.4 `ai.score` — the per-row rerank
 
 ```cypher
-MATCH (me:AssistantUser)-[:TRACKS]->(n:NewsItem)
+MATCH (me:WorldsUser)-[:TRACKS]->(n:NewsItem)
 RETURN n.title, n.url
 ORDER BY ai.score(n, 'relevance to my Series A funding round') DESC
 LIMIT 5
@@ -3478,7 +3489,7 @@ narrow to the relevant, then order the survivors by fit.
 ### 7.5 `ai.classify` — the per-row projection
 
 ```cypher
-MATCH (me:AssistantUser)-[:TRACKS]->(n:NewsItem)
+MATCH (me:WorldsUser)-[:TRACKS]->(n:NewsItem)
 RETURN n.title,
        ai.classify(n, 'urgency: high, medium, or low')     AS urgency,
        ai.classify(n, 'topic in one word')                 AS topic
@@ -4372,7 +4383,7 @@ need interception before parsing, and a view is not schema the graph store execu
   materialized: false            # regular view — expands at query time
   outputLabel: HubSpotContact    # the type the view yields (its rows ARE this type)
   cypher: |
-    MATCH (me:AssistantUser)-[:HAS_HUBSPOT_OWNER]->()-[:OWNS_CONTACT]->(c:HubSpotContact)
+    MATCH (me:WorldsUser)-[:HAS_HUBSPOT_OWNER]->()-[:OWNS_CONTACT]->(c:HubSpotContact)
     WHERE c.arr > 100000
     RETURN c
 ```
@@ -5591,7 +5602,7 @@ exactly `WITH DISTINCT <target>[, <expr> AS <alias>…] ORDER BY … LIMIT n`, t
 `SET <target>.<property> = <literal | $parameter | alias>`:
 
 ```cypher
-MATCH (u:AssistantUser)-[:EMAILED]->(p:Person)-[:HAS_X]->(v:SomeFetchedLabel)
+MATCH (u:WorldsUser)-[:EMAILED]->(p:Person)-[:HAS_X]->(v:SomeFetchedLabel)
 WHERE v.field = 'value'
 WITH DISTINCT p ORDER BY p.id LIMIT 50
 SET p.reviewStatus = 'follow-up'
