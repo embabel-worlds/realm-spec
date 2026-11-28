@@ -216,7 +216,7 @@ it. The note itself stays, because it is what marks the read as complete and its
 ### 3.5 Pagination, batching, and the starvation trap (`batchSafe`)
 
 ```cypher
-MATCH (me:AssistantUser)-[:EMAILED]->(p:Person)-[:HAS_GITHUB]->(g)-[:RAISED]->(i:GitHubIssue)
+MATCH (me:WorldsUser)-[:EMAILED]->(p:Person)-[:HAS_GITHUB]->(g)-[:RAISED]->(i:GitHubIssue)
 RETURN p.name, i.title
 ```
 
@@ -307,7 +307,7 @@ filtered query over millions of people costs a handful of fetches, not millions.
 ### 3.8 Existence and intersection across sources (`EXISTS` / `NOT EXISTS` / `OR`)
 
 ```cypher
-MATCH (me:AssistantUser)-[:EMAILED]->(p:Person)
+MATCH (me:WorldsUser)-[:EMAILED]->(p:Person)
 WHERE EXISTS { (p)-[:HAS_GITHUB]->(:GitHubIdentity) }
   AND EXISTS { (p)-[:HAS_HUBSPOT_CONTACT]->(:HubSpotContact) }
 RETURN p.name
@@ -340,7 +340,7 @@ x IS NOT NULL` (which does not filter) and not a self-referential round-trip `(p
 ### 3.9 Fan-out aggregate — count over fetched data
 
 ```cypher
-MATCH (me:AssistantUser)-[:EMAILED]->(p:Person)-[:HAS_GITHUB]->(g)
+MATCH (me:WorldsUser)-[:EMAILED]->(p:Person)-[:HAS_GITHUB]->(g)
 WITH p, COUNT { (g)-[:RAISED]->(:GitHubIssue) } AS issues
 ORDER BY issues DESC LIMIT 1
 RETURN p.name, issues

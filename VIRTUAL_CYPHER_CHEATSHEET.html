@@ -158,7 +158,7 @@
     <section data-tags="novel federation live basics">
       <h2>One MATCH spans stored and live</h2>
       <p class="lede">A virtual label is not in the database. It is fetched the moment the query reaches it, spliced in for the life of that query, and rolled back. You do not know which labels are which.</p>
-      <pre><code>MATCH (me:AssistantUser)-[:EMAILED]-&gt;(p:Person)
+      <pre><code>MATCH (me:WorldsUser)-[:EMAILED]-&gt;(p:Person)
 MATCH (p)-[:HAS_GITHUB]-&gt;(g:GitHubIdentity)
 MATCH (g)-[:RAISED]-&gt;(i:GitHubIssue)
 RETURN p.name, i.title</code></pre>
@@ -213,7 +213,7 @@ ORDER BY ai.score(d, 'bears on renewal risk') DESC</code></pre>
     <section data-tags="basics query">
       <h2>The shape of a query</h2>
       <p class="lede">Ordinary Cypher. A virtual label is reached by traversing to it from something already bound.</p>
-      <pre><code>MATCH (me:AssistantUser)
+      <pre><code>MATCH (me:WorldsUser)
       -[:HAS_GITHUB]-&gt;(g:GitHubIdentity)
 MATCH (g)-[:RAISED]-&gt;(i:GitHubIssue)
 WHERE i.state = 'open'
